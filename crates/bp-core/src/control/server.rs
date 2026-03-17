@@ -3,13 +3,11 @@
 //! then closes the connection.
 
 use crate::{
-    control::protocol::{
-        ControlRequest, ControlResponse, FlockData, HatchData, StatusData,
-    },
+    control::protocol::{ControlRequest, ControlResponse, FlockData, HatchData, StatusData},
     error::BpResult,
+    identity::Identity,
     network::{state::NodeInfo, NetworkCommand},
     service::{ServiceInfo, ServiceRegistry, ServiceStatus, ServiceType},
-    identity::Identity,
 };
 use std::{
     collections::HashMap,
@@ -42,8 +40,8 @@ pub async fn run_control_server(
         std::fs::remove_file(path).ok();
     }
 
-    let listener = UnixListener::bind(path)
-        .map_err(|e| crate::error::BpError::Control(e.to_string()))?;
+    let listener =
+        UnixListener::bind(path).map_err(|e| crate::error::BpError::Control(e.to_string()))?;
 
     tracing::info!("Control socket listening at {:?}", path);
 
@@ -123,16 +121,23 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
         }
 
         // ── Hatch ─────────────────────────────────────────────────────────
-        ControlRequest::Hatch { service_type, network_id, metadata } => {
+        ControlRequest::Hatch {
+            service_type,
+            network_id,
+            metadata,
+        } => {
             // Ensure we're subscribed to that network's gossip
             let already_joined = {
                 let nets = state.networks.read().unwrap();
                 nets.contains(&network_id)
             };
             if !already_joined {
-                let _ = state.net_tx.send(NetworkCommand::JoinNetwork {
-                    network_id: network_id.clone(),
-                }).await;
+                let _ = state
+                    .net_tx
+                    .send(NetworkCommand::JoinNetwork {
+                        network_id: network_id.clone(),
+                    })
+                    .await;
                 state.networks.write().unwrap().push(network_id.clone());
             }
 
@@ -155,10 +160,7 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 service_id: service_id.clone(),
                 service_type,
                 network_id,
-                message: format!(
-                    "🦤 {} service hatched — id: {}",
-                    service_type, service_id
-                ),
+                message: format!("🦤 {} service hatched — id: {}", service_type, service_id),
             })
         }
 
@@ -171,9 +173,7 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                     "service_type": info.service_type,
                     "message": format!("Service {} stopped", info.id),
                 })),
-                None => ControlResponse::err(format!(
-                    "No service with id '{}'", service_id
-                )),
+                None => ControlResponse::err(format!("No service with id '{}'", service_id)),
             }
         }
 
@@ -197,13 +197,17 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 let nets = state.networks.read().unwrap();
                 if nets.contains(&network_id) {
                     return ControlResponse::err(format!(
-                        "Already a member of network '{}'", network_id
+                        "Already a member of network '{}'",
+                        network_id
                     ));
                 }
             }
-            let _ = state.net_tx.send(NetworkCommand::JoinNetwork {
-                network_id: network_id.clone(),
-            }).await;
+            let _ = state
+                .net_tx
+                .send(NetworkCommand::JoinNetwork {
+                    network_id: network_id.clone(),
+                })
+                .await;
             state.networks.write().unwrap().push(network_id.clone());
             ControlResponse::ok(serde_json::json!({
                 "network_id": network_id,
@@ -213,9 +217,12 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
 
         // ── Leave ─────────────────────────────────────────────────────────
         ControlRequest::Leave { network_id } => {
-            let _ = state.net_tx.send(NetworkCommand::LeaveNetwork {
-                network_id: network_id.clone(),
-            }).await;
+            let _ = state
+                .net_tx
+                .send(NetworkCommand::LeaveNetwork {
+                    network_id: network_id.clone(),
+                })
+                .await;
             state.networks.write().unwrap().retain(|n| n != &network_id);
             ControlResponse::ok(serde_json::json!({
                 "network_id": network_id,
@@ -249,10 +256,13 @@ async fn announce_self(
 
     match serde_json::to_vec(&info) {
         Ok(payload) => {
-            let _ = state.net_tx.send(NetworkCommand::Announce {
-                network_id: network_id.to_string(),
-                payload,
-            }).await;
+            let _ = state
+                .net_tx
+                .send(NetworkCommand::Announce {
+                    network_id: network_id.to_string(),
+                    payload,
+                })
+                .await;
         }
         Err(e) => tracing::warn!("Failed to serialize NodeInfo: {}", e),
     }

@@ -58,7 +58,9 @@ impl ControlResponse {
     }
 
     pub fn err(msg: impl ToString) -> Self {
-        ControlResponse::Error { message: msg.to_string() }
+        ControlResponse::Error {
+            message: msg.to_string(),
+        }
     }
 }
 

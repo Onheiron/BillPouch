@@ -1,7 +1,7 @@
 //! `bp flock` — show all connected peers and network summary.
 
-use bp_core::control::protocol::{ControlRequest, FlockData};
 use crate::client::ControlClient;
+use bp_core::control::protocol::{ControlRequest, FlockData};
 
 pub async fn flock() -> anyhow::Result<()> {
     let mut client = ControlClient::connect().await?;
@@ -47,7 +47,11 @@ fn print_flock(flock: &FlockData) {
         println!("   (none — use `bp join <network_id>` to join a network)");
     } else {
         for net in &flock.networks {
-            let peers_in_net = flock.known_peers.iter().filter(|n| &n.network_id == net).count();
+            let peers_in_net = flock
+                .known_peers
+                .iter()
+                .filter(|n| &n.network_id == net)
+                .count();
             println!("   {}  │  {} known peer(s)", net, peers_in_net);
         }
     }

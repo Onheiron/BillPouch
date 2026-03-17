@@ -115,7 +115,12 @@ async fn main() -> anyhow::Result<()> {
             commands::auth::logout().await?;
         }
 
-        Some(Cmd::Hatch { service_type, network, storage_bytes, mount }) => {
+        Some(Cmd::Hatch {
+            service_type,
+            network,
+            storage_bytes,
+            mount,
+        }) => {
             let svc_type: bp_core::service::ServiceType = service_type.parse()?;
             let mut metadata: HashMap<String, serde_json::Value> = HashMap::new();
             if let Some(bytes) = storage_bytes {

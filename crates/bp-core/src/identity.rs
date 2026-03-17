@@ -11,9 +11,7 @@ use sha2::{Digest, Sha256};
 
 /// Human-readable fingerprint of a public key (hex-encoded SHA-256, first 16 bytes).
 pub fn fingerprint(keypair: &Keypair) -> String {
-    let pub_bytes = keypair
-        .public()
-        .encode_protobuf();
+    let pub_bytes = keypair.public().encode_protobuf();
     let hash = Sha256::digest(&pub_bytes);
     hex::encode(&hash[..8])
 }
@@ -61,7 +59,12 @@ impl Identity {
         std::fs::write(config::profile_path()?, json).map_err(BpError::Io)?;
 
         tracing::info!("New identity created — fingerprint: {}", fp);
-        Ok(Self { keypair, peer_id, fingerprint: fp, profile })
+        Ok(Self {
+            keypair,
+            peer_id,
+            fingerprint: fp,
+            profile,
+        })
     }
 
     /// Load existing identity from disk. Returns `Err(NotAuthenticated)` if not found.
@@ -90,7 +93,12 @@ impl Identity {
             }
         };
 
-        Ok(Self { keypair, peer_id, fingerprint: fp, profile })
+        Ok(Self {
+            keypair,
+            peer_id,
+            fingerprint: fp,
+            profile,
+        })
     }
 
     /// Remove identity from disk (logout).

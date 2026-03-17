@@ -5,10 +5,10 @@
 //! Questi test verificano che il codice fa quello che il README dice.
 //! Se passano tutti, l'architettura funziona come descritto.
 
-use bp_core::network::state::{NetworkState, NodeInfo};
-use bp_core::service::*;
 use bp_core::control::protocol::*;
 use bp_core::error::BpError;
+use bp_core::network::state::{NetworkState, NodeInfo};
+use bp_core::service::*;
 use std::collections::HashMap;
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -23,7 +23,10 @@ fn identita_ed25519_keypair_genera_peer_id_deterministico() {
     let peer_id_2 = libp2p::PeerId::from_public_key(&keypair.public());
 
     // Stessa chiave pubblica → stesso PeerId, sempre.
-    assert_eq!(peer_id_1, peer_id_2, "Lo stesso keypair deve dare lo stesso PeerId");
+    assert_eq!(
+        peer_id_1, peer_id_2,
+        "Lo stesso keypair deve dare lo stesso PeerId"
+    );
 }
 
 #[test]
@@ -44,8 +47,15 @@ fn identita_fingerprint_e_sha256_primi_8_byte_hex() {
     let fp = bp_core::identity::fingerprint(&keypair);
 
     // 8 byte = 16 caratteri hex
-    assert_eq!(fp.len(), 16, "Il fingerprint deve essere 16 caratteri hex (8 byte)");
-    assert!(fp.chars().all(|c| c.is_ascii_hexdigit()), "Deve essere hex valido");
+    assert_eq!(
+        fp.len(),
+        16,
+        "Il fingerprint deve essere 16 caratteri hex (8 byte)"
+    );
+    assert!(
+        fp.chars().all(|c| c.is_ascii_hexdigit()),
+        "Deve essere hex valido"
+    );
 }
 
 #[test]
@@ -62,14 +72,19 @@ fn identita_fingerprint_deterministico() {
 fn identita_keypair_persistenza_roundtrip() {
     // Claim: "keypair stored on disk can be reloaded"
     let keypair = libp2p::identity::Keypair::generate_ed25519();
-    let encoded = keypair.to_protobuf_encoding().expect("Encoding deve funzionare");
+    let encoded = keypair
+        .to_protobuf_encoding()
+        .expect("Encoding deve funzionare");
     let decoded = libp2p::identity::Keypair::from_protobuf_encoding(&encoded)
         .expect("Decoding deve funzionare");
 
     let pid_orig = libp2p::PeerId::from_public_key(&keypair.public());
     let pid_reload = libp2p::PeerId::from_public_key(&decoded.public());
 
-    assert_eq!(pid_orig, pid_reload, "Keypair ricaricato deve produrre stesso PeerId");
+    assert_eq!(
+        pid_orig, pid_reload,
+        "Keypair ricaricato deve produrre stesso PeerId"
+    );
 }
 
 #[test]
@@ -85,7 +100,10 @@ fn identita_stessa_chiave_su_piu_macchine() {
     let fp1 = bp_core::identity::fingerprint(&macchina_1);
     let fp2 = bp_core::identity::fingerprint(&macchina_2);
 
-    assert_eq!(fp1, fp2, "Stessa chiave su macchine diverse → stesso fingerprint utente");
+    assert_eq!(
+        fp1, fp2,
+        "Stessa chiave su macchine diverse → stesso fingerprint utente"
+    );
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -164,7 +182,10 @@ fn registry_registra_e_recupera_servizi() {
     let id = s.id.clone();
 
     reg.register(s);
-    assert!(reg.get(&id).is_some(), "Servizio registrato deve essere trovabile");
+    assert!(
+        reg.get(&id).is_some(),
+        "Servizio registrato deve essere trovabile"
+    );
 }
 
 #[test]
@@ -177,7 +198,10 @@ fn registry_rimuove_servizio_farewell() {
     reg.register(s);
     let removed = reg.remove(&id);
     assert!(removed.is_some(), "farewell deve rimuovere il servizio");
-    assert!(reg.get(&id).is_none(), "Servizio rimosso non deve più esistere");
+    assert!(
+        reg.get(&id).is_none(),
+        "Servizio rimosso non deve più esistere"
+    );
 }
 
 #[test]
@@ -192,7 +216,11 @@ fn registry_piu_servizi_stessa_macchina() {
     reg.register(bill);
     reg.register(post);
 
-    assert_eq!(reg.all().len(), 3, "Deve supportare 3 servizi sulla stessa macchina");
+    assert_eq!(
+        reg.all().len(),
+        3,
+        "Deve supportare 3 servizi sulla stessa macchina"
+    );
 }
 
 #[test]
@@ -215,7 +243,13 @@ fn registry_servizi_su_network_diversi() {
 // 4. NETWORK STATE — DHT gossip-based: NodeInfo store
 // ═════════════════════════════════════════════════════════════════════════════
 
-fn make_node_info(peer_id: &str, fingerprint: &str, svc: ServiceType, net: &str, ts: u64) -> NodeInfo {
+fn make_node_info(
+    peer_id: &str,
+    fingerprint: &str,
+    svc: ServiceType,
+    net: &str,
+    ts: u64,
+) -> NodeInfo {
     NodeInfo {
         peer_id: peer_id.into(),
         user_fingerprint: fingerprint.into(),
@@ -252,7 +286,11 @@ fn gossip_upsert_mantiene_annuncio_piu_recente() {
     state.upsert(new);
 
     assert_eq!(state.len(), 1, "Deve essere un solo nodo, non duplicato");
-    assert_eq!(state.all()[0].announced_at, 200, "Deve tenere il timestamp più recente");
+    assert_eq!(
+        state.all()[0].announced_at,
+        200,
+        "Deve tenere il timestamp più recente"
+    );
 }
 
 #[test]
@@ -265,7 +303,11 @@ fn gossip_upsert_ignora_annuncio_vecchio() {
     state.upsert(new);
     state.upsert(old); // Questo deve essere ignorato
 
-    assert_eq!(state.all()[0].announced_at, 200, "Non deve sovrascrivere con annuncio vecchio");
+    assert_eq!(
+        state.all()[0].announced_at,
+        200,
+        "Non deve sovrascrivere con annuncio vecchio"
+    );
 }
 
 #[test]
@@ -303,7 +345,8 @@ fn gossip_stesso_utente_piu_servizi() {
     assert_eq!(state.len(), 2, "Due nodi, stesso utente");
 
     let all_nodes = state.all();
-    let carlo_nodes: Vec<_> = all_nodes.iter()
+    let carlo_nodes: Vec<_> = all_nodes
+        .iter()
         .filter(|n| n.user_fingerprint == "aabbccdd")
         .collect();
     assert_eq!(carlo_nodes.len(), 2, "Carlo ha 2 nodi nella rete");
@@ -322,9 +365,21 @@ fn gossip_filtra_per_network() {
     state.upsert(lavoro);
     state.upsert(other);
 
-    assert_eq!(state.in_network("amici").len(), 2, "2 nodi nella rete 'amici'");
-    assert_eq!(state.in_network("lavoro").len(), 1, "1 nodo nella rete 'lavoro'");
-    assert_eq!(state.in_network("inesistente").len(), 0, "0 nodi in rete inesistente");
+    assert_eq!(
+        state.in_network("amici").len(),
+        2,
+        "2 nodi nella rete 'amici'"
+    );
+    assert_eq!(
+        state.in_network("lavoro").len(),
+        1,
+        "1 nodo nella rete 'lavoro'"
+    );
+    assert_eq!(
+        state.in_network("inesistente").len(),
+        0,
+        "0 nodi in rete inesistente"
+    );
 }
 
 #[test]
@@ -366,10 +421,7 @@ fn topic_name_formato_corretto() {
         NodeInfo::topic_name("my-network"),
         "billpouch/v1/my-network/nodes"
     );
-    assert_eq!(
-        NodeInfo::topic_name("amici"),
-        "billpouch/v1/amici/nodes"
-    );
+    assert_eq!(NodeInfo::topic_name("amici"), "billpouch/v1/amici/nodes");
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -391,9 +443,15 @@ fn protocollo_hatch_request_serializza_json() {
 
     let json = serde_json::to_string(&req).unwrap();
     assert!(json.contains("\"cmd\":\"hatch\""), "Deve avere cmd=hatch");
-    assert!(json.contains("\"service_type\":\"pouch\""), "Deve avere service_type=pouch");
+    assert!(
+        json.contains("\"service_type\":\"pouch\""),
+        "Deve avere service_type=pouch"
+    );
     assert!(json.contains("\"network_id\":\"my-network\""));
-    assert!(json.contains("10737418240"), "Deve avere storage_bytes nei metadata");
+    assert!(
+        json.contains("10737418240"),
+        "Deve avere storage_bytes nei metadata"
+    );
 }
 
 #[test]
@@ -402,7 +460,11 @@ fn protocollo_hatch_request_deserializza_json() {
     let req: ControlRequest = serde_json::from_str(json).unwrap();
 
     match req {
-        ControlRequest::Hatch { service_type, network_id, .. } => {
+        ControlRequest::Hatch {
+            service_type,
+            network_id,
+            ..
+        } => {
             assert_eq!(service_type, ServiceType::Pouch);
             assert_eq!(network_id, "test");
         }
@@ -459,7 +521,10 @@ fn protocollo_response_ok_vuota() {
     let resp = ControlResponse::ok_empty();
     let json = serde_json::to_string(&resp).unwrap();
     assert!(json.contains("\"status\":\"ok\""));
-    assert!(!json.contains("\"data\""), "ok_empty non deve avere campo data");
+    assert!(
+        !json.contains("\"data\""),
+        "ok_empty non deve avere campo data"
+    );
 }
 
 #[test]
@@ -516,7 +581,10 @@ fn node_info_metadata_estendibile() {
     // Claim: "metadata field allows future extensions without breaking existing nodes"
     let mut meta = HashMap::new();
     meta.insert("storage_bytes".into(), serde_json::json!(1000));
-    meta.insert("custom_field_v2".into(), serde_json::json!("future feature"));
+    meta.insert(
+        "custom_field_v2".into(),
+        serde_json::json!("future feature"),
+    );
     meta.insert("nested".into(), serde_json::json!({"a": 1, "b": [2, 3]}));
 
     let info = make_node_info("peer", "fp", ServiceType::Pouch, "net", 100);
@@ -548,8 +616,12 @@ fn network_command_join_leave() {
     // Verifica che i comandi JoinNetwork/LeaveNetwork esistano e si costruiscano
     use bp_core::network::NetworkCommand;
 
-    let join = NetworkCommand::JoinNetwork { network_id: "amici".into() };
-    let leave = NetworkCommand::LeaveNetwork { network_id: "amici".into() };
+    let join = NetworkCommand::JoinNetwork {
+        network_id: "amici".into(),
+    };
+    let leave = NetworkCommand::LeaveNetwork {
+        network_id: "amici".into(),
+    };
     let shutdown = NetworkCommand::Shutdown;
 
     // Se compila, i comandi esistono. Verifica pattern matching.
@@ -577,7 +649,10 @@ fn network_command_announce() {
     };
 
     match cmd {
-        NetworkCommand::Announce { network_id, payload: p } => {
+        NetworkCommand::Announce {
+            network_id,
+            payload: p,
+        } => {
             assert_eq!(network_id, "net");
             // Il payload deserializza di nuovo a NodeInfo
             let roundtrip: NodeInfo = serde_json::from_slice(&p).unwrap();
@@ -597,7 +672,11 @@ fn swarm_si_costruisce_con_tutti_i_protocolli() {
     let keypair = libp2p::identity::Keypair::generate_ed25519();
     let swarm = bp_core::network::build_swarm(keypair);
 
-    assert!(swarm.is_ok(), "Lo swarm deve costruirsi senza errori: {:?}", swarm.err());
+    assert!(
+        swarm.is_ok(),
+        "Lo swarm deve costruirsi senza errori: {:?}",
+        swarm.err()
+    );
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -670,7 +749,10 @@ fn scenario_rete_amici_carlo_marco_lucia() {
         announced_at: now,
         metadata: {
             let mut m = HashMap::new();
-            m.insert("storage_bytes".into(), serde_json::json!(107_374_182_400u64)); // 100GB
+            m.insert(
+                "storage_bytes".into(),
+                serde_json::json!(107_374_182_400u64),
+            ); // 100GB
             m
         },
     };
@@ -720,19 +802,29 @@ fn scenario_rete_amici_carlo_marco_lucia() {
     assert_eq!(users.len(), 3, "3 utenti distinti: carlo, marco, lucia");
 
     // Carlo ha 2 nodi
-    let carlo_nodes: Vec<_> = amici.iter().filter(|n| n.user_fingerprint == "carlo___").collect();
+    let carlo_nodes: Vec<_> = amici
+        .iter()
+        .filter(|n| n.user_fingerprint == "carlo___")
+        .collect();
     assert_eq!(carlo_nodes.len(), 2, "Carlo: 1 pouch + 1 bill");
 
     // Marco ha 3 nodi
-    let marco_nodes: Vec<_> = amici.iter().filter(|n| n.user_fingerprint == "marco___").collect();
+    let marco_nodes: Vec<_> = amici
+        .iter()
+        .filter(|n| n.user_fingerprint == "marco___")
+        .collect();
     assert_eq!(marco_nodes.len(), 3, "Marco: 2 pouch + 1 post");
 
     // Lucia ha 1 nodo
-    let lucia_nodes: Vec<_> = amici.iter().filter(|n| n.user_fingerprint == "lucia___").collect();
+    let lucia_nodes: Vec<_> = amici
+        .iter()
+        .filter(|n| n.user_fingerprint == "lucia___")
+        .collect();
     assert_eq!(lucia_nodes.len(), 1, "Lucia: 1 bill");
 
     // Storage totale della rete = somma dei pouch
-    let total_storage: u64 = amici.iter()
+    let total_storage: u64 = amici
+        .iter()
         .filter(|n| n.service_type == ServiceType::Pouch)
         .filter_map(|n| n.metadata.get("storage_bytes"))
         .filter_map(|v| v.as_u64())
@@ -746,17 +838,26 @@ fn scenario_rete_amici_carlo_marco_lucia() {
     );
 
     // Lucia con solo bill può "vedere" tutti i pouch disponibili
-    let available_storage: Vec<_> = amici.iter()
+    let available_storage: Vec<_> = amici
+        .iter()
         .filter(|n| n.service_type == ServiceType::Pouch)
         .collect();
-    assert_eq!(available_storage.len(), 3, "Lucia vede 3 pouch disponibili nella rete");
+    assert_eq!(
+        available_storage.len(),
+        3,
+        "Lucia vede 3 pouch disponibili nella rete"
+    );
 
     // Il post di Marco è l'unico relay
-    let relays: Vec<_> = amici.iter()
+    let relays: Vec<_> = amici
+        .iter()
         .filter(|n| n.service_type == ServiceType::Post)
         .collect();
     assert_eq!(relays.len(), 1, "1 solo relay (post) nella rete");
-    assert_eq!(relays[0].user_fingerprint, "marco___", "Il relay è di Marco");
+    assert_eq!(
+        relays[0].user_fingerprint, "marco___",
+        "Il relay è di Marco"
+    );
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

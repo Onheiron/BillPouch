@@ -28,8 +28,8 @@ impl std::fmt::Display for ServiceType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ServiceType::Pouch => write!(f, "pouch"),
-            ServiceType::Bill  => write!(f, "bill"),
-            ServiceType::Post  => write!(f, "post"),
+            ServiceType::Bill => write!(f, "bill"),
+            ServiceType::Post => write!(f, "post"),
         }
     }
 }
@@ -39,9 +39,9 @@ impl FromStr for ServiceType {
     fn from_str(s: &str) -> BpResult<Self> {
         match s.to_lowercase().as_str() {
             "pouch" => Ok(ServiceType::Pouch),
-            "bill"  => Ok(ServiceType::Bill),
-            "post"  => Ok(ServiceType::Post),
-            other   => Err(BpError::Service(format!(
+            "bill" => Ok(ServiceType::Bill),
+            "post" => Ok(ServiceType::Post),
+            other => Err(BpError::Service(format!(
                 "Unknown service type '{}'. Use: bill | pouch | post",
                 other
             ))),
@@ -63,11 +63,11 @@ pub enum ServiceStatus {
 impl std::fmt::Display for ServiceStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ServiceStatus::Starting     => write!(f, "starting"),
-            ServiceStatus::Running      => write!(f, "running"),
-            ServiceStatus::Stopping     => write!(f, "stopping"),
-            ServiceStatus::Stopped      => write!(f, "stopped"),
-            ServiceStatus::Error(msg)   => write!(f, "error: {}", msg),
+            ServiceStatus::Starting => write!(f, "starting"),
+            ServiceStatus::Running => write!(f, "running"),
+            ServiceStatus::Stopping => write!(f, "stopping"),
+            ServiceStatus::Stopped => write!(f, "stopped"),
+            ServiceStatus::Error(msg) => write!(f, "error: {}", msg),
         }
     }
 }

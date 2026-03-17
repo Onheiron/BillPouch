@@ -6,11 +6,7 @@ pub use state::{NetworkState, NodeInfo};
 
 use crate::error::{BpError, BpResult};
 use futures::StreamExt;
-use libp2p::{
-    gossipsub,
-    swarm::SwarmEvent,
-    Multiaddr, Swarm,
-};
+use libp2p::{gossipsub, swarm::SwarmEvent, Multiaddr, Swarm};
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
@@ -23,7 +19,10 @@ pub enum NetworkCommand {
     /// Unsubscribe from a network's gossip topic.
     LeaveNetwork { network_id: String },
     /// Broadcast a NodeInfo announcement on a network topic.
-    Announce { network_id: String, payload: Vec<u8> },
+    Announce {
+        network_id: String,
+        payload: Vec<u8>,
+    },
     /// Dial a remote peer.
     Dial { addr: Multiaddr },
     /// Graceful shutdown.
@@ -131,24 +130,22 @@ async fn handle_swarm_event(
                 message,
                 ..
             },
-        )) => {
-            match serde_json::from_slice::<NodeInfo>(&message.data) {
-                Ok(node_info) => {
-                    tracing::debug!(
-                        peer=%propagation_source,
-                        fingerprint=%node_info.user_fingerprint,
-                        svc=%node_info.service_type,
-                        "Gossip NodeInfo received"
-                    );
-                    if let Ok(mut st) = state.write() {
-                        st.upsert(node_info);
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to deserialize gossip message: {}", e);
+        )) => match serde_json::from_slice::<NodeInfo>(&message.data) {
+            Ok(node_info) => {
+                tracing::debug!(
+                    peer=%propagation_source,
+                    fingerprint=%node_info.user_fingerprint,
+                    svc=%node_info.service_type,
+                    "Gossip NodeInfo received"
+                );
+                if let Ok(mut st) = state.write() {
+                    st.upsert(node_info);
                 }
             }
-        }
+            Err(e) => {
+                tracing::warn!("Failed to deserialize gossip message: {}", e);
+            }
+        },
 
         // ── mDNS: discovered a local peer ─────────────────────────────────
         SwarmEvent::Behaviour(behaviour::BillPouchBehaviourEvent::Mdns(
@@ -167,7 +164,10 @@ async fn handle_swarm_event(
         )) => {
             for (peer_id, _addr) in list {
                 tracing::debug!(peer=%peer_id, "mDNS peer expired");
-                swarm.behaviour_mut().gossipsub.remove_explicit_peer(&peer_id);
+                swarm
+                    .behaviour_mut()
+                    .gossipsub
+                    .remove_explicit_peer(&peer_id);
             }
         }
 

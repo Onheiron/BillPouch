@@ -1,7 +1,7 @@
 //! `bp farewell <service_id>` — kill a running service.
 
-use bp_core::control::protocol::ControlRequest;
 use crate::client::ControlClient;
+use bp_core::control::protocol::ControlRequest;
 
 pub async fn farewell(service_id: String) -> anyhow::Result<()> {
     let mut client = ControlClient::connect().await?;

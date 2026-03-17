@@ -6,13 +6,7 @@
 //!   • Identify   — exchange protocol version and listen addresses
 //!   • mDNS       — local-network peer discovery (zero-config)
 
-use libp2p::{
-    gossipsub, identify, kad,
-    mdns,
-    swarm::NetworkBehaviour,
-    identity::Keypair,
-    PeerId,
-};
+use libp2p::{gossipsub, identify, identity::Keypair, kad, mdns, swarm::NetworkBehaviour, PeerId};
 use std::time::Duration;
 
 /// Single combined behaviour injected into the libp2p Swarm.
@@ -56,6 +50,11 @@ impl BillPouchBehaviour {
         // ── mDNS ──────────────────────────────────────────────────────────────
         let mdns = mdns::tokio::Behaviour::new(mdns::Config::default(), peer_id)?;
 
-        Ok(Self { gossipsub, kad, identify, mdns })
+        Ok(Self {
+            gossipsub,
+            kad,
+            identify,
+            mdns,
+        })
     }
 }

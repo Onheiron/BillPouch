@@ -55,7 +55,10 @@ impl NetworkState {
 
     /// Upsert (or insert) a `NodeInfo`, keeping the newest announcement.
     pub fn upsert(&mut self, info: NodeInfo) {
-        let entry = self.nodes.entry(info.peer_id.clone()).or_insert_with(|| info.clone());
+        let entry = self
+            .nodes
+            .entry(info.peer_id.clone())
+            .or_insert_with(|| info.clone());
         if info.announced_at >= entry.announced_at {
             *entry = info;
         }
@@ -82,11 +85,17 @@ impl NetworkState {
     /// Evict nodes whose last announcement is older than `max_age_secs`.
     pub fn evict_stale(&mut self, max_age_secs: u64) {
         let now = chrono::Utc::now().timestamp() as u64;
-        self.nodes.retain(|_, n| now.saturating_sub(n.announced_at) < max_age_secs);
+        self.nodes
+            .retain(|_, n| now.saturating_sub(n.announced_at) < max_age_secs);
     }
 
     /// Total node count.
     pub fn len(&self) -> usize {
         self.nodes.len()
+    }
+
+    /// Returns true if there are no known nodes.
+    pub fn is_empty(&self) -> bool {
+        self.nodes.is_empty()
     }
 }

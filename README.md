@@ -10,6 +10,11 @@
 
 **A P2P social distributed filesystem — written in Rust.**
 
+[![CI](https://github.com/Onheiron/BillPouch/actions/workflows/ci.yml/badge.svg)](https://github.com/Onheiron/BillPouch/actions/workflows/ci.yml)
+[![Security](https://github.com/Onheiron/BillPouch/actions/workflows/security.yml/badge.svg)](https://github.com/Onheiron/BillPouch/actions/workflows/security.yml)
+[![Coverage](https://github.com/Onheiron/BillPouch/actions/workflows/coverage.yml/badge.svg)](https://github.com/Onheiron/BillPouch/actions/workflows/coverage.yml)
+[![Docs](https://github.com/Onheiron/BillPouch/actions/workflows/docs.yml/badge.svg)](https://onheiron.github.io/BillPouch/)
+[![Release](https://img.shields.io/github/v/release/Onheiron/BillPouch?color=e94560)](https://github.com/Onheiron/BillPouch/releases)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-2021%20edition-orange.svg)](https://www.rust-lang.org/)
 [![libp2p](https://img.shields.io/badge/libp2p-0.54-purple.svg)](https://libp2p.io/)
