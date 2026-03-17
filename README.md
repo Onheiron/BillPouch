@@ -8,7 +8,7 @@
      |____/|_|_|_|_|   \___/ \__,_|\___|_| |_|
 ```
 
-**A P2P social distributed filesystem — written in Rust.**
+**A P2P social distributed filesystem — written in Rust.** 
 
 [![CI](https://github.com/Onheiron/BillPouch/actions/workflows/ci.yml/badge.svg)](https://github.com/Onheiron/BillPouch/actions/workflows/ci.yml)
 [![Security](https://github.com/Onheiron/BillPouch/actions/workflows/security.yml/badge.svg)](https://github.com/Onheiron/BillPouch/actions/workflows/security.yml)
