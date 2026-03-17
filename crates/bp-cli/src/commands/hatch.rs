@@ -1,7 +1,6 @@
 //! `bp hatch <service_type>` — spawn a new service (and start the daemon if needed).
 
 use bp_core::{
-    config,
     control::protocol::{ControlRequest, HatchData},
     daemon,
     identity::Identity,
