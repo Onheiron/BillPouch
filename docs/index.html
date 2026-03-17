@@ -1,269 +1,780 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BillPouch — P2P Social Distributed Filesystem</title>
-    <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
-    <style>
-        :root {
-            --bg-dark: #0d1117;
-            --bg-card: #1a1a2e;
-            --bg-section: #16213e;
-            --blue: #0f3460;
-            --red: #e94560;
-            --purple: #533483;
-            --text: #e6e6e6;
-            --text-dim: #8b949e;
-            --font: 'Segoe UI', system-ui, -apple-system, sans-serif;
-            --mono: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
-        }
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: var(--font);
-            background: var(--bg-dark);
-            color: var(--text);
-            line-height: 1.7;
-        }
-        a { color: var(--red); text-decoration: none; }
-        a:hover { text-decoration: underline; }
-        code {
-            font-family: var(--mono);
-            background: var(--bg-section);
-            padding: 2px 6px;
-            border-radius: 4px;
-            font-size: 0.9em;
-        }
-        pre {
-            background: var(--bg-section);
-            padding: 1rem;
-            border-radius: 8px;
-            overflow-x: auto;
-            font-family: var(--mono);
-            font-size: 0.85em;
-            line-height: 1.5;
-        }
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BillPouch — P2P Social Distributed Filesystem</title>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+  <style>
+    /* ── Reset & tokens ────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-        /* Hero */
-        .hero {
-            text-align: center;
-            padding: 5rem 1rem 3rem;
-            background: linear-gradient(135deg, var(--bg-card) 0%, var(--blue) 50%, var(--purple) 100%);
-        }
-        .hero h1 { font-size: 3.5rem; letter-spacing: -1px; margin-bottom: 0.5rem; }
-        .hero h1 span { color: var(--red); }
-        .hero p { font-size: 1.25rem; color: var(--text-dim); max-width: 600px; margin: 0 auto 2rem; }
-        .hero-badges { display: flex; gap: 0.5rem; justify-content: center; flex-wrap: wrap; }
-        .hero-badges img { height: 22px; }
+    :root {
+      --bg-deep:    #1a1a2e;
+      --bg-mid:     #16213e;
+      --bg-card:    #0f3460;
+      --accent:     #e94560;
+      --purple:     #533483;
+      --text:       #e2e8f0;
+      --text-muted: #94a3b8;
+      --border:     #1e3a5f;
+      --radius:     10px;
+      --mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    }
 
-        /* Buttons */
-        .btn-row { display: flex; gap: 1rem; justify-content: center; margin-top: 2rem; }
-        .btn {
-            display: inline-block; padding: 0.75rem 1.5rem; border-radius: 8px;
-            font-weight: 600; font-size: 1rem; transition: transform 0.15s;
-        }
-        .btn:hover { text-decoration: none; transform: translateY(-2px); }
-        .btn-primary { background: var(--red); color: #fff; }
-        .btn-secondary { background: var(--bg-section); color: var(--text); border: 1px solid var(--purple); }
+    html { scroll-behavior: smooth; }
 
-        /* Container */
-        .container { max-width: 960px; margin: 0 auto; padding: 0 1.5rem; }
+    body {
+      background: var(--bg-deep);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+                   Helvetica, Arial, sans-serif;
+      line-height: 1.7;
+      font-size: 1rem;
+    }
 
-        /* Sections */
-        section { padding: 4rem 0; }
-        section h2 { font-size: 2rem; margin-bottom: 1.5rem; }
-        section h2 span { color: var(--red); }
+    /* ── Layout ────────────────────────────────────────────────────── */
+    .container { max-width: 900px; margin: 0 auto; padding: 0 1.5rem; }
 
-        /* Cards */
-        .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1.5rem; }
-        .card {
-            background: var(--bg-card);
-            border-radius: 12px;
-            padding: 1.5rem;
-            border: 1px solid var(--bg-section);
-            transition: border-color 0.2s;
-        }
-        .card:hover { border-color: var(--red); }
-        .card h3 { font-size: 1.25rem; margin-bottom: 0.5rem; }
-        .card .icon { font-size: 2rem; margin-bottom: 0.75rem; }
-        .card p { color: var(--text-dim); font-size: 0.95rem; }
+    section { padding: 4.5rem 0; }
+    section + section { border-top: 1px solid var(--border); }
 
-        /* Mermaid */
-        .mermaid-wrap {
-            background: var(--bg-card);
-            border-radius: 12px;
-            padding: 2rem;
-            margin: 2rem 0;
-            border: 1px solid var(--bg-section);
-            overflow-x: auto;
-        }
+    h2 { font-size: 1.85rem; font-weight: 700; line-height: 1.2; margin-bottom: 1.25rem; }
+    h3 { font-size: 1.1rem; font-weight: 700; line-height: 1.3; margin-bottom: 0.6rem; }
 
-        /* Quick Start */
-        .steps { counter-reset: step; }
-        .step {
-            background: var(--bg-card);
-            border-radius: 12px;
-            padding: 1.5rem;
-            margin-bottom: 1rem;
-            border-left: 3px solid var(--red);
-        }
-        .step::before {
-            counter-increment: step;
-            content: counter(step);
-            background: var(--red);
-            color: #fff;
-            width: 28px; height: 28px;
-            display: inline-flex; align-items: center; justify-content: center;
-            border-radius: 50%;
-            font-weight: bold; font-size: 0.85rem;
-            margin-right: 0.75rem;
-            vertical-align: middle;
-        }
-        .step h3 { display: inline; vertical-align: middle; font-size: 1.1rem; }
-        .step pre { margin-top: 0.75rem; }
+    p { color: var(--text-muted); margin-bottom: 1rem; }
+    p:last-child { margin-bottom: 0; }
+    strong { color: var(--text); font-weight: 600; }
 
-        /* Footer */
-        footer {
-            text-align: center;
-            padding: 3rem 1rem;
-            color: var(--text-dim);
-            font-size: 0.85rem;
-            border-top: 1px solid var(--bg-section);
-        }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
 
-        @media (max-width: 600px) {
-            .hero h1 { font-size: 2.2rem; }
-            .hero p { font-size: 1rem; }
-            .btn-row { flex-direction: column; align-items: center; }
-        }
-    </style>
+    code {
+      font-family: var(--mono);
+      font-size: 0.88em;
+      background: rgba(15, 52, 96, 0.55);
+      border: 1px solid var(--border);
+      padding: 0.1em 0.45em;
+      border-radius: 4px;
+      color: var(--text);
+    }
+
+    /* ── Sticky nav ────────────────────────────────────────────────── */
+    nav {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: rgba(26, 26, 46, 0.93);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      border-bottom: 1px solid var(--border);
+    }
+
+    nav .inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 0.85rem 1.5rem;
+      gap: 1rem;
+    }
+
+    .nav-brand {
+      font-weight: 800;
+      font-size: 1.1rem;
+      letter-spacing: -0.02em;
+      color: var(--text);
+      white-space: nowrap;
+    }
+    .nav-brand span { color: var(--accent); }
+
+    .nav-links {
+      display: flex;
+      gap: 1.4rem;
+      list-style: none;
+      flex-wrap: wrap;
+    }
+    .nav-links a {
+      color: var(--text-muted);
+      font-size: 0.88rem;
+      font-weight: 500;
+      transition: color 0.15s;
+    }
+    .nav-links a:hover { color: var(--text); text-decoration: none; }
+
+    /* ── Hero ──────────────────────────────────────────────────────── */
+    #hero {
+      padding: 6rem 0 5rem;
+      text-align: center;
+      background:
+        radial-gradient(ellipse 60% 40% at 50% 0%, rgba(83,52,131,0.38) 0%, transparent 70%),
+        radial-gradient(ellipse 35% 25% at 85% 95%, rgba(233,69,96,0.13) 0%, transparent 65%),
+        var(--bg-deep);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .ascii-logo {
+      font-family: var(--mono);
+      font-size: clamp(0.42rem, 1.35vw, 0.72rem);
+      line-height: 1.3;
+      color: var(--accent);
+      display: inline-block;
+      margin-bottom: 1.75rem;
+      white-space: pre;
+      text-shadow: 0 0 22px rgba(233, 69, 96, 0.38);
+    }
+
+    #hero h1 {
+      font-size: clamp(2.1rem, 6vw, 3.4rem);
+      font-weight: 800;
+      letter-spacing: -0.04em;
+      line-height: 1.1;
+      margin-bottom: 1rem;
+    }
+    #hero h1 span { color: var(--accent); }
+
+    .tagline {
+      font-size: clamp(1rem, 2.5vw, 1.2rem);
+      color: var(--text-muted);
+      max-width: 520px;
+      margin: 0 auto 2rem;
+    }
+
+    .badge-row {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 0.5rem;
+      margin-bottom: 2.5rem;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 0.22rem 0.7rem;
+      border-radius: 999px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      border: 1px solid;
+    }
+    .badge-blue   { background: rgba(15,52,96,0.55);  border-color: #1e4d8c; color: #7ab3f0; }
+    .badge-orange { background: rgba(180,72,0,0.2);   border-color: #9a3d10; color: #fb923c; }
+    .badge-purple { background: rgba(83,52,131,0.3);  border-color: #6b45a8; color: #c084fc; }
+    .badge-red    { background: rgba(233,69,96,0.14); border-color: #9a2b3e; color: #f87171; }
+
+    .cta-row {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 0.9rem;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.65rem 1.4rem;
+      border-radius: var(--radius);
+      font-weight: 600;
+      font-size: 0.93rem;
+      transition: filter 0.15s, transform 0.1s;
+      cursor: pointer;
+    }
+    .btn:hover { filter: brightness(1.15); transform: translateY(-1px); text-decoration: none; }
+    .btn:active { transform: translateY(0); filter: brightness(0.9); }
+    .btn-primary   { background: var(--accent);  color: #fff; }
+    .btn-secondary { background: var(--bg-card); color: var(--text); border: 1px solid var(--border); }
+    .btn-purple    { background: var(--purple);  color: #fff; }
+
+    /* ── Section eyebrow ───────────────────────────────────────────── */
+    .eyebrow {
+      font-size: 0.74rem;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 0.4rem;
+    }
+
+    /* ── Feature grid ──────────────────────────────────────────────── */
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(235px, 1fr));
+      gap: 1.1rem;
+      margin-top: 2rem;
+    }
+
+    .feature-card {
+      background: var(--bg-mid);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.35rem 1.4rem;
+      transition: border-color 0.2s, transform 0.15s;
+    }
+    .feature-card:hover { border-color: var(--purple); transform: translateY(-2px); }
+    .feature-icon { font-size: 1.5rem; margin-bottom: 0.5rem; display: block; }
+    .feature-card h3 { font-size: 0.98rem; margin-bottom: 0.35rem; }
+    .feature-card p  { font-size: 0.87rem; margin: 0; }
+
+    /* ── Pelican table ─────────────────────────────────────────────── */
+    .metaphor-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 1.5rem;
+      font-size: 0.92rem;
+    }
+    .metaphor-table th,
+    .metaphor-table td {
+      padding: 0.8rem 1rem;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+    .metaphor-table th {
+      background: var(--bg-card);
+      color: var(--text-muted);
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      font-weight: 600;
+    }
+    .metaphor-table tr:last-child td { border-bottom: none; }
+    .metaphor-table tbody tr:hover td { background: rgba(15, 52, 96, 0.28); }
+
+    .pill {
+      font-family: var(--mono);
+      font-size: 0.84rem;
+      font-weight: 700;
+      padding: 0.18rem 0.55rem;
+      border-radius: 5px;
+      border: 1px solid;
+    }
+    .pill-pouch { background: rgba(15,52,96,0.5);  border-color: var(--accent); color: #93c5fd; }
+    .pill-bill  { background: rgba(22,33,62,0.6);  border-color: #1e4d8c;      color: #6ee7b7; }
+    .pill-post  { background: rgba(83,52,131,0.5); border-color: var(--accent); color: #c084fc; }
+
+    /* ── Diagram wrapper ───────────────────────────────────────────── */
+    .diagram-wrap {
+      background: var(--bg-mid);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 2rem 1.5rem 1.5rem;
+      margin: 1.5rem 0;
+      overflow-x: auto;
+      text-align: center;
+    }
+    .diagram-caption {
+      font-size: 0.77rem;
+      color: var(--text-muted);
+      margin-top: 0.75rem;
+      font-style: italic;
+    }
+
+    /* ── Code blocks ───────────────────────────────────────────────── */
+    .code-block {
+      background: #090e1a;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.1rem 1.4rem;
+      margin: 0.9rem 0;
+      overflow-x: auto;
+    }
+    .code-block code {
+      font-size: 0.87rem;
+      line-height: 1.75;
+      color: #cbd5e1;
+      white-space: pre;
+      background: none;
+      border: none;
+      padding: 0;
+    }
+    .tok-comment { color: #4a6580; }
+    .tok-cmd     { color: #7dd3fc; }
+    .tok-flag    { color: #c084fc; }
+    .tok-string  { color: #86efac; }
+
+    /* ── Step list ─────────────────────────────────────────────────── */
+    .step-list { display: flex; flex-direction: column; gap: 2rem; margin-top: 1.5rem; }
+
+    .step {
+      display: grid;
+      grid-template-columns: 2.4rem 1fr;
+      gap: 1rem;
+      align-items: start;
+    }
+    .step-num {
+      width: 2.2rem; height: 2.2rem;
+      background: var(--bg-card);
+      border: 2px solid var(--accent);
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 800; font-size: 0.88rem;
+      color: var(--accent);
+      flex-shrink: 0;
+      margin-top: 0.1rem;
+    }
+    .step h3 { margin-bottom: 0.35rem; }
+    .step p  { font-size: 0.89rem; }
+
+    /* ── API card ──────────────────────────────────────────────────── */
+    .api-card {
+      background: linear-gradient(135deg, var(--bg-card) 0%, var(--purple) 100%);
+      border: 1px solid rgba(233, 69, 96, 0.4);
+      border-radius: var(--radius);
+      padding: 2.5rem;
+      text-align: center;
+      margin-top: 1.5rem;
+    }
+    .api-card h3 { font-size: 1.4rem; margin-bottom: 0.55rem; color: var(--text); }
+    .api-card p  {
+      color: rgba(226, 232, 240, 0.72);
+      margin-bottom: 1.4rem;
+      max-width: 480px;
+      margin-left: auto; margin-right: auto;
+    }
+
+    .crate-pills {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 0.55rem;
+      margin-bottom: 1.5rem;
+    }
+    .crate-pill {
+      font-family: var(--mono);
+      font-size: 0.81rem;
+      background: rgba(0,0,0,0.3);
+      border: 1px solid rgba(255,255,255,0.14);
+      padding: 0.28rem 0.75rem;
+      border-radius: 6px;
+      color: #e2e8f0;
+    }
+
+    /* ── Footer ────────────────────────────────────────────────────── */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 2.5rem 1.5rem;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 0.84rem;
+    }
+    footer a { color: var(--text-muted); }
+    footer a:hover { color: var(--accent); }
+
+    /* ── Responsive ────────────────────────────────────────────────── */
+    @media (max-width: 600px) {
+      .nav-links { display: none; }
+      h2 { font-size: 1.5rem; }
+      .metaphor-table th, .metaphor-table td { padding: 0.6rem 0.7rem; font-size: 0.82rem; }
+      .api-card { padding: 1.75rem 1.25rem; }
+    }
+  </style>
 </head>
 <body>
 
-<header class="hero">
-    <h1>Bill<span>Pouch</span></h1>
-    <p>A P2P social distributed filesystem — written in Rust.</p>
-    <div class="hero-badges">
-        <img src="https://img.shields.io/github/actions/workflow/status/Onheiron/BillPouch/ci.yml?branch=main&label=CI&style=flat-square" alt="CI">
-        <img src="https://img.shields.io/github/v/release/Onheiron/BillPouch?style=flat-square&color=e94560" alt="Release">
-        <img src="https://img.shields.io/badge/rust-2021%20edition-orange?style=flat-square" alt="Rust">
-        <img src="https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue?style=flat-square" alt="License">
-    </div>
-    <div class="btn-row">
-        <a href="https://github.com/Onheiron/BillPouch" class="btn btn-primary">GitHub</a>
-        <a href="./api/bp_core/index.html" class="btn btn-secondary">API Docs</a>
-    </div>
-</header>
+<!-- ── Sticky nav ──────────────────────────────────────────────────── -->
+<nav>
+  <div class="inner">
+    <span class="nav-brand">Bill<span>Pouch</span></span>
+    <ul class="nav-links">
+      <li><a href="#overview">Overview</a></li>
+      <li><a href="#architecture">Architecture</a></li>
+      <li><a href="#quickstart">Quick Start</a></li>
+      <li><a href="#api">API Docs</a></li>
+      <li><a href="https://github.com/Onheiron/BillPouch" target="_blank" rel="noopener">GitHub &#8599;</a></li>
+    </ul>
+  </div>
+</nav>
 
-<section>
-    <div class="container">
-        <h2>The <span>Pelican</span> Metaphor</h2>
-        <p style="color:var(--text-dim);margin-bottom:1.5rem;">BillPouch takes its name from the pelican — a bird that hunts, stores, and shares. Every user joins the network by running one or more services:</p>
-        <div class="cards">
-            <div class="card">
-                <div class="icon">🦤</div>
-                <h3>Pouch <code>storage</code></h3>
-                <p>Bids a portion of your local disk into the network. You say "I have 10 GB" and the network can store data on your machine.</p>
-            </div>
-            <div class="card">
-                <div class="icon">📂</div>
-                <h3>Bill <code>file I/O</code></h3>
-                <p>Your personal window into the distributed filesystem. Read and write files that are spread across Pouch nodes in the network.</p>
-            </div>
-            <div class="card">
-                <div class="icon">📡</div>
-                <h3>Post <code>relay</code></h3>
-                <p>A pure routing node — contributes only CPU and bandwidth. Bridges peers that can't directly connect (NAT, firewalls).</p>
-            </div>
-        </div>
+<!-- ── Hero ────────────────────────────────────────────────────────── -->
+<section id="hero">
+  <div class="container">
+    <div class="ascii-logo">     ___  _ _ _ ____                  _
+    | __ )(_) | |  _ \ ___  _   _  ___| |__
+    |  _ \| | | | |_) / _ \| | | |/ __| '_ \
+    | |_) | | | |  __/ (_) | |_| | (__| | | |
+    |____/|_|_|_|_|   \___/ \__,_|\___|_| |_|</div>
+
+    <h1>Bill<span>Pouch</span></h1>
+    <p class="tagline">A P2P social distributed filesystem — written in Rust.</p>
+
+    <div class="badge-row">
+      <span class="badge badge-blue">MIT / Apache-2.0</span>
+      <span class="badge badge-orange">Rust 2021</span>
+      <span class="badge badge-purple">libp2p 0.54</span>
+      <span class="badge badge-red">Alpha</span>
     </div>
+
+    <div class="cta-row">
+      <a href="#quickstart" class="btn btn-primary">Get Started</a>
+      <a href="./api/bp_core/index.html" class="btn btn-purple">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+        API Docs
+      </a>
+      <a href="https://github.com/Onheiron/BillPouch" target="_blank" rel="noopener" class="btn btn-secondary">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C6.477 2 2 6.477 2 12c0 4.418 2.865 8.166 6.839 9.489.5.092.682-.217.682-.482 0-.237-.009-.868-.014-1.703-2.782.604-3.369-1.342-3.369-1.342-.454-1.154-1.11-1.462-1.11-1.462-.908-.62.069-.608.069-.608 1.003.07 1.531 1.031 1.531 1.031.892 1.529 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.03-2.682-.103-.253-.447-1.27.098-2.646 0 0 .84-.269 2.75 1.025A9.578 9.578 0 0 1 12 6.836a9.59 9.59 0 0 1 2.504.337c1.909-1.294 2.747-1.025 2.747-1.025.547 1.376.203 2.394.1 2.646.64.698 1.026 1.591 1.026 2.682 0 3.841-2.337 4.687-4.565 4.935.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743 0 .267.18.578.688.48C19.138 20.163 22 16.418 22 12c0-5.523-4.477-10-10-10z"/></svg>
+        GitHub
+      </a>
+    </div>
+  </div>
 </section>
 
-<section style="background: var(--bg-card);">
-    <div class="container">
-        <h2><span>Architecture</span></h2>
-        <div class="mermaid-wrap">
-            <pre class="mermaid">
+<!-- ── Overview ────────────────────────────────────────────────────── -->
+<section id="overview">
+  <div class="container">
+    <p class="eyebrow">Overview</p>
+    <h2>A leaderless filesystem where storage is social</h2>
+    <p>
+      BillPouch is a fully distributed filesystem built on <a href="https://libp2p.io/" target="_blank" rel="noopener">libp2p</a>.
+      There is no central server and no coordinator — every node is equal.
+      Participants contribute disk space, and the network tracks who contributes what
+      using a gossip-based DHT. Your Ed25519 keypair is your identity across every network you join.
+    </p>
+    <p>
+      The name comes from the pelican: a bird that hunts, stores, and shares.
+      Three service types map directly onto how a pelican operates.
+    </p>
+
+    <table class="metaphor-table">
+      <thead>
+        <tr>
+          <th>Service</th>
+          <th>Pelican analogy</th>
+          <th>Role in the network</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><span class="pill pill-pouch">pouch</span></td>
+          <td>The throat sac</td>
+          <td>Bids a portion of <strong>local storage</strong> into the network. Files are stored here.</td>
+        </tr>
+        <tr>
+          <td><span class="pill pill-bill">bill</span></td>
+          <td>The beak</td>
+          <td>Personal <strong>file I/O interface</strong> — your window into files spread across pouch nodes.</td>
+        </tr>
+        <tr>
+          <td><span class="pill pill-post">post</span></td>
+          <td>The wings</td>
+          <td>Pure <strong>routing / relay</strong> — contributes only CPU and bandwidth; no storage required.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="feature-grid">
+      <div class="feature-card">
+        <span class="feature-icon">&#9881;&#65039;</span>
+        <h3>Truly P2P</h3>
+        <p>No central server. Kademlia DHT and gossipsub keep peers discovered and connected.</p>
+      </div>
+      <div class="feature-card">
+        <span class="feature-icon">&#128274;</span>
+        <h3>Encrypted Transport</h3>
+        <p>All connections use the Noise protocol for authentication and encryption, multiplexed with Yamux.</p>
+      </div>
+      <div class="feature-card">
+        <span class="feature-icon">&#128100;</span>
+        <h3>Ed25519 Identity</h3>
+        <p>Your keypair is your user ID. Multiple nodes can share one identity across any number of networks.</p>
+      </div>
+      <div class="feature-card">
+        <span class="feature-icon">&#127760;</span>
+        <h3>Multiple Networks</h3>
+        <p>One daemon instance participates in several independent networks simultaneously.</p>
+      </div>
+      <div class="feature-card">
+        <span class="feature-icon">&#128268;</span>
+        <h3>Zero-Config LAN Discovery</h3>
+        <p>Built-in mDNS finds peers on the same local network with no configuration needed.</p>
+      </div>
+      <div class="feature-card">
+        <span class="feature-icon">&#128295;</span>
+        <h3>Modular Core</h3>
+        <p><code>bp-core</code> is a pure Rust library. REST, gRPC, or WASM adapters can be layered on top without touching core logic.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Architecture ─────────────────────────────────────────────────── -->
+<section id="architecture">
+  <div class="container">
+    <p class="eyebrow">Architecture</p>
+    <h2>How it fits together</h2>
+    <p>
+      BillPouch is a Cargo workspace with two crates: <code>bp-core</code> (pure library, zero I/O) and
+      <code>bp-cli</code> (the <code>bp</code> binary). The CLI spawns a background daemon (<code>bpd</code>)
+      on first use and communicates with it over a Unix domain socket.
+    </p>
+
+    <h3 style="margin-top:2rem;">Network topology</h3>
+    <div class="diagram-wrap">
+      <div class="mermaid">
 graph TB
     subgraph net["BillPouch Network"]
         direction TB
-        pouch1["Pouch — storage node"]
-        pouch2["Pouch — storage node"]
-        bill1["Bill — file I/O"]
-        bill2["Bill — file I/O"]
-        post["Post — relay node"]
-        pouch1 ---|"gossipsub + Kademlia"| pouch2
+        pouch1["pouch\nstorage node"]
+        pouch2["pouch\nstorage node"]
+        bill1["bill\nfile I/O"]
+        bill2["bill\nfile I/O"]
+        post["post\nrelay node"]
+
+        pouch1 <-->|"gossipsub + Kademlia\nNodeInfo DHT"| pouch2
         pouch1 --- bill1
         pouch2 --- bill2
-        bill1 ---|route| post
-        post ---|route| bill2
+        bill1 <-->|route| post
+        post <-->|route| bill2
     end
-            </pre>
-        </div>
 
-        <h3 style="margin-bottom:1rem;">How nodes communicate</h3>
-        <div class="cards">
-            <div class="card">
-                <h3>mDNS</h3>
-                <p>Zero-config local network discovery. Like AirDrop — finds peers on LAN automatically.</p>
-            </div>
-            <div class="card">
-                <h3>Kademlia DHT</h3>
-                <p>Distributed hash table for peer discovery across the internet.</p>
-            </div>
-            <div class="card">
-                <h3>Gossipsub</h3>
-                <p>Every node periodically broadcasts its NodeInfo. All nodes maintain a local view of the network.</p>
-            </div>
-        </div>
+    style net   fill:#1a1a2e,stroke:#e94560,stroke-width:2px,color:#eee
+    style pouch1 fill:#0f3460,stroke:#e94560,color:#eee
+    style pouch2 fill:#0f3460,stroke:#e94560,color:#eee
+    style bill1  fill:#16213e,stroke:#0f3460,color:#eee
+    style bill2  fill:#16213e,stroke:#0f3460,color:#eee
+    style post   fill:#533483,stroke:#e94560,color:#eee
+      </div>
+      <p class="diagram-caption">pouch nodes store data and gossip NodeInfo; bill nodes read/write; post nodes relay traffic.</p>
     </div>
+
+    <h3 style="margin-top:2.5rem;">IPC: CLI to Daemon</h3>
+    <p>
+      Every <code>bp</code> subcommand is a thin client. It connects to the <code>bpd</code> daemon
+      via a Unix socket and exchanges newline-delimited JSON messages. The daemon owns the libp2p
+      swarm and the service registry; the CLI never touches the network stack directly.
+    </p>
+    <div class="diagram-wrap">
+      <div class="mermaid">
+graph TD
+    hatch["bp hatch pouch"]
+    flock["bp flock"]
+    farewell["bp farewell &lt;id&gt;"]
+
+    sock["Unix socket (control.sock)\nnewline-delimited JSON"]
+
+    hatch --> sock
+    flock --> sock
+    farewell --> sock
+
+    subgraph daemon["bpd daemon"]
+        direction TB
+        subgraph swarm["libp2p Swarm"]
+            gossipsub["gossipsub + kad"]
+            mdns["mDNS + Noise"]
+        end
+        registry["Service Registry"]
+    end
+
+    sock --> daemon
+
+    style hatch    fill:#0f3460,stroke:#e94560,color:#eee
+    style flock    fill:#0f3460,stroke:#e94560,color:#eee
+    style farewell fill:#0f3460,stroke:#e94560,color:#eee
+    style sock     fill:#533483,stroke:#e94560,color:#eee
+    style daemon   fill:#1a1a2e,stroke:#e94560,stroke-width:2px,color:#eee
+    style swarm    fill:#16213e,stroke:#0f3460,color:#eee
+    style gossipsub fill:#0f3460,stroke:#533483,color:#eee
+    style mdns     fill:#0f3460,stroke:#533483,color:#eee
+    style registry fill:#16213e,stroke:#0f3460,color:#eee
+      </div>
+      <p class="diagram-caption">The CLI is a thin JSON client. All state and the full libp2p swarm live inside <code>bpd</code>.</p>
+    </div>
+
+    <h3 style="margin-top:2.5rem;">NodeInfo Gossip Protocol</h3>
+    <p>
+      Every node periodically broadcasts a <code>NodeInfo</code> message on the gossipsub topic
+      <code>billpouch/v1/{network_id}/nodes</code>. The <code>metadata</code> field is an open map —
+      future extensions (storage quotas, versions, capabilities) are added there without
+      breaking existing nodes.
+    </p>
+    <div class="diagram-wrap">
+      <div class="mermaid">
+sequenceDiagram
+    participant A as Node A
+    participant T as gossipsub topic<br/>billpouch/v1/{net}/nodes
+    participant B as Node B
+    participant C as Node C
+
+    A->>T: publish NodeInfo
+    T-->>B: deliver NodeInfo(A)
+    T-->>C: deliver NodeInfo(A)
+    B->>B: update local DHT state
+    C->>C: update local DHT state
+    Note over A,C: Periodic heartbeat — all nodes re-announce themselves
+      </div>
+      <p class="diagram-caption">Gossip propagates peer presence; the intentionally open <code>metadata</code> field allows schema evolution.</p>
+    </div>
+  </div>
 </section>
 
-<section>
-    <div class="container">
-        <h2>Quick <span>Start</span></h2>
-        <div class="steps">
-            <div class="step">
-                <h3>Build from source</h3>
-                <pre>git clone https://github.com/Onheiron/BillPouch.git
-cd BillPouch
-cargo build --release</pre>
-            </div>
-            <div class="step">
-                <h3>Create your identity</h3>
-                <pre>bp login --alias "your-name"</pre>
-            </div>
-            <div class="step">
-                <h3>Start a storage node</h3>
-                <pre>bp hatch pouch --network my-network --storage-bytes 10737418240</pre>
-            </div>
-            <div class="step">
-                <h3>Inspect the flock</h3>
-                <pre>bp flock</pre>
-            </div>
+<!-- ── Quick Start ───────────────────────────────────────────────────── -->
+<section id="quickstart">
+  <div class="container">
+    <p class="eyebrow">Quick Start</p>
+    <h2>Up and running in minutes</h2>
+    <p>
+      You only need <a href="https://rustup.rs/" target="_blank" rel="noopener">Rust 1.75+</a>.
+      No other system dependencies are required.
+    </p>
+
+    <div class="step-list">
+
+      <div class="step">
+        <div class="step-num">1</div>
+        <div>
+          <h3>Clone and build</h3>
+          <p>Compile a release binary or install it globally with Cargo.</p>
+          <div class="code-block"><code><span class="tok-cmd">git clone</span> https://github.com/Onheiron/BillPouch.git
+<span class="tok-cmd">cd</span> BillPouch
+<span class="tok-cmd">cargo build</span> <span class="tok-flag">--release</span>
+<span class="tok-comment"># Binary is at ./target/release/bp</span>
+
+<span class="tok-comment"># …or install globally:</span>
+<span class="tok-cmd">cargo install</span> <span class="tok-flag">--path</span> crates/bp-cli</code></div>
         </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">2</div>
+        <div>
+          <h3>Create your identity</h3>
+          <p>
+            Generates an Ed25519 keypair at <code>~/.local/share/billpouch/identity.key</code>.
+            Your <em>fingerprint</em> (first 8 bytes of your public key SHA-256) is
+            your permanent user ID across every network.
+          </p>
+          <div class="code-block"><code><span class="tok-cmd">bp login</span> <span class="tok-flag">--alias</span> <span class="tok-string">"your-name"</span></code></div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">3</div>
+        <div>
+          <h3>Hatch a service</h3>
+          <p>
+            The first <code>hatch</code> automatically starts the background daemon.
+            Each service is assigned a unique UUID printed on startup.
+          </p>
+          <div class="code-block"><code><span class="tok-comment"># Bid 10 GiB of local storage into a network</span>
+<span class="tok-cmd">bp hatch pouch</span> <span class="tok-flag">--network</span> <span class="tok-string">my-network</span> <span class="tok-flag">--storage-bytes</span> <span class="tok-string">10737418240</span>
+
+<span class="tok-comment"># Start a personal file I/O interface</span>
+<span class="tok-cmd">bp hatch bill</span>  <span class="tok-flag">--network</span> <span class="tok-string">my-network</span>
+
+<span class="tok-comment"># Start a relay-only node (no storage required)</span>
+<span class="tok-cmd">bp hatch post</span>  <span class="tok-flag">--network</span> <span class="tok-string">my-network</span></code></div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">4</div>
+        <div>
+          <h3>Inspect the flock</h3>
+          <p>List your local services, joined networks, and all known peers in a formatted view.</p>
+          <div class="code-block"><code><span class="tok-cmd">bp flock</span></code></div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">5</div>
+        <div>
+          <h3>Stop a service or log out</h3>
+          <p>Farewell a specific service by UUID, or remove your identity key entirely (irreversible — back it up first).</p>
+          <div class="code-block"><code><span class="tok-cmd">bp farewell</span> <span class="tok-string">a3f19c2b-e9d2-4f1a-bc30-112233445566</span>
+
+<span class="tok-comment"># Remove identity key — back up identity.key first!</span>
+<span class="tok-cmd">bp logout</span></code></div>
+        </div>
+      </div>
+
     </div>
+  </div>
 </section>
 
+<!-- ── API Docs ──────────────────────────────────────────────────────── -->
+<section id="api">
+  <div class="container">
+    <p class="eyebrow">API Documentation</p>
+    <h2>Rust API Reference</h2>
+    <p>
+      <code>bp-core</code> is a pure Rust library with no I/O — designed to be embedded in any
+      adapter (CLI, REST, gRPC, WASM). Full rustdoc documentation is generated by CI on every
+      push to <code>main</code> and published alongside this page.
+    </p>
+
+    <div class="api-card">
+      <h3>bp-core API Docs</h3>
+      <p>
+        Browse the full rustdoc-generated reference for all public types, traits, and functions
+        in the core library.
+      </p>
+      <div class="crate-pills">
+        <span class="crate-pill">bp_core::identity</span>
+        <span class="crate-pill">bp_core::daemon</span>
+        <span class="crate-pill">bp_core::network</span>
+        <span class="crate-pill">bp_core::service</span>
+        <span class="crate-pill">bp_core::control</span>
+        <span class="crate-pill">bp_core::error</span>
+      </div>
+      <a href="./api/bp_core/index.html" class="btn btn-primary">Open API Docs &#8599;</a>
+    </div>
+  </div>
+</section>
+
+<!-- ── Footer ───────────────────────────────────────────────────────── -->
 <footer>
-    Built with Rust &amp; libp2p — <a href="https://github.com/Onheiron/BillPouch">View on GitHub</a>
+  <div class="container">
+    <p>
+      Built with Rust &middot;
+      Powered by <a href="https://libp2p.io/" target="_blank" rel="noopener">libp2p</a>
+      &middot;
+      <a href="https://github.com/Onheiron/BillPouch" target="_blank" rel="noopener">View on GitHub</a>
+      &middot; MIT / Apache-2.0
+    </p>
+  </div>
 </footer>
 
 <script>
-    mermaid.initialize({
-        startOnLoad: true,
-        theme: 'dark',
-        themeVariables: {
-            darkMode: true,
-            background: '#1a1a2e',
-            primaryColor: '#0f3460',
-            primaryTextColor: '#e6e6e6',
-            primaryBorderColor: '#e94560',
-            lineColor: '#533483',
-            secondaryColor: '#16213e',
-            tertiaryColor: '#533483'
-        }
-    });
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'dark',
+    themeVariables: {
+      darkMode:             true,
+      background:           '#1a1a2e',
+      mainBkg:              '#0f3460',
+      nodeBorder:           '#e94560',
+      clusterBkg:           '#16213e',
+      clusterBorder:        '#1e3a5f',
+      titleColor:           '#e2e8f0',
+      edgeLabelBackground:  '#16213e',
+      lineColor:            '#e94560',
+      primaryColor:         '#0f3460',
+      primaryTextColor:     '#e2e8f0',
+      primaryBorderColor:   '#e94560',
+      secondaryColor:       '#533483',
+      tertiaryColor:        '#16213e',
+      fontFamily:           '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+      fontSize:             '14px',
+      actorBkg:             '#0f3460',
+      actorBorder:          '#e94560',
+      actorTextColor:       '#e2e8f0',
+      actorLineColor:       '#e94560',
+      signalColor:          '#94a3b8',
+      signalTextColor:      '#e2e8f0',
+      noteBkgColor:         '#16213e',
+      noteTextColor:        '#e2e8f0',
+      noteBorderColor:      '#1e3a5f',
+      labelBoxBkgColor:     '#16213e',
+      labelBoxBorderColor:  '#1e3a5f',
+      labelTextColor:       '#94a3b8',
+      loopTextColor:        '#94a3b8',
+      activationBorderColor:'#e94560',
+      activationBkgColor:   '#0f3460',
+      sequenceNumberColor:  '#e2e8f0',
+    },
+    flowchart: { curve: 'basis', htmlLabels: true },
+    sequence:  { mirrorActors: false, messageAlign: 'center' },
+  });
 </script>
 
 </body>
