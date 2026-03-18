@@ -6,9 +6,11 @@
 # via mDNS on a Docker bridge network and exchange NodeInfo via gossipsub.
 #
 # Strategy:
-#   1. Wait for all daemons to be ready (control socket responding)
-#   2. Wait for mDNS mesh formation (peers connect to each other)
-#   3. Hatch services AFTER mesh is ready (so gossipsub announcements propagate)
+#   Entrypoint already: login → start daemon → bp join (gossipsub topic)
+#   This script:
+#   1. Wait for all daemons to be ready + joined
+#   2. Wait for mDNS mesh formation (peers stay connected via shared topic)
+#   3. Hatch services (announcements propagate through formed mesh)
 #   4. Wait for gossipsub propagation
 #   5. Verify peer discovery, cross-visibility, health, network membership
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -31,14 +33,13 @@ header() { echo -e "\n${YELLOW}═══ $1 ═══${NC}"; }
 CONTAINERS=("bp-pouch" "bp-bill" "bp-post")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 1. Wait for all daemons to respond
+# 1. Wait for all daemons to be ready and joined to network
 # ─────────────────────────────────────────────────────────────────────────────
 header "1. Waiting for daemons to be ready"
 for c in "${CONTAINERS[@]}"; do
     info "Checking ${c}..."
     READY=false
     for i in $(seq 1 60); do
-        # ping the daemon via socat on the control socket
         RESP=$(docker exec "${c}" bash -c \
             'echo "{\"cmd\":\"ping\"}" | socat -T2 - UNIX-CONNECT:$HOME/.local/share/billpouch/control.sock 2>/dev/null' \
         ) || true
@@ -55,35 +56,17 @@ for c in "${CONTAINERS[@]}"; do
 done
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 2. Join the network on all nodes (subscribe to gossipsub topic)
-#    This MUST happen before waiting for mesh, otherwise mDNS connections
-#    drop immediately (KeepAliveTimeout) because there's no shared topic.
+# 2. Wait for mDNS discovery + gossipsub mesh formation
+#    Entrypoint already joined the network, so connections stay alive.
 # ─────────────────────────────────────────────────────────────────────────────
-header "2. Joining 'smoketest' network on all nodes"
-for c in "${CONTAINERS[@]}"; do
-    info "Joining network on ${c}..."
-    OUT=$(docker exec "${c}" bp join smoketest 2>&1) || true
-    if echo "${OUT}" | grep -qi "join\|subscri\|ok\|success\|smoketest"; then
-        pass "${c} joined network 'smoketest'"
-    else
-        # Even if output is unexpected, log it — join may still have worked
-        info "${c} join output: ${OUT}"
-        pass "${c} sent join command"
-    fi
-done
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 3. Wait for mDNS discovery + gossipsub mesh formation
-#    Now that all nodes share the topic, connections stay alive and mesh forms.
-# ─────────────────────────────────────────────────────────────────────────────
-header "3. Waiting for mDNS discovery + gossipsub mesh formation"
+header "2. Waiting for mDNS discovery + gossipsub mesh formation"
 info "Sleeping 20s for peers to discover each other and form gossipsub mesh..."
 sleep 20
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 4. Hatch services (AFTER mesh is ready so announcements propagate)
+# 3. Hatch services (AFTER mesh is ready so announcements propagate)
 # ─────────────────────────────────────────────────────────────────────────────
-header "4. Hatching services on each node"
+header "3. Hatching services on each node"
 
 hatch_service() {
     local container="$1"
@@ -103,16 +86,16 @@ hatch_service "bp-bill"  "bill"
 hatch_service "bp-post"  "post"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 5. Wait for gossipsub propagation
+# 4. Wait for gossipsub propagation
 # ─────────────────────────────────────────────────────────────────────────────
-header "5. Waiting for gossipsub to propagate NodeInfo"
+header "4. Waiting for gossipsub to propagate NodeInfo"
 info "Sleeping 15s for gossipsub announcements to reach all peers..."
 sleep 15
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 6. Check each node's peer view
+# 5. Check each node's peer view
 # ─────────────────────────────────────────────────────────────────────────────
-header "6. Peer discovery verification"
+header "5. Peer discovery verification"
 for c in "${CONTAINERS[@]}"; do
     info "${c} flock output:"
     FLOCK_OUTPUT=$(docker exec "${c}" bp flock 2>&1) || true
@@ -130,15 +113,14 @@ for c in "${CONTAINERS[@]}"; do
 done
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 7. Service type cross-visibility (check Known Peers section only)
+# 6. Service type cross-visibility (check Known Peers section only)
 # ─────────────────────────────────────────────────────────────────────────────
-header "7. Service type cross-visibility"
+header "6. Service type cross-visibility"
 
 check_service_visible() {
     local from_node="$1"
     local service_type="$2"
 
-    # Get flock output and extract only the Known Peers section
     local flock_out
     flock_out=$(docker exec "${from_node}" bp flock 2>&1) || true
 
@@ -153,22 +135,17 @@ check_service_visible() {
     fi
 }
 
-# From pouch node, should see bill and post
 check_service_visible "bp-pouch" "bill"
 check_service_visible "bp-pouch" "post"
-
-# From bill node, should see pouch and post
 check_service_visible "bp-bill" "pouch"
 check_service_visible "bp-bill" "post"
-
-# From post node, should see pouch and bill
 check_service_visible "bp-post" "pouch"
 check_service_visible "bp-post" "bill"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 8. Health check (ping/pong)
+# 7. Health check (ping/pong)
 # ─────────────────────────────────────────────────────────────────────────────
-header "8. Health check (ping/pong)"
+header "7. Health check (ping/pong)"
 for c in "${CONTAINERS[@]}"; do
     PING_OUT=$(docker exec "${c}" bash -c \
         'echo "{\"cmd\":\"ping\"}" | socat -T2 - UNIX-CONNECT:$HOME/.local/share/billpouch/control.sock 2>/dev/null' \
@@ -182,9 +159,9 @@ for c in "${CONTAINERS[@]}"; do
 done
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 9. Network membership
+# 8. Network membership
 # ─────────────────────────────────────────────────────────────────────────────
-header "9. Network membership"
+header "8. Network membership"
 for c in "${CONTAINERS[@]}"; do
     FLOCK_OUT=$(docker exec "${c}" bp flock 2>&1) || true
 
@@ -196,12 +173,12 @@ for c in "${CONTAINERS[@]}"; do
 done
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 10. Node logs (for debugging)
+# 9. Node logs (for debugging)
 # ─────────────────────────────────────────────────────────────────────────────
-header "10. Node logs (last 15 lines each)"
+header "9. Node logs (last 20 lines each)"
 for c in "${CONTAINERS[@]}"; do
     info "--- ${c} ---"
-    docker logs "${c}" 2>&1 | tail -15
+    docker logs "${c}" 2>&1 | tail -20
     echo ""
 done
 

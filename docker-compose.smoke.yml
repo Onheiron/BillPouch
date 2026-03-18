@@ -12,6 +12,7 @@ services:
     hostname: bp-pouch
     environment:
       NODE_NAME: "carlo-pouch"
+      NETWORK: "smoketest"
       RUST_LOG: "bp_core=debug,bp_cli=info"
     networks:
       - bp-lan
@@ -23,6 +24,7 @@ services:
     hostname: bp-bill
     environment:
       NODE_NAME: "marco-bill"
+      NETWORK: "smoketest"
       RUST_LOG: "bp_core=debug,bp_cli=info"
     networks:
       - bp-lan
@@ -34,6 +36,7 @@ services:
     hostname: bp-post
     environment:
       NODE_NAME: "lucia-post"
+      NETWORK: "smoketest"
       RUST_LOG: "bp_core=debug,bp_cli=info"
     networks:
       - bp-lan
