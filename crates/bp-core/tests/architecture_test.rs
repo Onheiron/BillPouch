@@ -666,15 +666,14 @@ fn network_command_announce() {
 // 9. SWARM — libp2p si costruisce correttamente
 // ═════════════════════════════════════════════════════════════════════════════
 
-#[test]
-fn swarm_si_costruisce_con_tutti_i_protocolli() {
+#[tokio::test]
+async fn swarm_si_costruisce_con_tutti_i_protocolli() {
     // Claim: "Noise + Yamux encrypted and multiplexed, gossipsub, Kademlia, mDNS"
-    // NOTE: mDNS binds to multicast 224.0.0.251:5353 which may fail on CI
-    // (avahi-daemon, no multicast, permission denied, etc.).
-    // This test validates the full stack on macOS; on Linux CI it may skip.
+    // NOTE: mDNS on Linux uses netlink which requires a Tokio runtime context,
+    // hence this must be an async test with #[tokio::test].
     let keypair = libp2p::identity::Keypair::generate_ed25519();
     match bp_core::network::build_swarm(keypair) {
-        Ok(_swarm) => {} // Full protocol stack initialized successfully.
+        Ok(_swarm) => {}
         Err(e) => {
             eprintln!(
                 "NOTE: swarm build failed (expected on some CI environments): {}",
