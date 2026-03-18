@@ -40,7 +40,11 @@ pub fn build_swarm(
             libp2p::noise::Config::new,
             libp2p::yamux::Config::default,
         )?
-        .with_behaviour(|key| BillPouchBehaviour::new(key).expect("Failed to build behaviour"))?
+        .with_behaviour(|key| {
+            BillPouchBehaviour::new(key)
+                .map_err(|e| Box::<dyn std::error::Error + Send + Sync>::from(e.to_string()))
+        })
+        .map_err(|e| anyhow::anyhow!("{}", e))?
         .build();
 
     Ok(swarm)
