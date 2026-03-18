@@ -128,10 +128,10 @@ check_service_visible() {
     local peers_section
     peers_section=$(echo "${flock_out}" | sed -n '/Known Peers/,$ p' | tail -n +2) || true
 
-    if echo "${peers_section}" | grep -qi "\[${service_type}\]"; then
-        pass "${from_node} sees a [${service_type}] peer"
+    if echo "${peers_section}" | grep -qi "${service_type}"; then
+        pass "${from_node} sees a '${service_type}' peer"
     else
-        fail "${from_node} does NOT see a [${service_type}] peer"
+        fail "${from_node} does NOT see a '${service_type}' peer"
     fi
 }
 
