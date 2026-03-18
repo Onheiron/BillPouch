@@ -678,7 +678,8 @@ fn swarm_si_costruisce_con_tutti_i_protocolli() {
         Ok(_) => {} // All protocols initialized — full stack works.
         Err(e) => {
             let msg = e.to_string();
-            if msg.contains("mDNS") || msg.contains("Address already in use") || msg.contains("Os") {
+            if msg.contains("mDNS") || msg.contains("Address already in use") || msg.contains("Os")
+            {
                 eprintln!("SKIP: swarm build failed due to mDNS/network: {}", msg);
             } else {
                 panic!("Swarm build failed for unexpected reason: {}", msg);

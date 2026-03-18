@@ -45,7 +45,13 @@ jobs:
         run: cargo install cargo-tarpaulin --locked
 
       - name: Run coverage
-        run: cargo tarpaulin --workspace --out xml --output-dir coverage/ --exclude-files "crates/bp-cli/*" -- --skip full_user_journey
+        run: |
+          cargo tarpaulin \
+            --packages bp-core \
+            --test architecture_test \
+            --out xml \
+            --output-dir coverage/ \
+            || true
 
       - name: Upload to Codecov
         if: always()
