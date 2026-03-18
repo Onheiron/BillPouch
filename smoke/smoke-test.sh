@@ -20,8 +20,8 @@ NC='\033[0m' # No Color
 PASS=0
 FAIL=0
 
-pass() { ((PASS++)); echo -e "  ${GREEN}✓${NC} $1"; }
-fail() { ((FAIL++)); echo -e "  ${RED}✗${NC} $1"; }
+pass() { PASS=$((PASS + 1)); echo -e "  ${GREEN}✓${NC} $1"; }
+fail() { FAIL=$((FAIL + 1)); echo -e "  ${RED}✗${NC} $1"; }
 info() { echo -e "${CYAN}▸${NC} $1"; }
 header() { echo -e "\n${YELLOW}═══ $1 ═══${NC}"; }
 
