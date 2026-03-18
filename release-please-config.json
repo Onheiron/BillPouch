@@ -6,11 +6,7 @@
       "component": "billpouch",
       "changelog-path": "CHANGELOG.md",
       "bump-minor-pre-major": true,
-      "bump-patch-for-minor-pre-major": true,
-      "extra-files": [
-        "crates/bp-core/Cargo.toml",
-        "crates/bp-cli/Cargo.toml"
-      ]
+      "bump-patch-for-minor-pre-major": true
     }
   }
 }
