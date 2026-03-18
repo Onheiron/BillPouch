@@ -1,0 +1,110 @@
+## ═══════════════════════════════════════════════════════════════════════════════
+## BillPouch Playground — simulated P2P network
+## ═══════════════════════════════════════════════════════════════════════════════
+## 5 simulated users with different service profiles + 1 interactive node (you).
+##
+## Usage:
+##   ./playground.sh up        — start the network
+##   ./playground.sh enter     — enter as yourself
+##   ./playground.sh enter carlo — enter carlo's node
+##   ./playground.sh status    — see each node's view
+##   ./playground.sh down      — stop everything
+## ═══════════════════════════════════════════════════════════════════════════════
+
+services:
+
+  # ── Carlo: storage + personal I/O ──────────────────────────────────────────
+  carlo:
+    build:
+      context: .
+      dockerfile: Dockerfile.playground
+    container_name: bp-carlo
+    hostname: bp-carlo
+    environment:
+      NODE_NAME: "carlo"
+      SERVICES: "pouch,bill"
+      NETWORK: "playground"
+      RUST_LOG: "bp_core=info,bp_cli=info"
+    networks:
+      - bp-playground
+
+  # ── Marco: relay + storage ─────────────────────────────────────────────────
+  marco:
+    build:
+      context: .
+      dockerfile: Dockerfile.playground
+    container_name: bp-marco
+    hostname: bp-marco
+    environment:
+      NODE_NAME: "marco"
+      SERVICES: "post,pouch"
+      NETWORK: "playground"
+      RUST_LOG: "bp_core=info,bp_cli=info"
+    networks:
+      - bp-playground
+
+  # ── Lucia: personal I/O + relay ────────────────────────────────────────────
+  lucia:
+    build:
+      context: .
+      dockerfile: Dockerfile.playground
+    container_name: bp-lucia
+    hostname: bp-lucia
+    environment:
+      NODE_NAME: "lucia"
+      SERVICES: "bill,post"
+      NETWORK: "playground"
+      RUST_LOG: "bp_core=info,bp_cli=info"
+    networks:
+      - bp-playground
+
+  # ── Elena: heavy storage node ──────────────────────────────────────────────
+  elena:
+    build:
+      context: .
+      dockerfile: Dockerfile.playground
+    container_name: bp-elena
+    hostname: bp-elena
+    environment:
+      NODE_NAME: "elena"
+      SERVICES: "pouch,pouch"
+      NETWORK: "playground"
+      RUST_LOG: "bp_core=info,bp_cli=info"
+    networks:
+      - bp-playground
+
+  # ── Paolo: file I/O only ───────────────────────────────────────────────────
+  paolo:
+    build:
+      context: .
+      dockerfile: Dockerfile.playground
+    container_name: bp-paolo
+    hostname: bp-paolo
+    environment:
+      NODE_NAME: "paolo"
+      SERVICES: "bill"
+      NETWORK: "playground"
+      RUST_LOG: "bp_core=info,bp_cli=info"
+    networks:
+      - bp-playground
+
+  # ── YOU: interactive node ──────────────────────────────────────────────────
+  me:
+    build:
+      context: .
+      dockerfile: Dockerfile.playground
+    container_name: bp-me
+    hostname: bp-me
+    stdin_open: true
+    tty: true
+    environment:
+      NODE_NAME: "me"
+      INTERACTIVE: "true"
+      NETWORK: "playground"
+      RUST_LOG: "bp_core=info,bp_cli=info"
+    networks:
+      - bp-playground
+
+networks:
+  bp-playground:
+    driver: bridge
