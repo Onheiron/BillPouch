@@ -5,6 +5,29 @@ All notable changes to BillPouch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1](https://github.com/Onheiron/BillPouch/compare/billpouch-v0.1.0...billpouch-v0.1.1) (2026-03-18)
+
+
+### Features
+
+* **smoke:** add Docker Compose smoke test with 3 P2P nodes ([2ea2ab8](https://github.com/Onheiron/BillPouch/commit/2ea2ab85c57d72afb96a7b26948257c247cbc79d))
+
+
+### Bug Fixes
+
+* **ci:** accept any swarm build failure on CI environments ([71f2569](https://github.com/Onheiron/BillPouch/commit/71f2569fa81ff4f2698fa641909463d030758ae1))
+* **ci:** fix failing GitHub Actions workflows ([1d84dba](https://github.com/Onheiron/BillPouch/commit/1d84dbafbd7a2bb1cf3742415e912cb018a5681a))
+* **ci:** fix failing GitHub Actions workflows ([332b854](https://github.com/Onheiron/BillPouch/commit/332b854683c1510b1e061f9996fd621566538313))
+* **ci:** fix formatting, release-please, and coverage workflows ([430bb64](https://github.com/Onheiron/BillPouch/commit/430bb640e404e08c4bacf5b96663e72b75b4aa3b))
+* **ci:** propagate mDNS errors instead of panicking in build_swarm ([d5d89bb](https://github.com/Onheiron/BillPouch/commit/d5d89bb3c5c086da04eb63e1abb0221dc37da570))
+* **ci:** use #[tokio::test] for swarm test to provide Tokio runtime on Linux ([c2cc481](https://github.com/Onheiron/BillPouch/commit/c2cc481499a19ef2cb468fc292ece2d3615522be))
+* **docker:** bump Rust image to 1.85 for edition2024 support ([d752b52](https://github.com/Onheiron/BillPouch/commit/d752b52ae0bd4b133d3444e8d644057e141f9c50))
+* **smoke:** hatch services after mesh formation for gossipsub propagation ([576740c](https://github.com/Onheiron/BillPouch/commit/576740c126957fe7d793e79ec4733bb2b30bd05c))
+* **smoke:** join network before mesh wait to keep connections alive ([d068e17](https://github.com/Onheiron/BillPouch/commit/d068e171b4f4ba9513fb30c24144b995ccec0760))
+* **smoke:** match service type without brackets in Known Peers section ([38fc272](https://github.com/Onheiron/BillPouch/commit/38fc272ad5b66fd5d1a42a7faafdc666176d10cc))
+* **smoke:** move network join into entrypoint for immediate gossipsub subscription ([1d51b83](https://github.com/Onheiron/BillPouch/commit/1d51b83de33239044d3230653aa69e8220e1bd37))
+* **smoke:** use safe arithmetic to avoid set -e exit on zero increment ([3045fbd](https://github.com/Onheiron/BillPouch/commit/3045fbde340f55ae2f702e0284a9f3ccbf312db2))
+
 ## [0.1.0] — 2026-03-18
 
 ### Features
