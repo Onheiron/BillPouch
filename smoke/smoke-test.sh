@@ -5,9 +5,12 @@
 # Verifies that 3 BillPouch nodes (pouch, bill, post) discover each other
 # via mDNS on a Docker bridge network and exchange NodeInfo via gossipsub.
 #
-# Usage:
-#   docker compose -f docker-compose.smoke.yml up --build -d
-#   ./smoke/smoke-test.sh
+# Strategy:
+#   1. Wait for all daemons to be ready (control socket responding)
+#   2. Wait for mDNS mesh formation (peers connect to each other)
+#   3. Hatch services AFTER mesh is ready (so gossipsub announcements propagate)
+#   4. Wait for gossipsub propagation
+#   5. Verify peer discovery, cross-visibility, health, network membership
 # ═══════════════════════════════════════════════════════════════════════════════
 set -euo pipefail
 
@@ -27,65 +30,107 @@ header() { echo -e "\n${YELLOW}═══ $1 ═══${NC}"; }
 
 CONTAINERS=("bp-pouch" "bp-bill" "bp-post")
 
-# ── Wait for all nodes to be ready ──────────────────────────────────────────
-header "1. Waiting for nodes to be ready"
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. Wait for all daemons to respond
+# ─────────────────────────────────────────────────────────────────────────────
+header "1. Waiting for daemons to be ready"
 for c in "${CONTAINERS[@]}"; do
     info "Checking ${c}..."
+    READY=false
     for i in $(seq 1 60); do
-        if docker exec "${c}" bp flock >/dev/null 2>&1; then
-            pass "${c} is responding to 'bp flock'"
+        # ping the daemon via socat on the control socket
+        RESP=$(docker exec "${c}" bash -c \
+            'echo "{\"cmd\":\"ping\"}" | socat -T2 - UNIX-CONNECT:$HOME/.local/share/billpouch/control.sock 2>/dev/null' \
+        ) || true
+        if echo "${RESP}" | grep -q "pong"; then
+            pass "${c} daemon is responding"
+            READY=true
             break
-        fi
-        if [ "$i" -eq 60 ]; then
-            fail "${c} never became ready (timeout 30s)"
         fi
         sleep 0.5
     done
+    if [ "${READY}" = false ]; then
+        fail "${c} daemon never became ready (timeout 30s)"
+    fi
 done
 
-# ── Give mDNS + gossipsub time to propagate ─────────────────────────────────
-header "2. Waiting for peer discovery (mDNS + gossipsub)"
-info "Sleeping 15s for mDNS discovery and gossipsub propagation..."
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. Wait for mDNS mesh formation
+# ─────────────────────────────────────────────────────────────────────────────
+header "2. Waiting for mDNS discovery + gossipsub mesh formation"
+info "Sleeping 20s for peers to discover each other and form gossipsub mesh..."
+sleep 20
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3. Hatch services (AFTER mesh is ready so announcements propagate)
+# ─────────────────────────────────────────────────────────────────────────────
+header "3. Hatching services on each node"
+
+hatch_service() {
+    local container="$1"
+    local svc_type="$2"
+    info "Hatching '${svc_type}' on ${container}..."
+    local OUT
+    OUT=$(docker exec "${container}" bp hatch "${svc_type}" --network smoketest 2>&1) || true
+    if echo "${OUT}" | grep -qi "hatched\|service_id\|running"; then
+        pass "${container} hatched '${svc_type}' successfully"
+    else
+        fail "${container} failed to hatch '${svc_type}': ${OUT}"
+    fi
+}
+
+hatch_service "bp-pouch" "pouch"
+hatch_service "bp-bill"  "bill"
+hatch_service "bp-post"  "post"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. Wait for gossipsub propagation
+# ─────────────────────────────────────────────────────────────────────────────
+header "4. Waiting for gossipsub to propagate NodeInfo"
+info "Sleeping 15s for gossipsub announcements to reach all peers..."
 sleep 15
 
-# ── Check each node sees the other peers ────────────────────────────────────
-header "3. Peer discovery verification"
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. Check each node's peer view
+# ─────────────────────────────────────────────────────────────────────────────
+header "5. Peer discovery verification"
 for c in "${CONTAINERS[@]}"; do
-    info "Checking ${c} peer view..."
-
+    info "${c} flock output:"
     FLOCK_OUTPUT=$(docker exec "${c}" bp flock 2>&1) || true
-    echo "${FLOCK_OUTPUT}" | head -30
+    echo "${FLOCK_OUTPUT}"
+    echo ""
 
-    # Count known peers (lines that look like peer entries)
-    # We use status command which returns JSON with peer_count
-    STATUS_OUTPUT=$(docker exec "${c}" bash -c '
-        echo "{\"cmd\":\"status\"}" | socat - UNIX-CONNECT:$HOME/.local/share/billpouch/control.sock 2>/dev/null || echo "{}"
-    ') || true
-
-    # Fallback: just check flock output for peer indicators
-    PEER_COUNT=$(echo "${FLOCK_OUTPUT}" | grep -ci "peer\|node\|pouch\|bill\|post" || true)
+    # Count known peers from the "Known Peers (N)" line
+    PEER_COUNT=$(echo "${FLOCK_OUTPUT}" | grep -oP 'Known Peers\s+\(\K[0-9]+' || echo "0")
 
     if [ "${PEER_COUNT}" -ge 2 ]; then
-        pass "${c} sees other peers (matched ${PEER_COUNT} lines)"
+        pass "${c} sees ${PEER_COUNT} peers (expected >= 2)"
     else
-        fail "${c} does NOT see enough peers (matched ${PEER_COUNT} lines)"
+        fail "${c} sees only ${PEER_COUNT} peers (expected >= 2)"
     fi
-    echo ""
 done
 
-# ── Verify each service type is visible from another node ───────────────────
-header "4. Service type cross-visibility"
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. Service type cross-visibility (check Known Peers section only)
+# ─────────────────────────────────────────────────────────────────────────────
+header "6. Service type cross-visibility"
 
 check_service_visible() {
     local from_node="$1"
     local service_type="$2"
+
+    # Get flock output and extract only the Known Peers section
     local flock_out
     flock_out=$(docker exec "${from_node}" bp flock 2>&1) || true
 
-    if echo "${flock_out}" | grep -qi "${service_type}"; then
-        pass "${from_node} sees a '${service_type}' service"
+    # Extract lines after "Known Peers" header
+    local peers_section
+    peers_section=$(echo "${flock_out}" | sed -n '/Known Peers/,$ p' | tail -n +2) || true
+
+    if echo "${peers_section}" | grep -qi "\[${service_type}\]"; then
+        pass "${from_node} sees a [${service_type}] peer"
     else
-        fail "${from_node} does NOT see a '${service_type}' service"
+        fail "${from_node} does NOT see a [${service_type}] peer"
     fi
 }
 
@@ -101,47 +146,49 @@ check_service_visible "bp-bill" "post"
 check_service_visible "bp-post" "pouch"
 check_service_visible "bp-post" "bill"
 
-# ── Verify ping works on all nodes ──────────────────────────────────────────
-header "5. Health check (ping/pong)"
+# ─────────────────────────────────────────────────────────────────────────────
+# 7. Health check (ping/pong)
+# ─────────────────────────────────────────────────────────────────────────────
+header "7. Health check (ping/pong)"
 for c in "${CONTAINERS[@]}"; do
-    PING_OUT=$(docker exec "${c}" bash -c '
-        echo "{\"cmd\":\"ping\"}" | socat - UNIX-CONNECT:$HOME/.local/share/billpouch/control.sock 2>/dev/null || echo "FAIL"
-    ') || true
+    PING_OUT=$(docker exec "${c}" bash -c \
+        'echo "{\"cmd\":\"ping\"}" | socat -T2 - UNIX-CONNECT:$HOME/.local/share/billpouch/control.sock 2>/dev/null' \
+    ) || true
 
     if echo "${PING_OUT}" | grep -qi "pong"; then
         pass "${c} ping → pong"
     else
-        # Fallback: try via bp status
-        STATUS_OUT=$(docker exec "${c}" bp flock 2>&1) || true
-        if [ -n "${STATUS_OUT}" ]; then
-            pass "${c} daemon is responsive (via bp flock)"
-        else
-            fail "${c} daemon is NOT responding"
-        fi
+        fail "${c} daemon is NOT responding to ping"
     fi
 done
 
-# ── Verify all nodes are on the same network ────────────────────────────────
-header "6. Network membership"
+# ─────────────────────────────────────────────────────────────────────────────
+# 8. Network membership
+# ─────────────────────────────────────────────────────────────────────────────
+header "8. Network membership"
 for c in "${CONTAINERS[@]}"; do
     FLOCK_OUT=$(docker exec "${c}" bp flock 2>&1) || true
 
-    if echo "${FLOCK_OUT}" | grep -qi "smoketest"; then
+    if echo "${FLOCK_OUT}" | grep -q "smoketest"; then
         pass "${c} is on network 'smoketest'"
     else
         fail "${c} is NOT on network 'smoketest'"
     fi
 done
 
-# ── Node logs (for debugging) ──────────────────────────────────────────────
-header "7. Node logs (last 10 lines each)"
+# ─────────────────────────────────────────────────────────────────────────────
+# 9. Node logs (for debugging)
+# ─────────────────────────────────────────────────────────────────────────────
+header "9. Node logs (last 15 lines each)"
 for c in "${CONTAINERS[@]}"; do
     info "--- ${c} ---"
-    docker logs "${c}" 2>&1 | tail -10
+    docker logs "${c}" 2>&1 | tail -15
     echo ""
 done
 
-# ── Summary ─────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# RESULTS
+# ─────────────────────────────────────────────────────────────────────────────
 header "RESULTS"
 TOTAL=$((PASS + FAIL))
 echo -e "  ${GREEN}Passed: ${PASS}${NC} / ${TOTAL}"
