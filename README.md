@@ -11,6 +11,7 @@
 **A P2P social distributed filesystem — written in Rust.** 
 
 [![CI](https://github.com/Onheiron/BillPouch/actions/workflows/ci.yml/badge.svg)](https://github.com/Onheiron/BillPouch/actions/workflows/ci.yml)
+[![Smoke Test](https://github.com/Onheiron/BillPouch/actions/workflows/smoke.yml/badge.svg)](https://github.com/Onheiron/BillPouch/actions/workflows/smoke.yml)
 [![Security](https://github.com/Onheiron/BillPouch/actions/workflows/security.yml/badge.svg)](https://github.com/Onheiron/BillPouch/actions/workflows/security.yml)
 [![Coverage](https://github.com/Onheiron/BillPouch/actions/workflows/coverage.yml/badge.svg)](https://github.com/Onheiron/BillPouch/actions/workflows/coverage.yml)
 [![Docs](https://github.com/Onheiron/BillPouch/actions/workflows/docs.yml/badge.svg)](https://onheiron.github.io/BillPouch/)

@@ -1,0 +1,37 @@
+name: Smoke Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  COMPOSE_FILE: docker-compose.smoke.yml
+
+jobs:
+  smoke:
+    name: P2P smoke test (3 nodes)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build and start cluster
+        run: docker compose -f docker-compose.smoke.yml up --build -d
+
+      - name: Wait for nodes to initialize
+        run: sleep 10
+
+      - name: Run smoke tests
+        run: ./smoke/smoke-test.sh
+
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.smoke.yml logs --no-color
+
+      - name: Tear down cluster
+        if: always()
+        run: docker compose -f docker-compose.smoke.yml down -v

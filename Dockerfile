@@ -1,0 +1,22 @@
+# ── Stage 1: build ───────────────────────────────────────────────────────────
+FROM rust:1.82-bookworm AS builder
+
+WORKDIR /src
+COPY . .
+
+RUN cargo build --release --bin bp
+
+# ── Stage 2: runtime ─────────────────────────────────────────────────────────
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates socat \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /src/target/release/bp /usr/local/bin/bp
+COPY smoke/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENV RUST_LOG=bp_core=debug,bp_cli=debug
+
+ENTRYPOINT ["/entrypoint.sh"]

@@ -1,0 +1,49 @@
+## BillPouch — Smoke-test cluster
+## Usage:
+##   docker compose -f docker-compose.smoke.yml up --build -d
+##   ./smoke/smoke-test.sh
+##   docker compose -f docker-compose.smoke.yml down
+
+services:
+  # ── Node 1: Pouch (storage) ────────────────────────────────────────────────
+  node-pouch:
+    build: .
+    container_name: bp-pouch
+    hostname: bp-pouch
+    environment:
+      NODE_NAME: "carlo-pouch"
+      SERVICE_TYPE: "pouch"
+      NETWORK: "smoketest"
+      RUST_LOG: "bp_core=debug,bp_cli=info"
+    networks:
+      - bp-lan
+
+  # ── Node 2: Bill (file I/O) ───────────────────────────────────────────────
+  node-bill:
+    build: .
+    container_name: bp-bill
+    hostname: bp-bill
+    environment:
+      NODE_NAME: "marco-bill"
+      SERVICE_TYPE: "bill"
+      NETWORK: "smoketest"
+      RUST_LOG: "bp_core=debug,bp_cli=info"
+    networks:
+      - bp-lan
+
+  # ── Node 3: Post (relay) ──────────────────────────────────────────────────
+  node-post:
+    build: .
+    container_name: bp-post
+    hostname: bp-post
+    environment:
+      NODE_NAME: "lucia-post"
+      SERVICE_TYPE: "post"
+      NETWORK: "smoketest"
+      RUST_LOG: "bp_core=debug,bp_cli=info"
+    networks:
+      - bp-lan
+
+networks:
+  bp-lan:
+    driver: bridge
