@@ -14,6 +14,7 @@ jobs:
   audit:
     name: cargo audit
     runs-on: ubuntu-latest
+    continue-on-error: true
 
     steps:
       - name: Checkout repository
@@ -26,24 +27,12 @@ jobs:
         run: cargo install cargo-audit --locked
 
       - name: Run cargo audit
-        continue-on-error: true
-        run: |
-          echo "## cargo audit" >> $GITHUB_STEP_SUMMARY
-          cargo audit 2>&1 | tee /tmp/audit.txt
-          EXIT=$?
-          if [ $EXIT -ne 0 ]; then
-            echo "### ⚠️ Vulnerabilities found" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            cat /tmp/audit.txt >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-          else
-            echo "✅ No vulnerabilities found" >> $GITHUB_STEP_SUMMARY
-          fi
-          exit $EXIT
+        run: cargo audit
 
   deny:
     name: cargo deny
     runs-on: ubuntu-latest
+    continue-on-error: true
 
     steps:
       - name: Checkout repository
@@ -56,17 +45,4 @@ jobs:
         run: cargo install cargo-deny --locked
 
       - name: Run cargo deny
-        continue-on-error: true
-        run: |
-          echo "## cargo deny" >> $GITHUB_STEP_SUMMARY
-          cargo deny check 2>&1 | tee /tmp/deny.txt
-          EXIT=$?
-          if [ $EXIT -ne 0 ]; then
-            echo "### ⚠️ Policy violations found" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            cat /tmp/deny.txt >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-          else
-            echo "✅ All checks passed" >> $GITHUB_STEP_SUMMARY
-          fi
-          exit $EXIT
+        run: cargo deny check

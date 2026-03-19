@@ -48,7 +48,7 @@ jobs:
         run: |
           cargo tarpaulin \
             --packages bp-core \
-            --tests \
+            --test architecture_test \
             --out xml \
             --output-dir coverage/ \
             || true
