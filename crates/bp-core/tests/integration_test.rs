@@ -43,6 +43,7 @@ fn make_daemon_state() -> (Arc<DaemonState>, mpsc::Receiver<NetworkCommand>) {
         network_state: Arc::new(RwLock::new(NetworkState::new())),
         networks: RwLock::new(Vec::new()),
         net_tx,
+        storage_managers: Arc::new(RwLock::new(std::collections::HashMap::new())),
     });
 
     (state, net_rx)
