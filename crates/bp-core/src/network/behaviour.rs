@@ -56,8 +56,7 @@ pub struct BillPouchBehaviour {
     /// mDNS: zero-configuration local-network peer discovery via multicast DNS.
     pub mdns: mdns::tokio::Behaviour,
     /// Direct fragment fetch/push between Pouch nodes.
-    pub fragment_exchange:
-        request_response::cbor::Behaviour<FragmentRequest, FragmentResponse>,
+    pub fragment_exchange: request_response::cbor::Behaviour<FragmentRequest, FragmentResponse>,
 }
 
 impl BillPouchBehaviour {

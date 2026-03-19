@@ -315,8 +315,7 @@ async fn handle_swarm_event(
         SwarmEvent::Behaviour(behaviour::BillPouchBehaviourEvent::FragmentExchange(
             request_response::Event::Message {
                 peer,
-                message:
-                    request_response::Message::Response { response, .. },
+                message: request_response::Message::Response { response, .. },
             },
         )) => match response {
             FragmentResponse::Found { data } => {
@@ -339,9 +338,18 @@ fn serve_fragment_request(
     let managers = storage_managers.read().unwrap();
     for sm_arc in managers.values() {
         let sm = sm_arc.read().unwrap();
-        if sm.index.fragments_for_chunk(&req.chunk_id).iter().any(|m| m.fragment_id == req.fragment_id) {
+        if sm
+            .index
+            .fragments_for_chunk(&req.chunk_id)
+            .iter()
+            .any(|m| m.fragment_id == req.fragment_id)
+        {
             match sm.load_fragment(&req.chunk_id, &req.fragment_id) {
-                Ok(fragment) => return FragmentResponse::Found { data: fragment.to_bytes() },
+                Ok(fragment) => {
+                    return FragmentResponse::Found {
+                        data: fragment.to_bytes(),
+                    }
+                }
                 Err(e) => tracing::warn!("serve_fragment load error: {e}"),
             }
         }

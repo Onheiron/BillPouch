@@ -62,7 +62,9 @@ pub async fn run_daemon() -> BpResult<()> {
     let net_state = Arc::clone(&network_state);
     let net_storage = Arc::clone(&storage_managers);
     tokio::spawn(async move {
-        if let Err(e) = network::run_network_loop(swarm, net_rx, net_state, listen_addr, net_storage).await {
+        if let Err(e) =
+            network::run_network_loop(swarm, net_rx, net_state, listen_addr, net_storage).await
+        {
             tracing::error!("Network loop exited with error: {}", e);
         }
     });

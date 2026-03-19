@@ -175,11 +175,20 @@ async fn main() -> anyhow::Result<()> {
             commands::join::join(network_id).await?;
         }
 
-        Some(Cmd::Put { file, network, k, n }) => {
+        Some(Cmd::Put {
+            file,
+            network,
+            k,
+            n,
+        }) => {
             commands::put::put(file, network, k, n).await?;
         }
 
-        Some(Cmd::Get { chunk_id, output, network }) => {
+        Some(Cmd::Get {
+            chunk_id,
+            output,
+            network,
+        }) => {
             commands::get::get(chunk_id, network, output).await?;
         }
     }
