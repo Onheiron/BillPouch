@@ -79,6 +79,37 @@ enum Cmd {
         /// The network identifier (e.g. "my-team-net").
         network_id: String,
     },
+
+    /// Store a local file in the active Pouch (RLNC erasure-coded).
+    Put {
+        /// Path to the file to store.
+        file: std::path::PathBuf,
+
+        /// Network ID whose Pouch will store the fragments (default: "public").
+        #[arg(long, short, default_value = DEFAULT_NETWORK)]
+        network: String,
+
+        /// Number of source symbols k (minimum fragments to reconstruct).
+        #[arg(long)]
+        k: Option<usize>,
+
+        /// Total fragments to generate (default: k * 2).
+        #[arg(long)]
+        n: Option<usize>,
+    },
+
+    /// Retrieve and decode a stored chunk by its chunk_id.
+    Get {
+        /// The chunk_id returned by `bp put` (BLAKE3 prefix).
+        chunk_id: String,
+
+        /// Where to write the recovered file.
+        output: std::path::PathBuf,
+
+        /// Network ID to search (default: "public").
+        #[arg(long, short, default_value = DEFAULT_NETWORK)]
+        network: String,
+    },
 }
 
 #[tokio::main]
@@ -142,6 +173,14 @@ async fn main() -> anyhow::Result<()> {
 
         Some(Cmd::Join { network_id }) => {
             commands::join::join(network_id).await?;
+        }
+
+        Some(Cmd::Put { file, network, k, n }) => {
+            commands::put::put(file, network, k, n).await?;
+        }
+
+        Some(Cmd::Get { chunk_id, output, network }) => {
+            commands::get::get(chunk_id, network, output).await?;
         }
     }
 
