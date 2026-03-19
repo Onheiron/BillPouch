@@ -1183,12 +1183,9 @@ static IDENTITY_FS_LOCK: Mutex<()> = Mutex::new(());
 /// Solo su Unix: su Windows `directories` usa APPDATA, non HOME.
 #[cfg(unix)]
 fn with_temp_home<F: FnOnce() + std::panic::UnwindSafe>(f: F) {
-    let _guard = IDENTITY_FS_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _guard = IDENTITY_FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
-    let tmp =
-        std::env::temp_dir().join(format!("bp_test_{}", uuid::Uuid::new_v4().simple()));
+    let tmp = std::env::temp_dir().join(format!("bp_test_{}", uuid::Uuid::new_v4().simple()));
     std::fs::create_dir_all(&tmp).unwrap();
 
     let old_home = std::env::var("HOME").ok();
