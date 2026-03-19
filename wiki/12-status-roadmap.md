@@ -73,21 +73,27 @@
 
 ### In progress 🔨
 
-| Funzionalità              | Descrizione                                   |
-|---------------------------|-----------------------------------------------|
-| **Pouch — FUSE mount**    | Mount FUSE per offrire storage reale          |
-| **Bill — file chunking**  | Chunking + cifratura `age`                    |
-| **Post — relay logic**    | Routing bandwidth-aware                       |
+| Funzionalità | Descrizione | Spec |
+|---|---|---|
+| **Pouch — storage bid** | Directory locale, meta.json, quota enforcement | [14-storage-bidding.md](./14-storage-bidding.md) |
+| **RLNC encoding** | Chunking, GF(2⁸), encoding/decoding/recoding | [15-erasure-coding.md](./15-erasure-coding.md) |
+| **Fragment distribution** | Push fragment ai Pouch disponibili, fill nuovi nodi | [15-erasure-coding.md](./15-erasure-coding.md) |
+| **Network quality monitor** | Challenge Ping + PoS, fault score, blacklist gossip | [16-network-quality.md](./16-network-quality.md) |
 
 ### Pianificato 📋
 
-| Funzionalità              | Descrizione                                   |
-|---------------------------|-----------------------------------------------|
-| Storage marketplace       | Accordi di storage tra utenti                 |
-| REST API (axum)           | Adapter HTTP per integrazioni terze           |
-| gRPC API (tonic)          | Adapter gRPC per sistemi enterprise           |
-| Persistenza Kademlia      | Store su disco (sled/rocksdb) per il DHT      |
-| Bootstrap nodes           | Nodi noti per la scoperta iniziale oltre mDNS |
+| Funzionalità | Descrizione |
+|---|---|
+| Bill — `bp put <file>` | Upload file: chunking → RLNC encoding → distribuzione ai Pouch |
+| Bill — `bp get <file>` | Download: raccolta k fragment → decodifica → ricostruzione file |
+| FragmentIndex gossip | Indice distribuito `{chunk_id, fragment_id, fragment_hash, pouch_id}` |
+| Parametri N/K dinamici | Calcolo ridondanza in base a numero Pouch, stabilità, target durability |
+| Rigenerazione preventiva | Recoding automatico quando un Pouch è `suspected` o `blacklisted` |
+| Storage marketplace | Accordi di storage tra utenti |
+| REST API (axum) | Adapter HTTP per integrazioni terze |
+| gRPC API (tonic) | Adapter gRPC per sistemi enterprise |
+| Persistenza Kademlia | Store su disco (sled/rocksdb) per il DHT |
+| Bootstrap nodes | Nodi noti per la scoperta iniziale oltre mDNS |
 
 ### Futuro 🔮
 
