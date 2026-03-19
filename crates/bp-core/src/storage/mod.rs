@@ -313,7 +313,7 @@ mod tests {
         }
     }
 
-    const CHUNK: &[u8] = b"StorageManager test data — enough bytes to split into 4 symbols.";
+    const CHUNK: &[u8] = b"StorageManager test data - enough bytes to split into 4 symbols.";
 
     #[test]
     #[cfg(unix)]
