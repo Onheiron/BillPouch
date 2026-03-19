@@ -3,11 +3,16 @@
 //! then closes the connection.
 
 use crate::{
-    control::protocol::{ControlRequest, ControlResponse, FlockData, HatchData, StatusData},
+    coding::rlnc,
+    control::protocol::{
+        ControlRequest, ControlResponse, FlockData, GetFileData, HatchData, PutFileData,
+        StatusData,
+    },
     error::BpResult,
     identity::Identity,
     network::{state::NodeInfo, NetworkCommand},
     service::{ServiceInfo, ServiceRegistry, ServiceStatus, ServiceType},
+    storage::StorageManager,
 };
 use std::{
     collections::HashMap,
@@ -27,6 +32,11 @@ pub struct DaemonState {
     pub network_state: Arc<RwLock<crate::network::state::NetworkState>>,
     pub networks: RwLock<Vec<String>>,
     pub net_tx: mpsc::Sender<NetworkCommand>,
+    /// One `StorageManager` per active Pouch service, keyed by `service_id`.
+    ///
+    /// Shared with the network loop so incoming fragment-fetch requests can
+    /// be served directly from the P2P event handler.
+    pub storage_managers: Arc<RwLock<HashMap<String, Arc<RwLock<StorageManager>>>>>,
 }
 
 /// Accept connections on the Unix socket and dispatch requests.
@@ -153,6 +163,29 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 reg.register(running_info);
             } // ← lock released here
 
+            // Initialise a StorageManager when hatching a Pouch service.
+            if service_type == ServiceType::Pouch {
+                let quota = metadata
+                    .get("storage_bytes")
+                    .or_else(|| metadata.get("storage_bytes_bid"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+
+                match StorageManager::init(network_id.clone(), service_id.clone(), quota) {
+                    Ok(sm) => {
+                        state
+                            .storage_managers
+                            .write()
+                            .unwrap()
+                            .insert(service_id.clone(), Arc::new(RwLock::new(sm)));
+                        tracing::info!(service_id=%service_id, quota_bytes=%quota, "StorageManager initialised");
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to init StorageManager for {}: {}", service_id, e);
+                    }
+                }
+            }
+
             // Announce to the network (await-safe: no lock held)
             announce_self(state, &service_id, service_type, &network_id).await;
 
@@ -228,6 +261,129 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 "network_id": network_id,
                 "message": format!("Left network '{}'", network_id),
             }))
+        }
+
+        // ── PutFile ───────────────────────────────────────────────────────
+        ControlRequest::PutFile {
+            chunk_data,
+            k,
+            n,
+            network_id,
+        } => {
+            // Find a Pouch StorageManager for this network.
+            let managers_snap: Vec<(String, Arc<RwLock<StorageManager>>)> = {
+                let map = state.storage_managers.read().unwrap();
+                map.iter()
+                    .map(|(id, sm)| (id.clone(), Arc::clone(sm)))
+                    .collect()
+            };
+
+            // Filter to managers whose network matches (or any if network_id is empty).
+            let candidates: Vec<_> = managers_snap
+                .iter()
+                .filter(|(_, sm)| {
+                    let meta = &sm.read().unwrap().meta;
+                    network_id.is_empty() || meta.network_id == network_id
+                })
+                .collect();
+
+            if candidates.is_empty() {
+                return ControlResponse::err(format!(
+                    "No active Pouch on network '{}' — run `bp hatch pouch --network {0}` first",
+                    network_id
+                ));
+            }
+
+            // Encode the chunk.
+            let fragments = match rlnc::encode(&chunk_data, k, n) {
+                Ok(f) => f,
+                Err(e) => return ControlResponse::err(format!("Encode error: {e}")),
+            };
+
+            let chunk_id = match fragments.first() {
+                Some(f) => f.chunk_id.clone(),
+                None => return ControlResponse::err("Encoding produced no fragments"),
+            };
+
+            // Store all fragments in the first candidate with capacity.
+            let (_, sm_arc) = candidates[0];
+            let mut sm = sm_arc.write().unwrap();
+            let mut stored = 0usize;
+            for fragment in &fragments {
+                match sm.store_fragment(fragment) {
+                    Ok(()) => stored += 1,
+                    Err(e) => {
+                        tracing::warn!(chunk_id=%chunk_id, "store_fragment failed: {e}");
+                        break;
+                    }
+                }
+            }
+
+            if stored == 0 {
+                return ControlResponse::err("Failed to store any fragments (quota exceeded?)");
+            }
+
+            tracing::info!(chunk_id=%chunk_id, stored=%stored, total=%fragments.len(), "PutFile stored");
+
+            ControlResponse::ok(PutFileData {
+                chunk_id: chunk_id.clone(),
+                fragments_stored: stored,
+                message: format!(
+                    "Stored {stored}/{} fragments — chunk_id: {chunk_id}",
+                    fragments.len()
+                ),
+            })
+        }
+
+        // ── GetFile ───────────────────────────────────────────────────────
+        ControlRequest::GetFile {
+            chunk_id,
+            network_id,
+        } => {
+            let managers_snap: Vec<Arc<RwLock<StorageManager>>> = {
+                let map = state.storage_managers.read().unwrap();
+                map.values()
+                    .filter(|sm| {
+                        let meta = &sm.read().unwrap().meta;
+                        network_id.is_empty() || meta.network_id == network_id
+                    })
+                    .map(Arc::clone)
+                    .collect()
+            };
+
+            if managers_snap.is_empty() {
+                return ControlResponse::err("No active Pouch found — daemon has no storage");
+            }
+
+            // Collect fragments from all matching managers.
+            let mut all_fragments = Vec::new();
+            for sm_arc in &managers_snap {
+                let sm = sm_arc.read().unwrap();
+                let metas = sm.index.fragments_for_chunk(&chunk_id).to_vec();
+                for meta in metas {
+                    match sm.load_fragment(&chunk_id, &meta.fragment_id) {
+                        Ok(f) => all_fragments.push(f),
+                        Err(e) => tracing::warn!("load_fragment failed: {e}"),
+                    }
+                }
+            }
+
+            if all_fragments.is_empty() {
+                return ControlResponse::err(format!("Chunk '{chunk_id}' not found locally"));
+            }
+
+            let fragments_used = all_fragments.len();
+            match rlnc::decode(all_fragments) {
+                Ok(data) => {
+                    tracing::info!(chunk_id=%chunk_id, fragments_used=%fragments_used, "GetFile decoded");
+                    ControlResponse::ok(GetFileData {
+                        chunk_id,
+                        data,
+                        fragments_used,
+                    })
+                }
+                Err(e) => ControlResponse::err(format!("Decode failed: {e}")),
+            }
         }
     }
 }

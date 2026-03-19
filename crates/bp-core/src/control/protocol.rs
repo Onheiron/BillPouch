@@ -32,6 +32,26 @@ pub enum ControlRequest {
     Status,
     /// Ping — used to check if daemon is alive.
     Ping,
+    /// Encode `chunk_data` with RLNC and store fragments in the local Pouch.
+    ///
+    /// Returns a `chunk_id` (BLAKE3 hash prefix) that can be used with `GetFile`.
+    PutFile {
+        /// Raw bytes to encode and store.
+        chunk_data: Vec<u8>,
+        /// Number of source symbols — minimum fragments needed to reconstruct.
+        k: usize,
+        /// Total fragments to generate (must be >= k).
+        n: usize,
+        /// Network ID whose Pouch should hold the fragments.
+        network_id: String,
+    },
+    /// Retrieve and decode a stored file chunk by its `chunk_id`.
+    GetFile {
+        /// BLAKE3 chunk hash prefix (16 hex chars) returned by `PutFile`.
+        chunk_id: String,
+        /// Network ID to search for the chunk.
+        network_id: String,
+    },
 }
 
 /// Response sent from daemon → CLI.
@@ -91,4 +111,26 @@ pub struct StatusData {
     pub networks: Vec<String>,
     pub known_peers: usize,
     pub version: String,
+}
+
+/// Returned by [`ControlRequest::PutFile`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PutFileData {
+    /// BLAKE3 chunk hash prefix identifying this chunk.
+    pub chunk_id: String,
+    /// How many fragments were stored locally.
+    pub fragments_stored: usize,
+    /// Human-readable summary.
+    pub message: String,
+}
+
+/// Returned by [`ControlRequest::GetFile`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetFileData {
+    /// BLAKE3 chunk hash prefix of the retrieved chunk.
+    pub chunk_id: String,
+    /// Recovered raw bytes.
+    pub data: Vec<u8>,
+    /// How many fragments were used for decoding.
+    pub fragments_used: usize,
 }

@@ -10,8 +10,12 @@ use crate::{
     identity::Identity,
     network::{self, NetworkState},
     service::ServiceRegistry,
+    storage::StorageManager,
 };
-use std::sync::{Arc, RwLock};
+use std::{
+    collections::HashMap,
+    sync::{Arc, RwLock},
+};
 use tokio::sync::mpsc;
 
 /// Start the daemon process.  This function blocks until the daemon is killed.
@@ -33,12 +37,17 @@ pub async fn run_daemon() -> BpResult<()> {
     let network_state = Arc::new(RwLock::new(NetworkState::new()));
     let (net_tx, net_rx) = mpsc::channel::<crate::network::NetworkCommand>(64);
 
+    // Shared storage managers: populated when Pouch services are hatched.
+    let storage_managers: Arc<RwLock<HashMap<String, Arc<RwLock<StorageManager>>>>> =
+        Arc::new(RwLock::new(HashMap::new()));
+
     let daemon_state = Arc::new(DaemonState {
         identity: identity.clone(),
         services: RwLock::new(ServiceRegistry::new()),
         network_state: Arc::clone(&network_state),
         networks: RwLock::new(Vec::new()),
         net_tx: net_tx.clone(),
+        storage_managers: Arc::clone(&storage_managers),
     });
 
     // ── Build libp2p swarm ────────────────────────────────────────────────
@@ -51,8 +60,9 @@ pub async fn run_daemon() -> BpResult<()> {
 
     // ── Spawn network loop ────────────────────────────────────────────────
     let net_state = Arc::clone(&network_state);
+    let net_storage = Arc::clone(&storage_managers);
     tokio::spawn(async move {
-        if let Err(e) = network::run_network_loop(swarm, net_rx, net_state, listen_addr).await {
+        if let Err(e) = network::run_network_loop(swarm, net_rx, net_state, listen_addr, net_storage).await {
             tracing::error!("Network loop exited with error: {}", e);
         }
     });

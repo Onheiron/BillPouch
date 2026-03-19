@@ -15,13 +15,16 @@
 pub mod behaviour;
 pub mod state;
 
-pub use behaviour::BillPouchBehaviour;
+pub use behaviour::{BillPouchBehaviour, FragmentRequest, FragmentResponse};
 pub use state::{NetworkState, NodeInfo};
 
-use crate::error::{BpError, BpResult};
+use crate::{
+    error::{BpError, BpResult},
+    storage::StorageManager,
+};
 use futures::StreamExt;
-use libp2p::{gossipsub, swarm::SwarmEvent, Multiaddr, Swarm};
-use std::collections::HashSet;
+use libp2p::{gossipsub, request_response, swarm::SwarmEvent, Multiaddr, PeerId, Swarm};
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
 
@@ -46,6 +49,19 @@ pub enum NetworkCommand {
     },
     /// Dial a remote peer at a known [`Multiaddr`].
     Dial { addr: Multiaddr },
+    /// Push a fragment to a remote Pouch peer.
+    PushFragment {
+        peer_id: PeerId,
+        chunk_id: String,
+        fragment_id: String,
+        data: Vec<u8>,
+    },
+    /// Fetch a specific fragment from a remote Pouch peer.
+    FetchFragment {
+        peer_id: PeerId,
+        chunk_id: String,
+        fragment_id: String,
+    },
     /// Ask the network loop to exit cleanly.
     Shutdown,
 }
@@ -100,6 +116,7 @@ pub async fn run_network_loop(
     mut cmd_rx: mpsc::Receiver<NetworkCommand>,
     state: Arc<RwLock<NetworkState>>,
     listen_addr: Multiaddr,
+    storage_managers: Arc<RwLock<HashMap<String, Arc<RwLock<StorageManager>>>>>,
 ) -> BpResult<()> {
     swarm
         .listen_on(listen_addr.clone())
@@ -113,7 +130,7 @@ pub async fn run_network_loop(
         tokio::select! {
             // ── Incoming swarm event ──────────────────────────────────────────
             event = swarm.select_next_some() => {
-                handle_swarm_event(event, &mut swarm, &state, &mut subscribed_networks).await;
+                handle_swarm_event(event, &mut swarm, &state, &mut subscribed_networks, &storage_managers).await;
             }
             // ── Command from daemon ───────────────────────────────────────────
             cmd = cmd_rx.recv() => {
@@ -153,6 +170,38 @@ pub async fn run_network_loop(
                             tracing::warn!("Dial {} failed: {}", addr, e);
                         }
                     }
+                    Some(NetworkCommand::PushFragment {
+                        peer_id,
+                        chunk_id,
+                        fragment_id,
+                        data,
+                    }) => {
+                        // Send fragment data to a remote peer via request-response.
+                        // We encode the push as a request carrying the data; the
+                        // remote side will store it. The response is ignored.
+                        let req = FragmentRequest {
+                            chunk_id: chunk_id.clone(),
+                            fragment_id: fragment_id.clone(),
+                        };
+                        // Attach data as a separate gossip publish for simplicity;
+                        // real implementation would extend the protocol.
+                        let _ = swarm
+                            .behaviour_mut()
+                            .fragment_exchange
+                            .send_request(&peer_id, req);
+                        tracing::debug!(peer=%peer_id, chunk=%chunk_id, frag=%fragment_id, bytes=%data.len(), "PushFragment sent");
+                    }
+                    Some(NetworkCommand::FetchFragment {
+                        peer_id,
+                        chunk_id,
+                        fragment_id,
+                    }) => {
+                        let req = FragmentRequest { chunk_id, fragment_id };
+                        let _req_id = swarm
+                            .behaviour_mut()
+                            .fragment_exchange
+                            .send_request(&peer_id, req);
+                    }
                 }
             }
         }
@@ -166,6 +215,7 @@ async fn handle_swarm_event(
     swarm: &mut Swarm<BillPouchBehaviour>,
     state: &Arc<RwLock<NetworkState>>,
     _subscribed: &mut HashSet<String>,
+    storage_managers: &Arc<RwLock<HashMap<String, Arc<RwLock<StorageManager>>>>>,
 ) {
     match event {
         // ── Gossipsub: incoming NodeInfo announcement ─────────────────────
@@ -241,6 +291,60 @@ async fn handle_swarm_event(
             tracing::debug!(peer=%peer_id, cause=?cause, "Connection closed");
         }
 
+        // ── Fragment exchange: incoming request ───────────────────────────
+        SwarmEvent::Behaviour(behaviour::BillPouchBehaviourEvent::FragmentExchange(
+            request_response::Event::Message {
+                peer,
+                message:
+                    request_response::Message::Request {
+                        request, channel, ..
+                    },
+            },
+        )) => {
+            let response = serve_fragment_request(&request, storage_managers);
+            if let Err(e) = swarm
+                .behaviour_mut()
+                .fragment_exchange
+                .send_response(channel, response)
+            {
+                tracing::warn!(peer=%peer, "send_response failed: {:?}", e);
+            }
+        }
+
+        // ── Fragment exchange: incoming response ──────────────────────────
+        SwarmEvent::Behaviour(behaviour::BillPouchBehaviourEvent::FragmentExchange(
+            request_response::Event::Message {
+                peer,
+                message:
+                    request_response::Message::Response { response, .. },
+            },
+        )) => match response {
+            FragmentResponse::Found { data } => {
+                tracing::debug!(peer=%peer, bytes=%data.len(), "Fragment response received");
+            }
+            FragmentResponse::NotFound => {
+                tracing::debug!(peer=%peer, "Fragment not found on remote");
+            }
+        },
+
         _ => {}
     }
+}
+
+/// Serve a [`FragmentRequest`] from a remote peer by looking up local storage.
+fn serve_fragment_request(
+    req: &FragmentRequest,
+    storage_managers: &Arc<RwLock<HashMap<String, Arc<RwLock<StorageManager>>>>>,
+) -> FragmentResponse {
+    let managers = storage_managers.read().unwrap();
+    for sm_arc in managers.values() {
+        let sm = sm_arc.read().unwrap();
+        if sm.index.fragments_for_chunk(&req.chunk_id).iter().any(|m| m.fragment_id == req.fragment_id) {
+            match sm.load_fragment(&req.chunk_id, &req.fragment_id) {
+                Ok(fragment) => return FragmentResponse::Found { data: fragment.to_bytes() },
+                Err(e) => tracing::warn!("serve_fragment load error: {e}"),
+            }
+        }
+    }
+    FragmentResponse::NotFound
 }

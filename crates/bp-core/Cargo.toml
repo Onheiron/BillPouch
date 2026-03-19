@@ -25,6 +25,8 @@ libp2p = { version = "0.54", features = [
     "macros",
     "tokio",
     "ed25519",
+    "request-response",
+    "cbor",
 ] }
 
 sha2    = "0.10"
