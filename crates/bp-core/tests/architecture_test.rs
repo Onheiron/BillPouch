@@ -1541,6 +1541,9 @@ fn make_in_memory_state() -> std::sync::Arc<bp_core::control::server::DaemonStat
         network_state: std::sync::Arc::new(std::sync::RwLock::new(NetworkState::new())),
         networks: std::sync::RwLock::new(Vec::new()),
         net_tx,
+        storage_managers: std::sync::Arc::new(std::sync::RwLock::new(
+            std::collections::HashMap::new(),
+        )),
     })
 }
 
