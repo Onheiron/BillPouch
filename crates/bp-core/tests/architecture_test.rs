@@ -1009,6 +1009,9 @@ fn config_paths_ritornano_ok() {
 
 #[test]
 fn config_path_nomi_file_corretti() {
+    // Acquire the same lock used by with_temp_home to avoid races on $HOME
+    let _guard = IDENTITY_FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
     let base = bp_core::config::base_dir().unwrap();
     let identity = bp_core::config::identity_path().unwrap();
     let profile = bp_core::config::profile_path().unwrap();
@@ -1020,7 +1023,7 @@ fn config_path_nomi_file_corretti() {
     assert!(pid.to_string_lossy().contains("daemon.pid"));
     assert!(socket.to_string_lossy().contains("control.sock"));
 
-    // Tutti i path sono dentro base_dir
+    // Tutti i path sono dentro base_dir (stesso snapshot HOME)
     assert!(identity.starts_with(&base));
     assert!(profile.starts_with(&base));
 }
