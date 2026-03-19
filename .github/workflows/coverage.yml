@@ -46,17 +46,16 @@ jobs:
 
       - name: Run coverage
         run: |
+          mkdir -p coverage
           cargo tarpaulin \
             --packages bp-core \
             --test architecture_test \
             --out xml \
-            --output-dir coverage/ \
-            || true
+            --output-dir coverage/
 
       - name: Upload to Codecov
-        if: always()
         uses: codecov/codecov-action@v5
         with:
           files: coverage/cobertura.xml
-          fail_ci_if_error: false
+          fail_ci_if_error: true
           token: ${{ secrets.CODECOV_TOKEN }}
