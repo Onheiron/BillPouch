@@ -14,8 +14,6 @@ jobs:
   audit:
     name: cargo audit
     runs-on: ubuntu-latest
-    # Advisory-only — don't block CI on transitive dep vulnerabilities
-    continue-on-error: true
 
     steps:
       - name: Checkout repository
@@ -28,12 +26,24 @@ jobs:
         run: cargo install cargo-audit --locked
 
       - name: Run cargo audit
-        run: cargo audit
+        continue-on-error: true
+        run: |
+          echo "## cargo audit" >> $GITHUB_STEP_SUMMARY
+          cargo audit 2>&1 | tee /tmp/audit.txt
+          EXIT=$?
+          if [ $EXIT -ne 0 ]; then
+            echo "### ⚠️ Vulnerabilities found" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat /tmp/audit.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✅ No vulnerabilities found" >> $GITHUB_STEP_SUMMARY
+          fi
+          exit $EXIT
 
   deny:
     name: cargo deny
     runs-on: ubuntu-latest
-    continue-on-error: true
 
     steps:
       - name: Checkout repository
@@ -46,4 +56,17 @@ jobs:
         run: cargo install cargo-deny --locked
 
       - name: Run cargo deny
-        run: cargo deny check
+        continue-on-error: true
+        run: |
+          echo "## cargo deny" >> $GITHUB_STEP_SUMMARY
+          cargo deny check 2>&1 | tee /tmp/deny.txt
+          EXIT=$?
+          if [ $EXIT -ne 0 ]; then
+            echo "### ⚠️ Policy violations found" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat /tmp/deny.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✅ All checks passed" >> $GITHUB_STEP_SUMMARY
+          fi
+          exit $EXIT
