@@ -148,7 +148,7 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 state.networks.write().unwrap().push(network_id.clone());
             }
 
-            let info = ServiceInfo::new(service_type, network_id.clone(), metadata);
+            let info = ServiceInfo::new(service_type, network_id.clone(), metadata.clone());
             let service_id = info.id.clone();
 
             // Set to Running immediately — scope the lock guard so it is dropped
