@@ -10,16 +10,37 @@ use libp2p::{gossipsub, identify, identity::Keypair, kad, mdns, swarm::NetworkBe
 use std::time::Duration;
 
 /// Single combined behaviour injected into the libp2p Swarm.
+///
+/// All four sub-behaviours are polled by the swarm in a single `select!`-style
+/// event loop inside [`run_network_loop`].
+///
+/// [`run_network_loop`]: crate::network::run_network_loop
 #[derive(NetworkBehaviour)]
 pub struct BillPouchBehaviour {
+    /// Flooding pub/sub: used to broadcast [`NodeInfo`] announcements.
+    ///
+    /// [`NodeInfo`]: crate::network::state::NodeInfo
     pub gossipsub: gossipsub::Behaviour,
+    /// Kademlia DHT: distributed peer discovery and content addressing.
     pub kad: kad::Behaviour<kad::store::MemoryStore>,
+    /// Identify: exchange protocol version string and listen addresses with peers.
     pub identify: identify::Behaviour,
+    /// mDNS: zero-configuration local-network peer discovery via multicast DNS.
     pub mdns: mdns::tokio::Behaviour,
 }
 
 impl BillPouchBehaviour {
-    /// Build the combined behaviour from a keypair (called inside SwarmBuilder).
+    /// Build the combined behaviour from a keypair (called inside `SwarmBuilder`).
+    ///
+    /// Configures:
+    /// - Gossipsub with strict message signing and a 10-second heartbeat.
+    /// - Kademlia with an in-memory record store.
+    /// - Identify with the `/billpouch/id/1.0.0` protocol string.
+    /// - mDNS with default settings.
+    ///
+    /// # Errors
+    /// Returns an error if gossipsub config validation fails or mDNS cannot
+    /// bind its multicast socket.
     pub fn new(keypair: &Keypair) -> anyhow::Result<Self> {
         let peer_id = PeerId::from_public_key(&keypair.public());
 

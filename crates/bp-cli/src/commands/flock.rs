@@ -3,7 +3,7 @@
 use crate::client::ControlClient;
 use bp_core::control::protocol::{ControlRequest, FlockData};
 
-pub async fn flock() -> anyhow::Result<()> {
+/// Query the daemon for peer and network summary, then pretty-print it.\n///\n/// Sends a `Flock` request and renders local services, joined networks,\n/// and all known peers (with alias, fingerprint, service type, and network).\npub async fn flock() -> anyhow::Result<()> {
     let mut client = ControlClient::connect().await?;
     let data = client.request(ControlRequest::Flock).await?;
 

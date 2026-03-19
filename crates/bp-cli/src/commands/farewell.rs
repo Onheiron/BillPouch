@@ -1,8 +1,12 @@
-//! `bp farewell <service_id>` — kill a running service.
+//! `bp farewell <service_id>` — stop a running service.
 
 use crate::client::ControlClient;
 use bp_core::control::protocol::ControlRequest;
 
+/// Send a `Farewell` request to the daemon to stop the service identified by
+/// `service_id` (the UUID returned by `bp hatch`).
+///
+/// Prints a confirmation message if the daemon responds with `Ok`.
 pub async fn farewell(service_id: String) -> anyhow::Result<()> {
     let mut client = ControlClient::connect().await?;
     let data = client
