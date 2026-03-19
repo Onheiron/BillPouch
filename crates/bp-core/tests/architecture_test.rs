@@ -888,3 +888,509 @@ fn errore_servizio_sconosciuto() {
     let msg = err.to_string();
     assert!(msg.contains("abc123"));
 }
+
+#[test]
+fn errori_tutte_le_varianti_hanno_messaggio() {
+    use bp_core::error::BpError;
+
+    assert!(BpError::Identity("bad key".into())
+        .to_string()
+        .contains("bad key"));
+    assert!(BpError::Service("bad svc".into())
+        .to_string()
+        .contains("bad svc"));
+    assert!(BpError::Network("no conn".into())
+        .to_string()
+        .contains("no conn"));
+    assert!(BpError::Control("socket err".into())
+        .to_string()
+        .contains("socket err"));
+    assert!(BpError::Config("no home".into())
+        .to_string()
+        .contains("no home"));
+    assert!(BpError::UnknownNetwork("xyz".into())
+        .to_string()
+        .contains("xyz"));
+    assert!(BpError::DaemonNotRunning.to_string().contains("bp hatch"));
+    assert!(BpError::NotAuthenticated.to_string().contains("bp login"));
+    assert!(BpError::ServiceNotFound("svc-id".into())
+        .to_string()
+        .contains("svc-id"));
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 12. SERVICETYPE / SERVICESTATUS DISPLAY — Display trait e varianti mancanti
+// ═════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn service_type_display_lowercase() {
+    assert_eq!(ServiceType::Pouch.to_string(), "pouch");
+    assert_eq!(ServiceType::Bill.to_string(), "bill");
+    assert_eq!(ServiceType::Post.to_string(), "post");
+}
+
+#[test]
+fn service_status_tutti_i_valori_e_display() {
+    assert_eq!(ServiceStatus::Starting.to_string(), "starting");
+    assert_eq!(ServiceStatus::Running.to_string(), "running");
+    assert_eq!(ServiceStatus::Stopping.to_string(), "stopping");
+    assert_eq!(ServiceStatus::Stopped.to_string(), "stopped");
+    let err_status = ServiceStatus::Error("disk full".into());
+    assert!(err_status.to_string().contains("disk full"));
+}
+
+#[test]
+fn service_status_serde_roundtrip() {
+    let variants = vec![
+        ServiceStatus::Starting,
+        ServiceStatus::Running,
+        ServiceStatus::Stopping,
+        ServiceStatus::Stopped,
+        ServiceStatus::Error("oops".into()),
+    ];
+    for v in variants {
+        let json = serde_json::to_string(&v).unwrap();
+        let back: ServiceStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.to_string(), v.to_string());
+    }
+}
+
+#[test]
+fn registry_get_mut_aggiorna_status() {
+    let mut reg = ServiceRegistry::new();
+    let s = ServiceInfo::new(ServiceType::Pouch, "net".into(), HashMap::new());
+    let id = s.id.clone();
+    reg.register(s);
+
+    if let Some(svc) = reg.get_mut(&id) {
+        svc.status = ServiceStatus::Running;
+    }
+    assert_eq!(reg.get(&id).unwrap().status, ServiceStatus::Running);
+}
+
+#[test]
+fn registry_get_mut_id_inesistente_ritorna_none() {
+    let mut reg = ServiceRegistry::new();
+    assert!(reg.get_mut("non-esistente").is_none());
+}
+
+#[test]
+fn service_info_serde_roundtrip() {
+    let s = ServiceInfo::new(ServiceType::Bill, "net-test".into(), {
+        let mut m = HashMap::new();
+        m.insert("mount_path".into(), serde_json::json!("/mnt/files"));
+        m
+    });
+    let json = serde_json::to_string(&s).unwrap();
+    let back: ServiceInfo = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.id, s.id);
+    assert_eq!(back.service_type, ServiceType::Bill);
+    assert_eq!(back.network_id, "net-test");
+    assert_eq!(
+        back.metadata.get("mount_path").unwrap(),
+        &serde_json::json!("/mnt/files")
+    );
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 13. CONFIG — funzioni path XDG-aware
+// ═════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn config_paths_ritornano_ok() {
+    assert!(bp_core::config::base_dir().is_ok());
+    assert!(bp_core::config::identity_path().is_ok());
+    assert!(bp_core::config::profile_path().is_ok());
+    assert!(bp_core::config::pid_path().is_ok());
+    assert!(bp_core::config::socket_path().is_ok());
+    assert!(bp_core::config::services_path().is_ok());
+    assert!(bp_core::config::networks_path().is_ok());
+}
+
+#[test]
+fn config_path_nomi_file_corretti() {
+    let base = bp_core::config::base_dir().unwrap();
+    let identity = bp_core::config::identity_path().unwrap();
+    let profile = bp_core::config::profile_path().unwrap();
+    let pid = bp_core::config::pid_path().unwrap();
+    let socket = bp_core::config::socket_path().unwrap();
+
+    assert!(identity.to_string_lossy().contains("identity.key"));
+    assert!(profile.to_string_lossy().contains("profile.json"));
+    assert!(pid.to_string_lossy().contains("daemon.pid"));
+    assert!(socket.to_string_lossy().contains("control.sock"));
+
+    // Tutti i path sono dentro base_dir
+    assert!(identity.starts_with(&base));
+    assert!(profile.starts_with(&base));
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 14. PROTOCOLLO — varianti mancanti + deserializzazione ControlResponse
+// ═════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn protocollo_leave_request_serde() {
+    // Serializzazione
+    let req = ControlRequest::Leave {
+        network_id: "amici".into(),
+    };
+    let json = serde_json::to_string(&req).unwrap();
+    assert!(json.contains("\"cmd\":\"leave\""));
+    assert!(json.contains("\"amici\""));
+
+    // Deserializzazione
+    let back: ControlRequest =
+        serde_json::from_str(r#"{"cmd":"leave","network_id":"amici"}"#).unwrap();
+    match back {
+        ControlRequest::Leave { network_id } => assert_eq!(network_id, "amici"),
+        _ => panic!("Deve essere Leave"),
+    }
+}
+
+#[test]
+fn protocollo_status_request_serde() {
+    let req = ControlRequest::Status;
+    let json = serde_json::to_string(&req).unwrap();
+    assert!(json.contains("\"cmd\":\"status\""));
+
+    let back: ControlRequest = serde_json::from_str(r#"{"cmd":"status"}"#).unwrap();
+    assert!(matches!(back, ControlRequest::Status));
+}
+
+#[test]
+fn protocollo_response_ok_deserializza() {
+    let json = r#"{"status":"ok","data":{"foo":"bar"}}"#;
+    let resp: ControlResponse = serde_json::from_str(json).unwrap();
+    match resp {
+        ControlResponse::Ok { data: Some(v) } => assert_eq!(v["foo"], "bar"),
+        _ => panic!("Deve essere Ok con data"),
+    }
+}
+
+#[test]
+fn protocollo_response_ok_senza_data_deserializza() {
+    let json = r#"{"status":"ok"}"#;
+    let resp: ControlResponse = serde_json::from_str(json).unwrap();
+    assert!(matches!(resp, ControlResponse::Ok { data: None }));
+}
+
+#[test]
+fn protocollo_response_error_deserializza() {
+    let json = r#"{"status":"error","message":"something broke"}"#;
+    let resp: ControlResponse = serde_json::from_str(json).unwrap();
+    match resp {
+        ControlResponse::Error { message } => assert_eq!(message, "something broke"),
+        _ => panic!("Deve essere Error"),
+    }
+}
+
+#[test]
+fn protocollo_hatch_data_roundtrip() {
+    use bp_core::control::protocol::HatchData;
+    let h = HatchData {
+        service_id: "550e8400-uuid".into(),
+        service_type: ServiceType::Pouch,
+        network_id: "amici".into(),
+        message: "service hatched".into(),
+    };
+    let json = serde_json::to_string(&h).unwrap();
+    let back: HatchData = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.service_id, "550e8400-uuid");
+    assert_eq!(back.service_type, ServiceType::Pouch);
+    assert_eq!(back.network_id, "amici");
+    assert_eq!(back.message, "service hatched");
+}
+
+#[test]
+fn protocollo_status_data_roundtrip() {
+    use bp_core::control::protocol::StatusData;
+    let s = StatusData {
+        peer_id: "12D3KooW...".into(),
+        fingerprint: "a3f19c2b".into(),
+        alias: Some("carlo".into()),
+        local_services: vec![],
+        networks: vec!["amici".into(), "lavoro".into()],
+        known_peers: 5,
+        version: "0.1.3".into(),
+    };
+    let json = serde_json::to_string(&s).unwrap();
+    let back: StatusData = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.peer_id, "12D3KooW...");
+    assert_eq!(back.fingerprint, "a3f19c2b");
+    assert_eq!(back.alias, Some("carlo".into()));
+    assert_eq!(back.known_peers, 5);
+    assert_eq!(back.networks, vec!["amici", "lavoro"]);
+}
+
+#[test]
+fn protocollo_flock_data_roundtrip() {
+    use bp_core::control::protocol::FlockData;
+    let f = FlockData {
+        local_services: vec![ServiceInfo::new(
+            ServiceType::Pouch,
+            "net".into(),
+            HashMap::new(),
+        )],
+        known_peers: vec![make_node_info(
+            "peer-X",
+            "aabb",
+            ServiceType::Bill,
+            "net",
+            100,
+        )],
+        networks: vec!["net".into()],
+        peer_count: 1,
+    };
+    let json = serde_json::to_string(&f).unwrap();
+    let back: FlockData = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.peer_count, 1);
+    assert_eq!(back.networks, vec!["net"]);
+    assert_eq!(back.local_services.len(), 1);
+    assert_eq!(back.known_peers.len(), 1);
+    assert_eq!(back.known_peers[0].peer_id, "peer-X");
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 15. NETWORK STATE — is_empty + completamento
+// ═════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn network_state_is_empty_transizioni() {
+    let mut state = NetworkState::new();
+    assert!(state.is_empty(), "Stato iniziale deve essere vuoto");
+    assert_eq!(state.len(), 0);
+
+    state.upsert(make_node_info("p1", "fp", ServiceType::Pouch, "net", 100));
+    assert!(!state.is_empty());
+    assert_eq!(state.len(), 1);
+
+    state.remove("p1");
+    assert!(state.is_empty());
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 16. IDENTITY FILESYSTEM — generate / load / remove / exists
+// ═════════════════════════════════════════════════════════════════════════════
+
+use std::sync::Mutex;
+
+// Mutex per serializzare i test che modificano HOME
+static IDENTITY_FS_LOCK: Mutex<()> = Mutex::new(());
+
+/// Esegue `f` con HOME reimpostato a una directory temporanea unica,
+/// poi ripristina HOME e rimuove la directory.
+/// Solo su Unix: su Windows `directories` usa APPDATA, non HOME.
+#[cfg(unix)]
+fn with_temp_home<F: FnOnce() + std::panic::UnwindSafe>(f: F) {
+    let _guard = IDENTITY_FS_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let tmp =
+        std::env::temp_dir().join(format!("bp_test_{}", uuid::Uuid::new_v4().simple()));
+    std::fs::create_dir_all(&tmp).unwrap();
+
+    let old_home = std::env::var("HOME").ok();
+    std::env::set_var("HOME", &tmp);
+
+    let result = std::panic::catch_unwind(f);
+
+    if let Some(home) = old_home {
+        std::env::set_var("HOME", home);
+    } else {
+        std::env::remove_var("HOME");
+    }
+    std::fs::remove_dir_all(&tmp).ok();
+
+    if let Err(e) = result {
+        std::panic::resume_unwind(e);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn identity_exists_false_prima_del_login() {
+    with_temp_home(|| {
+        assert!(
+            !bp_core::identity::Identity::exists().unwrap(),
+            "exists() deve essere false prima di generate()"
+        );
+    });
+}
+
+#[test]
+#[cfg(unix)]
+fn identity_load_senza_file_ritorna_not_authenticated() {
+    with_temp_home(|| {
+        let err = bp_core::identity::Identity::load().unwrap_err();
+        assert!(
+            matches!(err, bp_core::error::BpError::NotAuthenticated),
+            "load() senza file deve ritornare NotAuthenticated"
+        );
+    });
+}
+
+#[test]
+#[cfg(unix)]
+fn identity_generate_crea_keypair_e_profilo() {
+    with_temp_home(|| {
+        let identity = bp_core::identity::Identity::generate(Some("test-user".into()))
+            .expect("generate() deve riuscire");
+
+        assert_eq!(
+            identity.profile.alias,
+            Some("test-user".into()),
+            "Alias deve essere salvato nel profilo"
+        );
+        assert_eq!(
+            identity.fingerprint.len(),
+            16,
+            "Fingerprint deve essere 16 caratteri hex"
+        );
+        assert!(
+            identity.fingerprint.chars().all(|c| c.is_ascii_hexdigit()),
+            "Fingerprint deve essere hex valido"
+        );
+        assert!(
+            bp_core::identity::Identity::exists().unwrap(),
+            "exists() deve essere true dopo generate()"
+        );
+    });
+}
+
+#[test]
+#[cfg(unix)]
+fn identity_generate_senza_alias() {
+    with_temp_home(|| {
+        let identity = bp_core::identity::Identity::generate(None)
+            .expect("generate() senza alias deve riuscire");
+        assert_eq!(
+            identity.profile.alias, None,
+            "Alias deve essere None se non fornito"
+        );
+    });
+}
+
+#[test]
+#[cfg(unix)]
+fn identity_load_restituisce_stessa_identita() {
+    with_temp_home(|| {
+        let original = bp_core::identity::Identity::generate(Some("carlo".into())).unwrap();
+        let loaded = bp_core::identity::Identity::load().unwrap();
+
+        assert_eq!(
+            loaded.fingerprint, original.fingerprint,
+            "Fingerprint deve essere identico dopo reload"
+        );
+        assert_eq!(
+            loaded.peer_id, original.peer_id,
+            "PeerId deve essere identico dopo reload"
+        );
+        assert_eq!(
+            loaded.profile.alias,
+            Some("carlo".into()),
+            "Alias deve sopravvivere al reload"
+        );
+    });
+}
+
+#[test]
+#[cfg(unix)]
+fn identity_remove_cancella_i_file() {
+    with_temp_home(|| {
+        bp_core::identity::Identity::generate(Some("to-delete".into())).unwrap();
+        assert!(bp_core::identity::Identity::exists().unwrap());
+
+        bp_core::identity::Identity::remove().unwrap();
+        assert!(
+            !bp_core::identity::Identity::exists().unwrap(),
+            "exists() deve essere false dopo remove()"
+        );
+
+        // load dopo remove → NotAuthenticated
+        let err = bp_core::identity::Identity::load().unwrap_err();
+        assert!(matches!(err, bp_core::error::BpError::NotAuthenticated));
+    });
+}
+
+#[test]
+#[cfg(unix)]
+fn identity_remove_idempotente_se_non_esiste() {
+    with_temp_home(|| {
+        // remove() senza un file esistente non deve andare in panico
+        bp_core::identity::Identity::remove().unwrap();
+    });
+}
+
+#[test]
+#[cfg(unix)]
+fn identity_config_ensure_dirs_crea_directory() {
+    with_temp_home(|| {
+        bp_core::config::ensure_dirs().expect("ensure_dirs() deve riuscire");
+        let base = bp_core::config::base_dir().unwrap();
+        assert!(base.exists(), "La directory base deve essere creata");
+    });
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 17. DAEMON — is_running() e rilevamento PID file
+// ═════════════════════════════════════════════════════════════════════════════
+
+#[test]
+#[cfg(unix)]
+fn daemon_is_running_false_senza_pid_file() {
+    with_temp_home(|| {
+        bp_core::config::ensure_dirs().unwrap();
+        // Senza PID file: is_running() deve essere false
+        assert!(
+            !bp_core::daemon::is_running(),
+            "is_running() deve essere false se non c'è PID file"
+        );
+    });
+}
+
+#[test]
+#[cfg(unix)]
+fn daemon_is_running_false_con_pid_inesistente() {
+    with_temp_home(|| {
+        bp_core::config::ensure_dirs().unwrap();
+        let pid_path = bp_core::config::pid_path().unwrap();
+        // Scrivi un PID che certamente non esiste (PID 0 o un numero altissimo)
+        std::fs::write(&pid_path, "99999999").unwrap();
+        assert!(
+            !bp_core::daemon::is_running(),
+            "is_running() deve essere false con PID inesistente"
+        );
+    });
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn daemon_is_running_true_con_pid_corrente() {
+    with_temp_home(|| {
+        bp_core::config::ensure_dirs().unwrap();
+        let pid_path = bp_core::config::pid_path().unwrap();
+        // Usa il PID del processo corrente (che sicuramente esiste)
+        let current_pid = std::process::id();
+        std::fs::write(&pid_path, current_pid.to_string()).unwrap();
+        assert!(
+            bp_core::daemon::is_running(),
+            "is_running() deve essere true con il PID del processo corrente"
+        );
+    });
+}
+
+#[test]
+#[cfg(unix)]
+fn daemon_is_running_false_con_pid_malformato() {
+    with_temp_home(|| {
+        bp_core::config::ensure_dirs().unwrap();
+        let pid_path = bp_core::config::pid_path().unwrap();
+        std::fs::write(&pid_path, "non-un-numero").unwrap();
+        assert!(
+            !bp_core::daemon::is_running(),
+            "is_running() deve essere false con PID file malformato"
+        );
+    });
+}
