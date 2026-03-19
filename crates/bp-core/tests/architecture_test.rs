@@ -1446,8 +1446,20 @@ fn network_state_evict_stale_rimuove_nodi_vecchi() {
 #[test]
 fn network_state_in_network_filtra_per_rete() {
     let mut state = NetworkState::new();
-    state.upsert(make_node_info("p1", "fp1", ServiceType::Pouch, "amici", 100));
-    state.upsert(make_node_info("p2", "fp2", ServiceType::Bill, "lavoro", 100));
+    state.upsert(make_node_info(
+        "p1",
+        "fp1",
+        ServiceType::Pouch,
+        "amici",
+        100,
+    ));
+    state.upsert(make_node_info(
+        "p2",
+        "fp2",
+        ServiceType::Bill,
+        "lavoro",
+        100,
+    ));
     state.upsert(make_node_info("p3", "fp3", ServiceType::Post, "amici", 100));
 
     assert_eq!(state.in_network("amici").len(), 2);
@@ -1534,13 +1546,14 @@ fn make_in_memory_state() -> std::sync::Arc<bp_core::control::server::DaemonStat
 
 /// Avvia run_control_server su un socket temporaneo; ritorna il path del socket e lo stato.
 #[cfg(unix)]
-async fn start_test_server(
-) -> (
+async fn start_test_server() -> (
     std::path::PathBuf,
     std::sync::Arc<bp_core::control::server::DaemonState>,
 ) {
-    let socket_path = std::env::temp_dir()
-        .join(format!("bp_test_ctrl_{}.sock", uuid::Uuid::new_v4().simple()));
+    let socket_path = std::env::temp_dir().join(format!(
+        "bp_test_ctrl_{}.sock",
+        uuid::Uuid::new_v4().simple()
+    ));
     let state = make_in_memory_state();
     let state_clone = std::sync::Arc::clone(&state);
     let sp = socket_path.clone();
@@ -1553,10 +1566,7 @@ async fn start_test_server(
 
 /// Invia un ControlRequest al socket e ritorna la risposta deserializzata.
 #[cfg(unix)]
-async fn send_cmd(
-    socket_path: &std::path::Path,
-    req: &ControlRequest,
-) -> ControlResponse {
+async fn send_cmd(socket_path: &std::path::Path, req: &ControlRequest) -> ControlResponse {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     let mut stream = tokio::net::UnixStream::connect(socket_path)
         .await
