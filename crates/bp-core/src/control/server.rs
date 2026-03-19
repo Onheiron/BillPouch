@@ -9,7 +9,7 @@ use crate::{
     },
     error::BpResult,
     identity::Identity,
-    network::{state::NodeInfo, NetworkCommand},
+    network::{state::NodeInfo, NetworkCommand, StorageManagerMap},
     service::{ServiceInfo, ServiceRegistry, ServiceStatus, ServiceType},
     storage::StorageManager,
 };
@@ -35,7 +35,7 @@ pub struct DaemonState {
     ///
     /// Shared with the network loop so incoming fragment-fetch requests can
     /// be served directly from the P2P event handler.
-    pub storage_managers: Arc<RwLock<HashMap<String, Arc<RwLock<StorageManager>>>>>,
+    pub storage_managers: StorageManagerMap,
 }
 
 /// Accept connections on the Unix socket and dispatch requests.

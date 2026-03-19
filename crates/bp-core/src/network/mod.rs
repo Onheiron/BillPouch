@@ -28,6 +28,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
 
+/// Shared map of active Pouch `StorageManager`s, keyed by `service_id`.
+pub type StorageManagerMap = Arc<RwLock<HashMap<String, Arc<RwLock<StorageManager>>>>>;
+
 /// Commands the daemon can send to the network task over the [`mpsc`] channel.
 ///
 /// The network loop runs inside a dedicated `tokio::spawn`ed task and receives
@@ -116,7 +119,7 @@ pub async fn run_network_loop(
     mut cmd_rx: mpsc::Receiver<NetworkCommand>,
     state: Arc<RwLock<NetworkState>>,
     listen_addr: Multiaddr,
-    storage_managers: Arc<RwLock<HashMap<String, Arc<RwLock<StorageManager>>>>>,
+    storage_managers: StorageManagerMap,
 ) -> BpResult<()> {
     swarm
         .listen_on(listen_addr.clone())
@@ -215,7 +218,7 @@ async fn handle_swarm_event(
     swarm: &mut Swarm<BillPouchBehaviour>,
     state: &Arc<RwLock<NetworkState>>,
     _subscribed: &mut HashSet<String>,
-    storage_managers: &Arc<RwLock<HashMap<String, Arc<RwLock<StorageManager>>>>>,
+    storage_managers: &StorageManagerMap,
 ) {
     match event {
         // ── Gossipsub: incoming NodeInfo announcement ─────────────────────
@@ -333,7 +336,7 @@ async fn handle_swarm_event(
 /// Serve a [`FragmentRequest`] from a remote peer by looking up local storage.
 fn serve_fragment_request(
     req: &FragmentRequest,
-    storage_managers: &Arc<RwLock<HashMap<String, Arc<RwLock<StorageManager>>>>>,
+    storage_managers: &StorageManagerMap,
 ) -> FragmentResponse {
     let managers = storage_managers.read().unwrap();
     for sm_arc in managers.values() {
