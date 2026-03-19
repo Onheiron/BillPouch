@@ -16,21 +16,35 @@ pub fn fingerprint(keypair: &Keypair) -> String {
     hex::encode(&hash[..8])
 }
 
-/// Stored user profile (name, fingerprint, etc.).
+/// Persistent user metadata stored alongside the keypair.
+///
+/// Serialised as JSON to `~/.local/share/billpouch/profile.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserProfile {
+    /// Hex fingerprint derived from this identity's public key (16 hex chars).
     pub fingerprint: String,
-    /// Optional human-readable alias chosen at login.
+    /// Optional human-readable alias chosen at `bp login`.
     pub alias: Option<String>,
+    /// UTC timestamp when the identity was first generated.
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// Loaded identity: keypair + derived metadata.
+/// In-memory identity: the loaded keypair and all derived or persisted metadata.
+///
+/// Constructed either by [`Identity::generate`] (first login) or
+/// [`Identity::load`] (subsequent daemon starts).
+///
+/// `Identity` does **not** implement `Debug` because `libp2p::identity::Keypair`
+/// does not expose a `Debug` impl (the bytes are considered secret).
 #[derive(Clone)]
 pub struct Identity {
+    /// The Ed25519 keypair.  Treat as secret — never log or serialise directly.
     pub keypair: Keypair,
+    /// libp2p peer identifier derived deterministically from the public key.
     pub peer_id: libp2p::PeerId,
+    /// Hex-encoded SHA-256(pubkey)[0..8] — 16 characters, immutable for this identity.
     pub fingerprint: String,
+    /// Persisted profile (alias, creation timestamp, etc.).
     pub profile: UserProfile,
 }
 

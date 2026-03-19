@@ -1,3 +1,17 @@
+//! P2P networking layer built on libp2p.
+//!
+//! This module owns the libp2p [`Swarm`] and exposes two public entry points:
+//!
+//! - [`build_swarm`] — constructs the swarm with all four behaviours
+//!   (gossipsub, Kademlia, Identify, mDNS) and the Noise+Yamux transport.
+//! - [`run_network_loop`] — async task that drives the swarm event loop and
+//!   processes [`NetworkCommand`]s sent by the daemon over a Tokio channel.
+//!
+//! ## Sub-modules
+//!
+//! - [`behaviour`] — the combined [`BillPouchBehaviour`] (`#[derive(NetworkBehaviour)]`).
+//! - [`state`]     — in-memory [`NetworkState`] updated from incoming gossip messages.
+
 pub mod behaviour;
 pub mod state;
 
@@ -11,25 +25,39 @@ use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
 
-/// Commands the daemon can send to the network task.
+/// Commands the daemon can send to the network task over the [`mpsc`] channel.
+///
+/// The network loop runs inside a dedicated `tokio::spawn`ed task and receives
+/// these commands via the `cmd_rx` half of the channel created in [`run_daemon`].
+///
+/// [`run_daemon`]: crate::daemon::run_daemon
 #[derive(Debug)]
 pub enum NetworkCommand {
-    /// Subscribe to a network's gossip topic.
+    /// Subscribe to the gossipsub topic for `network_id`.
     JoinNetwork { network_id: String },
-    /// Unsubscribe from a network's gossip topic.
+    /// Unsubscribe from the gossipsub topic for `network_id`.
     LeaveNetwork { network_id: String },
-    /// Broadcast a NodeInfo announcement on a network topic.
+    /// Publish a serialised [`NodeInfo`] on the gossipsub topic for `network_id`.
     Announce {
+        /// Network whose topic to publish on.
         network_id: String,
+        /// Serialised [`NodeInfo`] bytes.
         payload: Vec<u8>,
     },
-    /// Dial a remote peer.
+    /// Dial a remote peer at a known [`Multiaddr`].
     Dial { addr: Multiaddr },
-    /// Graceful shutdown.
+    /// Ask the network loop to exit cleanly.
     Shutdown,
 }
 
-/// Build the libp2p Swarm using tokio transport.
+/// Construct a fully configured libp2p [`Swarm`] using the Tokio runtime.
+///
+/// The transport stack is: TCP → Noise (encryption) → Yamux (multiplexing).
+/// The behaviour stack is: gossipsub + Kademlia + Identify + mDNS.
+///
+/// # Errors
+/// Returns an error if any behaviour or transport component fails to initialise
+/// (typically a key encoding issue or an OS-level socket error).
 pub fn build_swarm(
     keypair: libp2p::identity::Keypair,
 ) -> anyhow::Result<Swarm<BillPouchBehaviour>> {
@@ -50,10 +78,23 @@ pub fn build_swarm(
     Ok(swarm)
 }
 
-/// Run the P2P network loop.
+/// Drive the P2P event loop until shutdown.
 ///
-/// Handles incoming swarm events (gossip messages, kad events, mDNS discovery)
-/// and outgoing commands from the daemon task.
+/// Spawned as a background task by [`run_daemon`].  Runs a `tokio::select!`
+/// loop that concurrently:
+/// - polls the libp2p swarm for events (gossip, mDNS, Identify, Kademlia),
+/// - reads [`NetworkCommand`]s from `cmd_rx` and mutates swarm state.
+///
+/// The loop exits when the command channel is closed or a `Shutdown` command
+/// is received.
+///
+/// # Arguments
+/// - `swarm` — the libp2p swarm built by [`build_swarm`].
+/// - `cmd_rx` — receiving end of the daemon → network command channel.
+/// - `state` — shared [`NetworkState`] updated from gossip messages.
+/// - `listen_addr` — multiaddr to bind the TCP listener on.
+///
+/// [`run_daemon`]: crate::daemon::run_daemon
 pub async fn run_network_loop(
     mut swarm: Swarm<BillPouchBehaviour>,
     mut cmd_rx: mpsc::Receiver<NetworkCommand>,

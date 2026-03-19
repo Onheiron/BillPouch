@@ -50,13 +50,21 @@ impl FromStr for ServiceType {
 }
 
 /// Runtime status of a local service instance.
+///
+/// Transitions: `Starting` → `Running` → `Stopping` → `Stopped`.
+/// Any state can transition to `Error` if an unrecoverable fault occurs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ServiceStatus {
+    /// Service is initialising (e.g. subscribing to gossip topics).
     Starting,
+    /// Service is fully operational and announcing itself to the network.
     Running,
+    /// Graceful shutdown has been requested but not yet completed.
     Stopping,
+    /// Service has shut down cleanly.
     Stopped,
+    /// Service encountered an unrecoverable error; payload is a description.
     Error(String),
 }
 
@@ -73,19 +81,30 @@ impl std::fmt::Display for ServiceStatus {
 }
 
 /// Metadata for a *local* service instance (daemon-side).
+///
+/// Created by [`ServiceInfo::new`] when a `Hatch` request is dispatched.
+/// Stored in the [`ServiceRegistry`] for the lifetime of the running service.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceInfo {
     /// Unique ID for this service instance (UUID v4).
     pub id: String,
+    /// Whether this node offers storage, file I/O, or pure relay.
     pub service_type: ServiceType,
+    /// Identifier of the BillPouch network this service participates in.
     pub network_id: String,
+    /// Current lifecycle state of the service.
     pub status: ServiceStatus,
+    /// UTC timestamp when the service was started.
     pub started_at: chrono::DateTime<chrono::Utc>,
-    /// Extensible metadata (e.g. storage_bytes for Pouch, mount_path for Bill).
+    /// Extensible metadata (e.g. `storage_bytes` for Pouch, `mount_path` for Bill).
     pub metadata: HashMap<String, serde_json::Value>,
 }
 
 impl ServiceInfo {
+    /// Construct a new `ServiceInfo` in the [`ServiceStatus::Starting`] state.
+    ///
+    /// Generates a fresh UUID v4 `service_id` and records the current UTC time
+    /// as `started_at`.
     pub fn new(
         service_type: ServiceType,
         network_id: String,
@@ -102,33 +121,42 @@ impl ServiceInfo {
     }
 }
 
-/// In-process registry of running services (held inside the daemon).
+/// In-process registry of all running service instances (held inside `DaemonState`).
+///
+/// Keyed by `service_id` (UUID v4 string).  All mutations go through `DaemonState`'s
+/// `RwLock<ServiceRegistry>` so that concurrent control requests are safe.
 #[derive(Default)]
 pub struct ServiceRegistry {
     services: HashMap<String, ServiceInfo>,
 }
 
 impl ServiceRegistry {
+    /// Create an empty registry.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Insert or replace a service entry.  The entry's `id` is used as the key.
     pub fn register(&mut self, info: ServiceInfo) {
         self.services.insert(info.id.clone(), info);
     }
 
+    /// Look up a service by its UUID.  Returns `None` if not found.
     pub fn get(&self, id: &str) -> Option<&ServiceInfo> {
         self.services.get(id)
     }
 
+    /// Look up a service mutably (e.g. to update its [`ServiceStatus`]).
     pub fn get_mut(&mut self, id: &str) -> Option<&mut ServiceInfo> {
         self.services.get_mut(id)
     }
 
+    /// Remove and return a service by UUID.  Returns `None` if not found.
     pub fn remove(&mut self, id: &str) -> Option<ServiceInfo> {
         self.services.remove(id)
     }
 
+    /// Return references to all registered services (order is unspecified).
     pub fn all(&self) -> Vec<&ServiceInfo> {
         self.services.values().collect()
     }
