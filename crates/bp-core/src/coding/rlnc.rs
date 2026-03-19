@@ -249,7 +249,6 @@ pub fn decode(fragments: &[EncodedFragment]) -> BpResult<Vec<u8>> {
     }
 
     // Build augmented matrix: each row = [coding_vector (k bytes) | data (sym_size bytes)]
-    let row_len = k + sym_size;
     let mut matrix: Vec<Vec<u8>> = fragments[..k]
         .iter()
         .map(|f| {
@@ -272,8 +271,8 @@ pub fn decode(fragments: &[EncodedFragment]) -> BpResult<Vec<u8>> {
         // Normalise pivot row so M[col][col] == 1
         let pivot_val = matrix[col][col];
         let pivot_inv = gf256::inv(pivot_val);
-        for j in 0..row_len {
-            matrix[col][j] = gf256::mul(matrix[col][j], pivot_inv);
+        for elem in matrix[col].iter_mut() {
+            *elem = gf256::mul(*elem, pivot_inv);
         }
 
         // Eliminate column `col` from all other rows
@@ -287,9 +286,8 @@ pub fn decode(fragments: &[EncodedFragment]) -> BpResult<Vec<u8>> {
             }
             // Borrow trick: copy the pivot row to avoid borrow conflict
             let pivot_row: Vec<u8> = matrix[col].clone();
-            for j in 0..row_len {
-                let v = gf256::mul(factor, pivot_row[j]);
-                matrix[row][j] ^= v;
+            for (dst, &src) in matrix[row].iter_mut().zip(pivot_row.iter()) {
+                *dst ^= gf256::mul(factor, src);
             }
         }
     }
