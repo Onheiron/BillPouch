@@ -1220,7 +1220,7 @@ fn identity_exists_false_prima_del_login() {
 #[cfg(unix)]
 fn identity_load_senza_file_ritorna_not_authenticated() {
     with_temp_home(|| {
-        let err = bp_core::identity::Identity::load().unwrap_err();
+        let err = bp_core::identity::Identity::load().map(|_| ()).unwrap_err();
         assert!(
             matches!(err, bp_core::error::BpError::NotAuthenticated),
             "load() senza file deve ritornare NotAuthenticated"
@@ -1306,7 +1306,7 @@ fn identity_remove_cancella_i_file() {
         );
 
         // load dopo remove → NotAuthenticated
-        let err = bp_core::identity::Identity::load().unwrap_err();
+        let err = bp_core::identity::Identity::load().map(|_| ()).unwrap_err();
         assert!(matches!(err, bp_core::error::BpError::NotAuthenticated));
     });
 }
