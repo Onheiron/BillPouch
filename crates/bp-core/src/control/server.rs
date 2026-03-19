@@ -373,7 +373,7 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             }
 
             let fragments_used = all_fragments.len();
-            match rlnc::decode(all_fragments) {
+            match rlnc::decode(&all_fragments) {
                 Ok(data) => {
                     tracing::info!(chunk_id=%chunk_id, fragments_used=%fragments_used, "GetFile decoded");
                     ControlResponse::ok(GetFileData {
