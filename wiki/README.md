@@ -19,6 +19,9 @@ Benvenuto nella wiki di **BillPouch**, un filesystem distribuito P2P scritto in 
 | 11 | [Docker & Playground](./11-docker-playground.md) | Dockerfile, smoke cluster, playground interattivo |
 | 12 | [Stato & Roadmap](./12-status-roadmap.md) | Funzionalità implementate, limitazioni, roadmap |
 | 13 | [Use Case](./13-use-cases.md) | Scenari d'uso concreti |
+| 14 | [Storage Bidding](./14-storage-bidding.md) | Protocollo bid Pouch, directory locale, metadata gossip |
+| 15 | [Erasure Coding](./15-erasure-coding.md) | RLNC su GF(2⁸), chunking, recoding senza decodifica, N/K |
+| 16 | [Network Quality](./16-network-quality.md) | Challenge PoS, fault score, blacklist via gossip |
 
 ## Quick Reference
 
