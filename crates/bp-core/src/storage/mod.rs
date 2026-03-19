@@ -26,9 +26,7 @@ pub use fragment::{FragmentIndex, FragmentMeta};
 pub use meta::PouchMeta;
 
 use crate::{
-    coding::{
-        rlnc::{self, EncodedFragment},
-    },
+    coding::rlnc::{self, EncodedFragment},
     config,
     error::{BpError, BpResult},
 };
@@ -60,11 +58,7 @@ impl StorageManager {
     ///
     /// # Errors
     /// Fails if disk I/O fails or the XDG base directory cannot be resolved.
-    pub fn init(
-        network_id: String,
-        service_id: String,
-        storage_bytes_bid: u64,
-    ) -> BpResult<Self> {
+    pub fn init(network_id: String, service_id: String, storage_bytes_bid: u64) -> BpResult<Self> {
         let root = Self::root_path(&network_id, &service_id)?;
         let fragments_dir = root.join("fragments");
         std::fs::create_dir_all(&fragments_dir).map_err(BpError::Io)?;
@@ -168,7 +162,9 @@ impl StorageManager {
 
         // Remove empty chunk directory
         let chunk_dir = self.root.join("fragments").join(chunk_id);
-        if chunk_dir.exists() && std::fs::read_dir(&chunk_dir).map_or(true, |mut d| d.next().is_none()) {
+        if chunk_dir.exists()
+            && std::fs::read_dir(&chunk_dir).map_or(true, |mut d| d.next().is_none())
+        {
             std::fs::remove_dir(&chunk_dir).ok();
         }
 
@@ -253,10 +249,7 @@ impl StorageManager {
                     continue;
                 }
                 let fragment_id = fname.trim_end_matches(".frag").to_string();
-                let size_bytes = frag_entry
-                    .metadata()
-                    .map(|m| m.len())
-                    .unwrap_or(0);
+                let size_bytes = frag_entry.metadata().map(|m| m.len()).unwrap_or(0);
 
                 // Read the header to get k
                 let path = frag_entry.path();
@@ -292,10 +285,8 @@ mod tests {
 
     fn with_temp_home_storage<F: FnOnce() + std::panic::UnwindSafe>(f: F) {
         let _guard = STORAGE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let tmp = std::env::temp_dir().join(format!(
-            "bp_stor_test_{}",
-            uuid::Uuid::new_v4().simple()
-        ));
+        let tmp =
+            std::env::temp_dir().join(format!("bp_stor_test_{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&tmp).unwrap();
         let old_home = std::env::var("HOME").ok();
         std::env::set_var("HOME", &tmp);
@@ -363,7 +354,8 @@ mod tests {
             let frags = rlnc::encode(CHUNK, 4, 4).unwrap();
             sm.store_fragment(&frags[0]).unwrap();
             let used = sm.meta.storage_bytes_used;
-            sm.remove_fragment(&frags[0].chunk_id, &frags[0].id).unwrap();
+            sm.remove_fragment(&frags[0].chunk_id, &frags[0].id)
+                .unwrap();
             assert_eq!(sm.meta.storage_bytes_used, 0);
             let _ = used; // just checking it was non-zero before
         });

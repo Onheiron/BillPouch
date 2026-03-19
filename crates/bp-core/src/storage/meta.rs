@@ -86,10 +86,8 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn save_and_load_roundtrip() {
-        let dir = std::env::temp_dir().join(format!(
-            "bp_meta_test_{}",
-            uuid::Uuid::new_v4().simple()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("bp_meta_test_{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("meta.json");
 
