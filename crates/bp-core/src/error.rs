@@ -34,6 +34,14 @@ pub enum BpError {
     #[error("Config error: {0}")]
     Config(String),
 
+    /// Storage directory, fragment I/O, or quota error.
+    #[error("Storage error: {0}")]
+    Storage(String),
+
+    /// RLNC encoding, decoding, or recoding error (e.g. singular matrix).
+    #[error("Coding error: {0}")]
+    Coding(String),
+
     /// Transparent wrapper around [`std::io::Error`].
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
