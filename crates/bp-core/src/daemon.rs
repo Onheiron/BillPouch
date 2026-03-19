@@ -8,9 +8,8 @@ use crate::{
     control::server::{run_control_server, DaemonState},
     error::{BpError, BpResult},
     identity::Identity,
-    network::{self, NetworkState},
+    network::{self, NetworkState, StorageManagerMap},
     service::ServiceRegistry,
-    storage::StorageManager,
 };
 use std::{
     collections::HashMap,
@@ -38,8 +37,7 @@ pub async fn run_daemon() -> BpResult<()> {
     let (net_tx, net_rx) = mpsc::channel::<crate::network::NetworkCommand>(64);
 
     // Shared storage managers: populated when Pouch services are hatched.
-    let storage_managers: Arc<RwLock<HashMap<String, Arc<RwLock<StorageManager>>>>> =
-        Arc::new(RwLock::new(HashMap::new()));
+    let storage_managers: StorageManagerMap = Arc::new(RwLock::new(HashMap::new()));
 
     let daemon_state = Arc::new(DaemonState {
         identity: identity.clone(),
