@@ -34,8 +34,8 @@ pub async fn put(
 
     // Sensible defaults: ~1 KiB per symbol, 2× redundancy.
     let auto_k = ((chunk_data.len() / 1024) + 1).min(128);
-    let k = k.unwrap_or(auto_k).max(1).min(255);
-    let n = n.unwrap_or(k * 2).max(k).min(255);
+    let k = k.unwrap_or(auto_k).clamp(1, 255);
+    let n = n.unwrap_or(k * 2).clamp(k, 255);
 
     let file_bytes = chunk_data.len();
 
