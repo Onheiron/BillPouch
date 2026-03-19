@@ -1394,3 +1394,409 @@ fn daemon_is_running_false_con_pid_malformato() {
         );
     });
 }
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 18. QUICK WINS — ControlResponse builders, NodeInfo, NetworkState, BpError
+// ═════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn control_response_builder_ok() {
+    let r = ControlResponse::ok("pong");
+    assert!(matches!(r, ControlResponse::Ok { data: Some(_) }));
+}
+
+#[test]
+fn control_response_builder_ok_empty() {
+    let r = ControlResponse::ok_empty();
+    assert!(matches!(r, ControlResponse::Ok { data: None }));
+}
+
+#[test]
+fn control_response_builder_err() {
+    let r = ControlResponse::err("something broke");
+    match r {
+        ControlResponse::Error { message } => assert_eq!(message, "something broke"),
+        _ => panic!("expected Error"),
+    }
+}
+
+#[test]
+fn node_info_topic_name_formato_corretto() {
+    assert_eq!(NodeInfo::topic_name("amici"), "billpouch/v1/amici/nodes");
+    assert_eq!(NodeInfo::topic_name("public"), "billpouch/v1/public/nodes");
+}
+
+#[test]
+fn network_state_evict_stale_rimuove_nodi_vecchi() {
+    let mut state = NetworkState::new();
+
+    // Nodo con timestamp 0 (epoch) → vecchissimo
+    state.upsert(make_node_info("old", "fp", ServiceType::Post, "net", 0));
+    // Nodo recente
+    let ts = chrono::Utc::now().timestamp() as u64;
+    state.upsert(make_node_info("new", "fp2", ServiceType::Pouch, "net", ts));
+    assert_eq!(state.len(), 2);
+
+    // Evict nodi silenziosi da più di 60 secondi
+    state.evict_stale(60);
+    assert_eq!(state.len(), 1);
+    assert_eq!(state.all()[0].peer_id, "new");
+}
+
+#[test]
+fn network_state_in_network_filtra_per_rete() {
+    let mut state = NetworkState::new();
+    state.upsert(make_node_info("p1", "fp1", ServiceType::Pouch, "amici", 100));
+    state.upsert(make_node_info("p2", "fp2", ServiceType::Bill, "lavoro", 100));
+    state.upsert(make_node_info("p3", "fp3", ServiceType::Post, "amici", 100));
+
+    assert_eq!(state.in_network("amici").len(), 2);
+    assert_eq!(state.in_network("lavoro").len(), 1);
+    assert_eq!(state.in_network("inesistente").len(), 0);
+}
+
+#[test]
+fn bperror_io_from_conversion() {
+    use std::io::{self, ErrorKind};
+    let io_err = io::Error::new(ErrorKind::NotFound, "file not found");
+    let bp_err: BpError = io_err.into();
+    assert!(bp_err.to_string().contains("file not found"));
+}
+
+#[test]
+fn bperror_serde_from_conversion() {
+    let serde_err = serde_json::from_str::<serde_json::Value>("{{invalid").unwrap_err();
+    let bp_err: BpError = serde_err.into();
+    assert!(matches!(bp_err, BpError::Serde(_)));
+}
+
+#[test]
+fn identity_fingerprint_standalone_16_char_hex() {
+    let kp1 = libp2p::identity::Keypair::generate_ed25519();
+    let fp1 = bp_core::identity::fingerprint(&kp1);
+    assert_eq!(fp1.len(), 16);
+    assert!(fp1.chars().all(|c| c.is_ascii_hexdigit()));
+
+    // Due keypair diversi → fingerprint diversi
+    let kp2 = libp2p::identity::Keypair::generate_ed25519();
+    let fp2 = bp_core::identity::fingerprint(&kp2);
+    assert_ne!(fp1, fp2);
+}
+
+#[test]
+fn service_registry_remove_restituisce_il_servizio() {
+    let mut reg = ServiceRegistry::new();
+    let s = ServiceInfo::new(ServiceType::Post, "n".into(), HashMap::new());
+    let id = s.id.clone();
+    reg.register(s);
+    let removed = reg.remove(&id);
+    assert!(removed.is_some());
+    assert_eq!(removed.unwrap().id, id);
+    // Dopo remove, get deve restituire None
+    assert!(reg.get(&id).is_none());
+}
+
+#[test]
+fn service_registry_remove_id_inesistente_restituisce_none() {
+    let mut reg = ServiceRegistry::new();
+    assert!(reg.remove("no-such-id").is_none());
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 19. CONTROL SERVER — dispatch via Unix socket (tokio, unix only)
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// Costruisce un DaemonState completamente in memoria — nessun accesso a disco.
+#[cfg(unix)]
+fn make_in_memory_state() -> std::sync::Arc<bp_core::control::server::DaemonState> {
+    let keypair = libp2p::identity::Keypair::generate_ed25519();
+    let peer_id = libp2p::PeerId::from_public_key(&keypair.public());
+    let fp = bp_core::identity::fingerprint(&keypair);
+    let identity = bp_core::identity::Identity {
+        keypair,
+        peer_id,
+        fingerprint: fp.clone(),
+        profile: bp_core::identity::UserProfile {
+            fingerprint: fp,
+            alias: Some("test-server".into()),
+            created_at: chrono::Utc::now(),
+        },
+    };
+    let (net_tx, _net_rx) = tokio::sync::mpsc::channel(64);
+    std::sync::Arc::new(bp_core::control::server::DaemonState {
+        identity,
+        services: std::sync::RwLock::new(ServiceRegistry::new()),
+        network_state: std::sync::Arc::new(std::sync::RwLock::new(NetworkState::new())),
+        networks: std::sync::RwLock::new(Vec::new()),
+        net_tx,
+    })
+}
+
+/// Avvia run_control_server su un socket temporaneo; ritorna il path del socket e lo stato.
+#[cfg(unix)]
+async fn start_test_server(
+) -> (
+    std::path::PathBuf,
+    std::sync::Arc<bp_core::control::server::DaemonState>,
+) {
+    let socket_path = std::env::temp_dir()
+        .join(format!("bp_test_ctrl_{}.sock", uuid::Uuid::new_v4().simple()));
+    let state = make_in_memory_state();
+    let state_clone = std::sync::Arc::clone(&state);
+    let sp = socket_path.clone();
+    tokio::spawn(async move {
+        let _ = bp_core::control::server::run_control_server(sp, state_clone).await;
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    (socket_path, state)
+}
+
+/// Invia un ControlRequest al socket e ritorna la risposta deserializzata.
+#[cfg(unix)]
+async fn send_cmd(
+    socket_path: &std::path::Path,
+    req: &ControlRequest,
+) -> ControlResponse {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let mut stream = tokio::net::UnixStream::connect(socket_path)
+        .await
+        .expect("connect fallito");
+    let json = format!("{}\n", serde_json::to_string(req).unwrap());
+    stream.write_all(json.as_bytes()).await.unwrap();
+    let (read_half, _) = stream.into_split();
+    let mut reader = BufReader::new(read_half);
+    let mut line = String::new();
+    reader.read_line(&mut line).await.unwrap();
+    serde_json::from_str(line.trim()).expect("risposta JSON non valida")
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn dispatch_ping_risponde_ok() {
+    let (sp, _s) = start_test_server().await;
+    let resp = send_cmd(&sp, &ControlRequest::Ping).await;
+    assert!(matches!(resp, ControlResponse::Ok { .. }));
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn dispatch_status_restituisce_peer_id_e_fingerprint() {
+    let (sp, _s) = start_test_server().await;
+    let resp = send_cmd(&sp, &ControlRequest::Status).await;
+    match resp {
+        ControlResponse::Ok { data: Some(v) } => {
+            assert!(v["peer_id"].is_string());
+            assert!(v["fingerprint"].is_string());
+        }
+        _ => panic!("Expected Ok con data"),
+    }
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn dispatch_hatch_nuovo_servizio() {
+    let (sp, _s) = start_test_server().await;
+    let resp = send_cmd(
+        &sp,
+        &ControlRequest::Hatch {
+            service_type: ServiceType::Pouch,
+            network_id: "amici".into(),
+            metadata: HashMap::new(),
+        },
+    )
+    .await;
+    match resp {
+        ControlResponse::Ok { data: Some(v) } => {
+            assert!(v["service_id"].is_string());
+            assert_eq!(v["network_id"], "amici");
+        }
+        _ => panic!("Expected Ok"),
+    }
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn dispatch_hatch_stessa_rete_due_volte_copre_already_joined() {
+    // Copre il branch `already_joined` dell'Hatch
+    let (sp, _s) = start_test_server().await;
+    send_cmd(
+        &sp,
+        &ControlRequest::Hatch {
+            service_type: ServiceType::Post,
+            network_id: "lavoro".into(),
+            metadata: HashMap::new(),
+        },
+    )
+    .await;
+    let resp = send_cmd(
+        &sp,
+        &ControlRequest::Hatch {
+            service_type: ServiceType::Bill,
+            network_id: "lavoro".into(),
+            metadata: HashMap::new(),
+        },
+    )
+    .await;
+    assert!(matches!(resp, ControlResponse::Ok { .. }));
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn dispatch_farewell_servizio_inesistente_ritorna_errore() {
+    let (sp, _s) = start_test_server().await;
+    let resp = send_cmd(
+        &sp,
+        &ControlRequest::Farewell {
+            service_id: "non-esiste-uuid".into(),
+        },
+    )
+    .await;
+    assert!(matches!(resp, ControlResponse::Error { .. }));
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn dispatch_farewell_servizio_esistente_rimuove() {
+    let (sp, _s) = start_test_server().await;
+    // Prima crea il servizio
+    let hatch_resp = send_cmd(
+        &sp,
+        &ControlRequest::Hatch {
+            service_type: ServiceType::Bill,
+            network_id: "test".into(),
+            metadata: HashMap::new(),
+        },
+    )
+    .await;
+    let service_id = match hatch_resp {
+        ControlResponse::Ok { data: Some(v) } => v["service_id"].as_str().unwrap().to_string(),
+        _ => panic!("Hatch fallito"),
+    };
+    // Poi rimuovilo
+    let resp = send_cmd(&sp, &ControlRequest::Farewell { service_id }).await;
+    assert!(matches!(resp, ControlResponse::Ok { .. }));
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn dispatch_flock_ritorna_struttura_corretta() {
+    let (sp, _s) = start_test_server().await;
+    let resp = send_cmd(&sp, &ControlRequest::Flock).await;
+    match resp {
+        ControlResponse::Ok { data: Some(v) } => {
+            assert!(v["local_services"].is_array());
+            assert!(v["known_peers"].is_array());
+            assert!(v["networks"].is_array());
+        }
+        _ => panic!("Expected Ok"),
+    }
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn dispatch_join_nuova_rete() {
+    let (sp, _s) = start_test_server().await;
+    let resp = send_cmd(
+        &sp,
+        &ControlRequest::Join {
+            network_id: "nuova-rete".into(),
+        },
+    )
+    .await;
+    match resp {
+        ControlResponse::Ok { data: Some(v) } => {
+            assert_eq!(v["network_id"], "nuova-rete");
+        }
+        _ => panic!("Expected Ok"),
+    }
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn dispatch_join_rete_gia_raggiunta_ritorna_errore() {
+    let (sp, _s) = start_test_server().await;
+    send_cmd(
+        &sp,
+        &ControlRequest::Join {
+            network_id: "rete".into(),
+        },
+    )
+    .await;
+    let resp = send_cmd(
+        &sp,
+        &ControlRequest::Join {
+            network_id: "rete".into(),
+        },
+    )
+    .await;
+    assert!(matches!(resp, ControlResponse::Error { .. }));
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn dispatch_leave_rete_raggiunta() {
+    let (sp, _s) = start_test_server().await;
+    send_cmd(
+        &sp,
+        &ControlRequest::Join {
+            network_id: "bye-net".into(),
+        },
+    )
+    .await;
+    let resp = send_cmd(
+        &sp,
+        &ControlRequest::Leave {
+            network_id: "bye-net".into(),
+        },
+    )
+    .await;
+    match resp {
+        ControlResponse::Ok { data: Some(v) } => {
+            assert_eq!(v["network_id"], "bye-net");
+        }
+        _ => panic!("Expected Ok"),
+    }
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn dispatch_leave_rete_non_raggiunta() {
+    // Anche leave di rete non raggiunta deve rispondere Ok (rimuove silenziosamente)
+    let (sp, _s) = start_test_server().await;
+    let resp = send_cmd(
+        &sp,
+        &ControlRequest::Leave {
+            network_id: "non-raggiunta".into(),
+        },
+    )
+    .await;
+    assert!(matches!(resp, ControlResponse::Ok { .. }));
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn dispatch_json_non_valido_ritorna_errore() {
+    // Copre il branch di parse error in handle_connection
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let (sp, _s) = start_test_server().await;
+    let mut stream = tokio::net::UnixStream::connect(&sp).await.unwrap();
+    stream.write_all(b"{{json spazzatura\n").await.unwrap();
+    let (read_half, _) = stream.into_split();
+    let mut reader = BufReader::new(read_half);
+    let mut line = String::new();
+    reader.read_line(&mut line).await.unwrap();
+    let resp: ControlResponse = serde_json::from_str(line.trim()).unwrap();
+    assert!(matches!(resp, ControlResponse::Error { .. }));
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn dispatch_linea_vuota_chiude_connessione_senza_crash() {
+    // Copre l'early return per linea vuota in handle_connection
+    use tokio::io::AsyncWriteExt;
+    let (sp, _s) = start_test_server().await;
+    let mut stream = tokio::net::UnixStream::connect(&sp).await.unwrap();
+    stream.write_all(b"\n").await.unwrap();
+    // Il server non crasha e chiude silenziosamente la connessione
+    drop(stream);
+}
