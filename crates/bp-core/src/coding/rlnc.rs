@@ -87,7 +87,9 @@ impl EncodedFragment {
         }
         let k = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
         if bytes.len() < 8 + k {
-            return Err(BpError::Coding("Fragment too short for coding vector".into()));
+            return Err(BpError::Coding(
+                "Fragment too short for coding vector".into(),
+            ));
         }
         let coding_vector = bytes[8..8 + k].to_vec();
         let data = bytes[8 + k..].to_vec();
