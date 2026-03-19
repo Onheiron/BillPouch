@@ -10,7 +10,12 @@ use crate::client::ControlClient;
 ///
 /// Default k / n: k = max(1, len/1024) source symbols, n = k * 2 redundant
 /// fragments (capped at 255 per RLNC limit).
-pub async fn put(path: PathBuf, network: String, k: Option<usize>, n: Option<usize>) -> anyhow::Result<()> {
+pub async fn put(
+    path: PathBuf,
+    network: String,
+    k: Option<usize>,
+    n: Option<usize>,
+) -> anyhow::Result<()> {
     if !Identity::exists()? {
         anyhow::bail!("Not logged in. Run `bp login` first.");
     }
@@ -46,7 +51,11 @@ pub async fn put(path: PathBuf, network: String, k: Option<usize>, n: Option<usi
 
     if let Some(v) = data {
         let d: bp_core::control::protocol::PutFileData = serde_json::from_value(v)?;
-        println!("✓ Stored {} bytes from {:?}", file_bytes, path.file_name().unwrap_or_default());
+        println!(
+            "✓ Stored {} bytes from {:?}",
+            file_bytes,
+            path.file_name().unwrap_or_default()
+        );
         println!("   chunk_id  : {}", d.chunk_id);
         println!("   fragments : {}/{} stored", d.fragments_stored, n);
         println!("   network   : {}", network);

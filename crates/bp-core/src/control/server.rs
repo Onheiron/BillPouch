@@ -4,10 +4,7 @@
 
 use crate::{
     coding::rlnc,
-    control::protocol::{
-        ControlRequest, ControlResponse, FlockData, GetFileData, HatchData, PutFileData,
-        StatusData,
-    },
+    control::protocol::{ControlRequest, ControlResponse, FlockData, GetFileData, HatchData, PutFileData, StatusData},
     error::BpResult,
     identity::Identity,
     network::{state::NodeInfo, NetworkCommand},
