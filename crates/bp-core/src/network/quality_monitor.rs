@@ -36,10 +36,8 @@ use crate::{
     coding::rlnc,
     coding::rlnc::EncodedFragment,
     network::{
-        qos::QosRegistry,
-        state::NetworkState,
-        FragmentResponse, NetworkCommand, OutgoingAssignments, OutgoingFragment,
-        FAULT_DEGRADED, FAULT_SUSPECTED,
+        qos::QosRegistry, state::NetworkState, FragmentResponse, NetworkCommand,
+        OutgoingAssignments, OutgoingFragment, FAULT_DEGRADED, FAULT_SUSPECTED,
     },
     service::ServiceType,
 };
@@ -242,15 +240,12 @@ async fn run_pos_round(
         })
         .map(|(peer_id_str, peer_id, _, _)| (peer_id_str.clone(), peer_id.clone()))
         // Deduplicate by peer_id_str.
-        .fold(
-            Vec::<(String, PeerId)>::new(),
-            |mut acc, (s, p)| {
-                if !acc.iter().any(|(x, _)| x == &s) {
-                    acc.push((s, p));
-                }
-                acc
-            },
-        );
+        .fold(Vec::<(String, PeerId)>::new(), |mut acc, (s, p)| {
+            if !acc.iter().any(|(x, _)| x == &s) {
+                acc.push((s, p));
+            }
+            acc
+        });
 
     for (peer_id_str, peer_id) in suspected {
         reroute_suspected_peer(
