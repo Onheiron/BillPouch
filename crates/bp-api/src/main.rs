@@ -38,7 +38,7 @@ use bp_core::{
     service::ServiceType,
 };
 use clap::Parser;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::{collections::HashMap, net::SocketAddr, path::PathBuf, sync::Arc};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
@@ -226,11 +226,6 @@ struct PutFileBody {
     ph: Option<f64>,
     /// Redundancy overhead (default: 1.0).
     q_target: Option<f64>,
-}
-
-#[derive(Serialize)]
-struct PutFileResponse {
-    chunk_id: String,
 }
 
 fn default_network() -> String {
