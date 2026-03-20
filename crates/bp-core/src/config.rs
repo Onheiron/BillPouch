@@ -39,6 +39,14 @@ pub fn networks_path() -> BpResult<PathBuf> {
     Ok(base_dir()?.join("networks.json"))
 }
 
+/// Path to the persisted Kademlia peer multi-addresses.
+///
+/// Saved periodically and on daemon shutdown so the next startup can
+/// immediately dial previously-known peers, skipping the mDNS warm-up.
+pub fn kad_peers_path() -> BpResult<PathBuf> {
+    Ok(base_dir()?.join("kad_peers.json"))
+}
+
 /// Ensure the base directory (and any subdirs) exist.
 pub fn ensure_dirs() -> BpResult<()> {
     std::fs::create_dir_all(base_dir()?).map_err(BpError::Io)

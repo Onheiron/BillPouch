@@ -14,12 +14,14 @@
 
 pub mod behaviour;
 pub mod fragment_gossip;
+pub mod kad_store;
 pub mod qos;
 pub mod quality_monitor;
 pub mod state;
 
 pub use behaviour::{BillPouchBehaviour, FragmentRequest, FragmentResponse};
 pub use fragment_gossip::{FragmentIndexAnnouncement, FragmentPointer, RemoteFragmentIndex};
+pub use kad_store::KadPeers;
 pub use qos::{PeerQos, QosRegistry, FAULT_BLACKLISTED, FAULT_DEGRADED, FAULT_SUSPECTED};
 pub use quality_monitor::run_quality_monitor;
 pub use state::{NetworkState, NodeInfo};
@@ -32,6 +34,7 @@ use futures::StreamExt;
 use libp2p::{gossipsub, request_response, swarm::SwarmEvent, Multiaddr, PeerId, Swarm};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 use tokio::sync::mpsc;
 
 /// Shared map of active Pouch `StorageManager`s, keyed by `service_id`.
@@ -211,21 +214,50 @@ pub async fn run_network_loop(
         tokio::sync::oneshot::Sender<bool>,
     > = HashMap::new();
 
+    // ── Kademlia peer persistence ─────────────────────────────────────────
+    // Load known peer addresses from the last run and dial them immediately
+    // so the node can reconnect without waiting for the mDNS warm-up period.
+    let mut local_kad_peers: kad_store::KadPeers = crate::config::kad_peers_path()
+        .map(|p| kad_store::KadPeers::load(&p))
+        .unwrap_or_default();
+
+    if !local_kad_peers.0.is_empty() {
+        tracing::info!(
+            peers = local_kad_peers.0.len(),
+            "kad_store: dialing saved peers"
+        );
+        for addrs in local_kad_peers.0.values() {
+            for addr_str in addrs {
+                if let Ok(addr) = addr_str.parse::<libp2p::Multiaddr>() {
+                    let _ = swarm.dial(addr);
+                }
+            }
+        }
+    }
+
+    // How often (in seconds) to flush known peers to disk.
+    const KAD_SAVE_INTERVAL_SECS: u64 = 600;
+    let mut kad_save_interval =
+        tokio::time::interval(Duration::from_secs(KAD_SAVE_INTERVAL_SECS));
+    kad_save_interval.reset(); // skip the first immediate tick
+
     loop {
         tokio::select! {
             // ── Incoming swarm event ──────────────────────────────────────────
             event = swarm.select_next_some() => {
-                handle_swarm_event(event, &mut swarm, &state, &mut subscribed_networks, &storage_managers, &mut pending_fetches, &mut pending_pings, &mut pending_pos, &remote_fragment_index).await;
+                handle_swarm_event(event, &mut swarm, &state, &mut subscribed_networks, &storage_managers, &mut pending_fetches, &mut pending_pings, &mut pending_pos, &remote_fragment_index, &mut local_kad_peers).await;
             }
             // ── Command from daemon ───────────────────────────────────────────
             cmd = cmd_rx.recv() => {
                 match cmd {
                     None => {
                         tracing::info!("Network command channel closed — shutting down");
+                        save_kad_peers(&local_kad_peers);
                         break;
                     }
                     Some(NetworkCommand::Shutdown) => {
                         tracing::info!("Network shutdown requested");
+                        save_kad_peers(&local_kad_peers);
                         break;
                     }
                     Some(NetworkCommand::JoinNetwork { network_id }) => {
@@ -357,10 +389,22 @@ pub async fn run_network_loop(
                     }
                 }
             }
+            // ── Periodic Kademlia peer save ───────────────────────────────────
+            _ = kad_save_interval.tick() => {
+                save_kad_peers(&local_kad_peers);
+            }
         }
     }
 
     Ok(())
+}
+
+/// Flush `peers` to disk using the configured path; silently skips on error.
+fn save_kad_peers(peers: &kad_store::KadPeers) {
+    if let Ok(path) = crate::config::kad_peers_path() {
+        peers.save(&path);
+        tracing::debug!(n = peers.0.len(), "kad_store: peers saved");
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -383,6 +427,7 @@ async fn handle_swarm_event(
         tokio::sync::oneshot::Sender<bool>,
     >,
     remote_fragment_index: &Arc<RwLock<fragment_gossip::RemoteFragmentIndex>>,
+    known_peers: &mut kad_store::KadPeers,
 ) {
     match event {
         // ── Gossipsub: incoming NodeInfo announcement ─────────────────────
@@ -434,6 +479,7 @@ async fn handle_swarm_event(
             for (peer_id, addr) in list {
                 tracing::info!(peer=%peer_id, addr=%addr, "mDNS peer discovered");
                 swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
+                known_peers.add(peer_id.to_string(), addr.to_string());
                 swarm.behaviour_mut().kad.add_address(&peer_id, addr);
             }
         }
@@ -457,6 +503,7 @@ async fn handle_swarm_event(
         )) => {
             tracing::debug!(peer=%peer_id, agent=%info.agent_version, "Identify received");
             for addr in info.listen_addrs {
+                known_peers.add(peer_id.to_string(), addr.to_string());
                 swarm.behaviour_mut().kad.add_address(&peer_id, addr);
             }
         }
