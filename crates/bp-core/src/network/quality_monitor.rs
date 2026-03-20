@@ -213,7 +213,10 @@ mod tests {
         let score = qos.read().unwrap().stability_score("new-peer");
         // After one timeout: challenge_success < 1.0, latency still 0.0
         // → stability < 0.4 (pure reliability component capped by β=0.10)
-        assert!(score < 0.95, "new peer after one timeout should have degraded score");
+        assert!(
+            score < 0.95,
+            "new peer after one timeout should have degraded score"
+        );
     }
 
     /// Ensure `run_quality_monitor` can be started and does not panic

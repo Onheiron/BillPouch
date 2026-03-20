@@ -13,8 +13,8 @@
 //! - [`state`]     — in-memory [`NetworkState`] updated from incoming gossip messages.
 
 pub mod behaviour;
-pub mod quality_monitor;
 pub mod qos;
+pub mod quality_monitor;
 pub mod state;
 
 pub use behaviour::{BillPouchBehaviour, FragmentRequest, FragmentResponse};
