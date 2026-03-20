@@ -9,6 +9,7 @@
 //! [`ControlClient`]: crate::client::ControlClient
 
 pub mod auth;
+pub mod bootstrap;
 pub mod farewell;
 pub mod flock;
 pub mod get;

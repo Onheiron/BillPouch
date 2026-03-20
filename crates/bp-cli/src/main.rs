@@ -8,6 +8,9 @@
 //!    bp flock                       Show peers and network summary
 //!    bp farewell <service_id>       Stop a running service
 //!    bp join <network_id>           Join a BillPouch network
+//!    bp bootstrap list              Show configured WAN bootstrap nodes
+//!    bp bootstrap add <addr>        Add a bootstrap node
+//!    bp bootstrap remove <addr>     Remove a bootstrap node
 //!    bp --daemon                    (internal) run the background daemon
 //! ```
 
@@ -112,6 +115,33 @@ enum Cmd {
         #[arg(long, short, default_value = DEFAULT_NETWORK)]
         network: String,
     },
+
+    /// Manage WAN bootstrap nodes (stored in bootstrap.json).
+    ///
+    /// Bootstrap nodes let the daemon discover peers on the public internet
+    /// where mDNS multicast is not available.  Changes take effect on the
+    /// next daemon restart.
+    Bootstrap {
+        #[command(subcommand)]
+        action: BootstrapAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum BootstrapAction {
+    /// List all configured bootstrap nodes.
+    List,
+    /// Add a bootstrap node (must include /p2p/<PeerId>).
+    Add {
+        /// Multiaddr of the bootstrap node, e.g.
+        /// `/ip4/203.0.113.1/tcp/4001/p2p/12D3KooW...`
+        addr: String,
+    },
+    /// Remove a bootstrap node by its multiaddr string.
+    Remove {
+        /// The exact multiaddr string to remove.
+        addr: String,
+    },
 }
 
 #[tokio::main]
@@ -193,6 +223,18 @@ async fn main() -> anyhow::Result<()> {
         }) => {
             commands::get::get(chunk_id, network, output).await?;
         }
+
+        Some(Cmd::Bootstrap { action }) => match action {
+            BootstrapAction::List => {
+                commands::bootstrap::list()?;
+            }
+            BootstrapAction::Add { addr } => {
+                commands::bootstrap::add(addr)?;
+            }
+            BootstrapAction::Remove { addr } => {
+                commands::bootstrap::remove(&addr)?;
+            }
+        },
     }
 
     Ok(())
