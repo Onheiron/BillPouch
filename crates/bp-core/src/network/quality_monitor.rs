@@ -3,15 +3,16 @@
 //! ## What it does
 //!
 //! The monitor runs as a background Tokio task spawned by the daemon.
-//! Every [`PING_INTERVAL_SECS`] seconds it:
+//! Every 60 seconds it:
 //!
 //! 1. Reads the live [`NetworkState`] to enumerate all known Pouch peers.
 //! 2. Sends a [`NetworkCommand::Ping`] for each Pouch (fire-and-forget per peer).
-//! 3. Each Ping waits up to [`PING_TIMEOUT_SECS`] for a Pong from the network loop.
+//! 3. Each Ping waits up to 5 seconds for a Pong from the network loop.
 //! 4. On success: records the RTT into [`QosRegistry`] via
-//!    [`PeerQos::record_ping`] and [`PeerQos::record_challenge`].
-//! 5. On timeout: records a timeout via [`PeerQos::record_ping_timeout`] and
-//!    a failed challenge.
+//!    [`crate::network::qos::PeerQos::record_ping`] and
+//!    [`crate::network::qos::PeerQos::record_challenge`].
+//! 5. On timeout: records a timeout via
+//!    [`crate::network::qos::PeerQos::record_ping_timeout`] and a failed challenge.
 //!
 //! The `QosRegistry` populated here is consumed by `PutFile` in the control
 //! server to compute adaptive `k`/`n` coding parameters.
