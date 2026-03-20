@@ -294,10 +294,7 @@ async fn put_file_get_file_roundtrip() {
             metadata: {
                 let mut m = HashMap::new();
                 // 1 MiB quota — plenty for a small test chunk.
-                m.insert(
-                    "storage_bytes".to_string(),
-                    serde_json::json!(1_048_576u64),
-                );
+                m.insert("storage_bytes".to_string(), serde_json::json!(1_048_576u64));
                 m
             },
         },
@@ -317,12 +314,15 @@ async fn put_file_get_file_roundtrip() {
     )
     .await;
 
-    let put_data: PutFileData = serde_json::from_value(unwrap_ok(put_resp))
-        .expect("PutFile should succeed");
+    let put_data: PutFileData =
+        serde_json::from_value(unwrap_ok(put_resp)).expect("PutFile should succeed");
 
     assert!(!put_data.chunk_id.is_empty(), "chunk_id must not be empty");
     assert!(put_data.k >= 1, "k must be at least 1");
-    assert!(put_data.fragments_stored >= put_data.k, "must store at least k fragments");
+    assert!(
+        put_data.fragments_stored >= put_data.k,
+        "must store at least k fragments"
+    );
 
     // ── GetFile ───────────────────────────────────────────────────────────
     let get_resp = send_request(
@@ -334,8 +334,8 @@ async fn put_file_get_file_roundtrip() {
     )
     .await;
 
-    let get_data: GetFileData = serde_json::from_value(unwrap_ok(get_resp))
-        .expect("GetFile should succeed");
+    let get_data: GetFileData =
+        serde_json::from_value(unwrap_ok(get_resp)).expect("GetFile should succeed");
 
     assert_eq!(
         get_data.data, original,
