@@ -89,13 +89,15 @@ enum Cmd {
         #[arg(long, short, default_value = DEFAULT_NETWORK)]
         network: String,
 
-        /// Number of source symbols k (minimum fragments to reconstruct).
-        #[arg(long)]
-        k: Option<usize>,
+        /// Target recovery probability: probability of recovering the file at
+        /// any given moment (default: 0.999 = 99.9%).
+        #[arg(long, default_value_t = 0.999)]
+        ph: f64,
 
-        /// Total fragments to generate (default: k * 2).
-        #[arg(long)]
-        n: Option<usize>,
+        /// Redundancy overhead fraction on top of the recovery threshold
+        /// (default: 1.0 = one extra "copy-equivalent" of fragments).
+        #[arg(long, default_value_t = 1.0)]
+        q_target: f64,
     },
 
     /// Retrieve and decode a stored chunk by its chunk_id.
@@ -178,10 +180,10 @@ async fn main() -> anyhow::Result<()> {
         Some(Cmd::Put {
             file,
             network,
-            k,
-            n,
+            ph,
+            q_target,
         }) => {
-            commands::put::put(file, network, k, n).await?;
+            commands::put::put(file, network, ph, q_target).await?;
         }
 
         Some(Cmd::Get {

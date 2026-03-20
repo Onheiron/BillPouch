@@ -8,13 +8,13 @@ use crate::client::ControlClient;
 /// Read `path` from disk, encode it with RLNC and store the fragments in the
 /// local Pouch for `network_id`.
 ///
-/// Default k / n: k = max(1, len/1024) source symbols, n = k * 2 redundant
-/// fragments (capped at 255 per RLNC limit).
+/// `k` and `n` are computed by the daemon from live peer QoS data and the
+/// `ph` target recovery probability.
 pub async fn put(
     path: PathBuf,
     network: String,
-    k: Option<usize>,
-    n: Option<usize>,
+    ph: f64,
+    q_target: f64,
 ) -> anyhow::Result<()> {
     if !Identity::exists()? {
         anyhow::bail!("Not logged in. Run `bp login` first.");
@@ -32,19 +32,14 @@ pub async fn put(
         anyhow::bail!("File is empty: {:?}", path);
     }
 
-    // Sensible defaults: ~1 KiB per symbol, 2× redundancy.
-    let auto_k = ((chunk_data.len() / 1024) + 1).min(128);
-    let k = k.unwrap_or(auto_k).clamp(1, 255);
-    let n = n.unwrap_or(k * 2).clamp(k, 255);
-
     let file_bytes = chunk_data.len();
 
     let mut client = ControlClient::connect().await?;
     let data = client
         .request(ControlRequest::PutFile {
             chunk_data,
-            k,
-            n,
+            ph: Some(ph),
+            q_target: Some(q_target),
             network_id: network.clone(),
         })
         .await?;
@@ -57,13 +52,11 @@ pub async fn put(
             path.file_name().unwrap_or_default()
         );
         println!("   chunk_id     : {}", d.chunk_id);
+        println!("   k / n        : {} / {}  (q = {:.2})", d.k, d.n, d.q);
+        println!("   Ph target    : {:.4}   Pe effective: {:.4}", d.ph, d.pe);
         println!(
-            "   fragments    : {}/{} stored locally",
-            d.fragments_stored, n
-        );
-        println!(
-            "   distributed  : {} pushed to remote pouches",
-            d.fragments_distributed
+            "   fragments    : {}/{} stored locally, {} distributed",
+            d.fragments_stored, d.n, d.fragments_distributed
         );
         println!("   network      : {}", network);
     }

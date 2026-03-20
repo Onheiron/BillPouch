@@ -3,13 +3,13 @@
 //! then closes the connection.
 
 use crate::{
-    coding::rlnc,
+    coding::{params as coding_params, rlnc},
     control::protocol::{
         ControlRequest, ControlResponse, FlockData, GetFileData, HatchData, PutFileData, StatusData,
     },
     error::BpResult,
     identity::Identity,
-    network::{state::NodeInfo, FragmentResponse, NetworkCommand, StorageManagerMap},
+    network::{state::NodeInfo, FragmentResponse, NetworkCommand, QosRegistry, StorageManagerMap},
     service::{ServiceInfo, ServiceRegistry, ServiceStatus, ServiceType},
     storage::StorageManager,
 };
@@ -37,6 +37,9 @@ pub struct DaemonState {
     /// Shared with the network loop so incoming fragment-fetch requests can
     /// be served directly from the P2P event handler.
     pub storage_managers: StorageManagerMap,
+    /// Per-peer QoS data updated by the network quality monitor.
+    /// Used by `PutFile` to derive adaptive k/n from live stability scores.
+    pub qos: Arc<RwLock<QosRegistry>>,
 }
 
 /// Accept connections on the Unix socket and dispatch requests.
@@ -266,10 +269,13 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
         // ── PutFile ───────────────────────────────────────────────────────
         ControlRequest::PutFile {
             chunk_data,
-            k,
-            n,
+            ph,
+            q_target,
             network_id,
         } => {
+            let ph = ph.unwrap_or(0.999);
+            let q_target = q_target.unwrap_or(1.0);
+
             // Find a Pouch StorageManager for this network.
             let managers_snap: Vec<(String, Arc<RwLock<StorageManager>>)> = {
                 let map = state.storage_managers.read().unwrap();
@@ -293,6 +299,59 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                     network_id
                 ));
             }
+
+            // ── Compute adaptive k/n from live QoS data ──────────────────────
+            let pouch_peer_ids: Vec<String> = {
+                let ns = state.network_state.read().unwrap();
+                ns.in_network(&network_id)
+                    .into_iter()
+                    .filter(|n| n.service_type == ServiceType::Pouch)
+                    .map(|n| n.peer_id.clone())
+                    .collect()
+            };
+
+            // For peers not yet observed via Ping, assume 0.8 stability
+            // (benefit of the doubt for new entries).
+            let stabilities: Vec<f64> = {
+                let qos = state.qos.read().unwrap();
+                if pouch_peer_ids.is_empty() {
+                    vec![0.8; candidates.len().max(1)]
+                } else {
+                    pouch_peer_ids
+                        .iter()
+                        .map(|pid| match qos.get(pid) {
+                            Some(p) if p.is_observed() => p.stability_score(),
+                            _ => 0.8,
+                        })
+                        .collect()
+                }
+            };
+
+            let (k, n, q, pe) =
+                match coding_params::compute_coding_params(&stabilities, ph, q_target) {
+                    Ok(p) => {
+                        let pe =
+                            coding_params::effective_recovery_probability(&stabilities, p.k);
+                        (p.k, p.n, p.q, pe)
+                    }
+                    Err(e) => {
+                        tracing::warn!("compute_coding_params failed ({e}), using fallback");
+                        let peer_n = stabilities.len().max(2);
+                        let fallback_k = (peer_n / 2).max(1);
+                        let fallback_q = (peer_n - fallback_k) as f64 / fallback_k as f64;
+                        let pe = coding_params::effective_recovery_probability(
+                            &stabilities,
+                            fallback_k,
+                        );
+                        (fallback_k, peer_n, fallback_q, pe)
+                    }
+                };
+
+            tracing::info!(
+                network = %network_id, k = %k, n = %n, q = %q,
+                ph = %ph, pe = %pe, peers = %stabilities.len(),
+                "PutFile: computed coding params"
+            );
 
             // Encode the chunk.
             let fragments = match rlnc::encode(&chunk_data, k, n) {
@@ -363,6 +422,11 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
 
             ControlResponse::ok(PutFileData {
                 chunk_id: chunk_id.clone(),
+                k,
+                n,
+                q,
+                ph,
+                pe,
                 fragments_stored: stored,
                 fragments_distributed: distributed,
                 message: format!(

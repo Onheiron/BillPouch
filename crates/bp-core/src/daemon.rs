@@ -39,6 +39,8 @@ pub async fn run_daemon() -> BpResult<()> {
     // Shared storage managers: populated when Pouch services are hatched.
     let storage_managers: StorageManagerMap = Arc::new(RwLock::new(HashMap::new()));
 
+    let qos = Arc::new(RwLock::new(crate::network::QosRegistry::new()));
+
     let daemon_state = Arc::new(DaemonState {
         identity: identity.clone(),
         services: RwLock::new(ServiceRegistry::new()),
@@ -46,6 +48,7 @@ pub async fn run_daemon() -> BpResult<()> {
         networks: RwLock::new(Vec::new()),
         net_tx: net_tx.clone(),
         storage_managers: Arc::clone(&storage_managers),
+        qos,
     });
 
     // ── Build libp2p swarm ────────────────────────────────────────────────

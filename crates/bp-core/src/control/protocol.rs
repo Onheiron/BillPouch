@@ -34,14 +34,17 @@ pub enum ControlRequest {
     Ping,
     /// Encode `chunk_data` with RLNC and store fragments in the local Pouch.
     ///
+    /// `k` and `n` are derived automatically by the daemon from live QoS data
+    /// and the `ph` target recovery probability.
     /// Returns a `chunk_id` (BLAKE3 hash prefix) that can be used with `GetFile`.
     PutFile {
         /// Raw bytes to encode and store.
         chunk_data: Vec<u8>,
-        /// Number of source symbols — minimum fragments needed to reconstruct.
-        k: usize,
-        /// Total fragments to generate (must be >= k).
-        n: usize,
+        /// Target recovery probability (default: 0.999).
+        /// The daemon derives k/n from live peer QoS and this target.
+        ph: Option<f64>,
+        /// Redundancy overhead fraction (default: 1.0 = k extra fragments).
+        q_target: Option<f64>,
         /// Network ID whose Pouch should hold the fragments.
         network_id: String,
     },
@@ -118,6 +121,16 @@ pub struct StatusData {
 pub struct PutFileData {
     /// BLAKE3 chunk hash prefix identifying this chunk.
     pub chunk_id: String,
+    /// Recovery threshold: minimum fragments needed to reconstruct.
+    pub k: usize,
+    /// Total fragments generated per chunk.
+    pub n: usize,
+    /// Effective redundancy overhead: `(n − k) / k`.
+    pub q: f64,
+    /// Target recovery probability declared at upload time.
+    pub ph: f64,
+    /// Rolling effective recovery probability at upload time.
+    pub pe: f64,
     /// How many fragments were stored locally.
     pub fragments_stored: usize,
     /// How many fragments were pushed to remote Pouches.
