@@ -132,7 +132,10 @@ async fn run_ping_round(
         return;
     }
 
-    tracing::debug!(peers = pouch_peers.len(), "quality_monitor: starting Ping round");
+    tracing::debug!(
+        peers = pouch_peers.len(),
+        "quality_monitor: starting Ping round"
+    );
 
     let mut handles = Vec::with_capacity(pouch_peers.len());
     for (peer_id_str, peer_id) in pouch_peers {
@@ -180,10 +183,14 @@ async fn run_pos_round(
                     .subsec_nanos() as usize
                     % fragments.len();
                 let frag = &fragments[idx];
-                peer_id_str
-                    .parse::<PeerId>()
-                    .ok()
-                    .map(|pid| (peer_id_str.clone(), pid, frag.chunk_id.clone(), frag.fragment_id.clone()))
+                peer_id_str.parse::<PeerId>().ok().map(|pid| {
+                    (
+                        peer_id_str.clone(),
+                        pid,
+                        frag.chunk_id.clone(),
+                        frag.fragment_id.clone(),
+                    )
+                })
             })
             .collect()
     };
@@ -436,14 +443,15 @@ mod tests {
     #[test]
     fn outgoing_assignment_structure() {
         // Verify we can build OutgoingAssignments and look up entries.
-        let outgoing: OutgoingAssignments =
-            Arc::new(RwLock::new(std::collections::HashMap::new()));
+        let outgoing: OutgoingAssignments = Arc::new(RwLock::new(std::collections::HashMap::new()));
         {
             let mut g = outgoing.write().unwrap();
-            g.entry("peer-1".into()).or_default().push(OutgoingFragment {
-                chunk_id: "chunk-a".into(),
-                fragment_id: "frag-1".into(),
-            });
+            g.entry("peer-1".into())
+                .or_default()
+                .push(OutgoingFragment {
+                    chunk_id: "chunk-a".into(),
+                    fragment_id: "frag-1".into(),
+                });
         }
         let g = outgoing.read().unwrap();
         assert_eq!(g.get("peer-1").unwrap().len(), 1);

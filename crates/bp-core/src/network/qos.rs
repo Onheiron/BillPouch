@@ -284,9 +284,7 @@ impl QosRegistry {
     /// Fault status of a peer: `"ok"`, `"degraded"`, `"suspected"`, or
     /// `"blacklisted"`.  Returns `"ok"` if the peer has never been seen.
     pub fn fault_status(&self, peer_id: &str) -> &'static str {
-        self.peers
-            .get(peer_id)
-            .map_or("ok", PeerQos::fault_status)
+        self.peers.get(peer_id).map_or("ok", PeerQos::fault_status)
     }
 
     /// Fault score of a peer in `[0, 100]`.  Returns `0` if never seen.
