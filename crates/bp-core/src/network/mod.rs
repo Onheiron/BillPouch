@@ -13,11 +13,13 @@
 //! - [`state`]     — in-memory [`NetworkState`] updated from incoming gossip messages.
 
 pub mod behaviour;
+pub mod fragment_gossip;
 pub mod qos;
 pub mod quality_monitor;
 pub mod state;
 
 pub use behaviour::{BillPouchBehaviour, FragmentRequest, FragmentResponse};
+pub use fragment_gossip::{FragmentIndexAnnouncement, FragmentPointer, RemoteFragmentIndex};
 pub use qos::{PeerQos, QosRegistry, FAULT_BLACKLISTED, FAULT_DEGRADED, FAULT_SUSPECTED};
 pub use quality_monitor::run_quality_monitor;
 pub use state::{NetworkState, NodeInfo};
@@ -73,6 +75,14 @@ pub enum NetworkCommand {
         /// Network whose topic to publish on.
         network_id: String,
         /// Serialised [`NodeInfo`] bytes.
+        payload: Vec<u8>,
+    },
+    /// Publish a serialised [`FragmentIndexAnnouncement`] on the index gossip
+    /// topic (`billpouch/v1/{network_id}/index`) for `network_id`.
+    AnnounceIndex {
+        /// Network whose index topic to publish on.
+        network_id: String,
+        /// Serialised [`FragmentIndexAnnouncement`] bytes.
         payload: Vec<u8>,
     },
     /// Dial a remote peer at a known [`Multiaddr`].
@@ -173,6 +183,7 @@ pub async fn run_network_loop(
     listen_addr: Multiaddr,
     storage_managers: StorageManagerMap,
     outgoing_assignments: OutgoingAssignments,
+    remote_fragment_index: Arc<RwLock<fragment_gossip::RemoteFragmentIndex>>,
 ) -> BpResult<()> {
     swarm
         .listen_on(listen_addr.clone())
@@ -204,7 +215,7 @@ pub async fn run_network_loop(
         tokio::select! {
             // ── Incoming swarm event ──────────────────────────────────────────
             event = swarm.select_next_some() => {
-                handle_swarm_event(event, &mut swarm, &state, &mut subscribed_networks, &storage_managers, &mut pending_fetches, &mut pending_pings, &mut pending_pos).await;
+                handle_swarm_event(event, &mut swarm, &state, &mut subscribed_networks, &storage_managers, &mut pending_fetches, &mut pending_pings, &mut pending_pos, &remote_fragment_index).await;
             }
             // ── Command from daemon ───────────────────────────────────────────
             cmd = cmd_rx.recv() => {
@@ -226,17 +237,36 @@ pub async fn run_network_loop(
                                 subscribed_networks.insert(network_id.clone());
                                 tracing::info!("Joined network gossip: {}", network_id);
                             }
+                            // Also subscribe to the fragment-index topic.
+                            let idx_topic = gossipsub::IdentTopic::new(
+                                fragment_gossip::FragmentIndexAnnouncement::topic_name(&network_id),
+                            );
+                            if let Err(e) = swarm.behaviour_mut().gossipsub.subscribe(&idx_topic) {
+                                tracing::warn!("Failed to subscribe to index topic {}: {}", network_id, e);
+                            }
                         }
                     }
                     Some(NetworkCommand::LeaveNetwork { network_id }) => {
                         let topic = gossipsub::IdentTopic::new(NodeInfo::topic_name(&network_id));
                         let _ = swarm.behaviour_mut().gossipsub.unsubscribe(&topic);
+                        let idx_topic = gossipsub::IdentTopic::new(
+                            fragment_gossip::FragmentIndexAnnouncement::topic_name(&network_id),
+                        );
+                        let _ = swarm.behaviour_mut().gossipsub.unsubscribe(&idx_topic);
                         subscribed_networks.remove(&network_id);
                     }
                     Some(NetworkCommand::Announce { network_id, payload }) => {
                         let topic = gossipsub::IdentTopic::new(NodeInfo::topic_name(&network_id));
                         if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic, payload) {
                             tracing::warn!("Gossip publish failed: {}", e);
+                        }
+                    }
+                    Some(NetworkCommand::AnnounceIndex { network_id, payload }) => {
+                        let topic = gossipsub::IdentTopic::new(
+                            fragment_gossip::FragmentIndexAnnouncement::topic_name(&network_id),
+                        );
+                        if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic, payload) {
+                            tracing::warn!("FragmentIndex gossip publish failed: {}", e);
                         }
                     }
                     Some(NetworkCommand::Dial { addr }) => {
@@ -352,6 +382,7 @@ async fn handle_swarm_event(
         request_response::OutboundRequestId,
         tokio::sync::oneshot::Sender<bool>,
     >,
+    remote_fragment_index: &Arc<RwLock<fragment_gossip::RemoteFragmentIndex>>,
 ) {
     match event {
         // ── Gossipsub: incoming NodeInfo announcement ─────────────────────
@@ -373,8 +404,26 @@ async fn handle_swarm_event(
                     st.upsert(node_info);
                 }
             }
-            Err(e) => {
-                tracing::warn!("Failed to deserialize gossip message: {}", e);
+            Err(_) => {
+                // Try as FragmentIndexAnnouncement.
+                match serde_json::from_slice::<fragment_gossip::FragmentIndexAnnouncement>(
+                    &message.data,
+                ) {
+                    Ok(ann) => {
+                        tracing::debug!(
+                            peer = %propagation_source,
+                            chunk = %ann.chunk_id,
+                            ptrs = ann.pointers.len(),
+                            "Gossip FragmentIndex received"
+                        );
+                        if let Ok(mut idx) = remote_fragment_index.write() {
+                            idx.upsert(ann);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to deserialize gossip message: {}", e);
+                    }
+                }
             }
         },
 

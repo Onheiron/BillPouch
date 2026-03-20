@@ -1548,6 +1548,9 @@ fn make_in_memory_state() -> std::sync::Arc<bp_core::control::server::DaemonStat
         outgoing_assignments: std::sync::Arc::new(std::sync::RwLock::new(
             std::collections::HashMap::new(),
         )),
+        remote_fragment_index: std::sync::Arc::new(std::sync::RwLock::new(
+            bp_core::network::RemoteFragmentIndex::new(),
+        )),
     })
 }
 

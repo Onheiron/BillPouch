@@ -10,8 +10,9 @@ use crate::{
     error::BpResult,
     identity::Identity,
     network::{
-        state::NodeInfo, FragmentResponse, NetworkCommand, OutgoingAssignments, QosRegistry,
-        StorageManagerMap,
+        fragment_gossip::{FragmentIndexAnnouncement, FragmentPointer, RemoteFragmentIndex},
+        state::NodeInfo,
+        FragmentResponse, NetworkCommand, OutgoingAssignments, QosRegistry, StorageManagerMap,
     },
     service::{ServiceInfo, ServiceRegistry, ServiceStatus, ServiceType},
     storage::StorageManager,
@@ -48,6 +49,13 @@ pub struct DaemonState {
     /// Updated by the network loop on every `PushFragment`; read by the
     /// quality monitor to select Proof-of-Storage challenge targets.
     pub outgoing_assignments: OutgoingAssignments,
+    /// In-memory index of `chunk_id → [(peer_id, fragment_id)]` learned from
+    /// gossipped [`FragmentIndexAnnouncement`]s.
+    ///
+    /// Populated when received from the network; used by `GetFile` to issue
+    /// targeted `FetchChunkFragments` requests instead of broadcasting to all
+    /// known Pouches.
+    pub remote_fragment_index: Arc<RwLock<RemoteFragmentIndex>>,
 }
 
 /// Accept connections on the Unix socket and dispatch requests.
@@ -401,6 +409,7 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             };
 
             let mut distributed = 0usize;
+            let mut index_pointers: Vec<FragmentPointer> = Vec::new();
             if !remote_pouches.is_empty() {
                 for (i, fragment) in fragments.iter().enumerate() {
                     let peer = remote_pouches[i % remote_pouches.len()];
@@ -416,6 +425,34 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                         .is_ok()
                     {
                         distributed += 1;
+                        index_pointers.push(FragmentPointer {
+                            peer_id: peer.to_string(),
+                            fragment_id: fragment.id.clone(),
+                        });
+                    }
+                }
+            }
+
+            // Publish the fragment-index announcement so peers learn which
+            // Pouch holds each fragment.
+            if !index_pointers.is_empty() {
+                let ann = FragmentIndexAnnouncement {
+                    network_id: network_id.clone(),
+                    chunk_id: chunk_id.clone(),
+                    announced_at: chrono::Utc::now().timestamp() as u64,
+                    pointers: index_pointers,
+                };
+                if let Ok(payload) = serde_json::to_vec(&ann) {
+                    let _ = state
+                        .net_tx
+                        .send(NetworkCommand::AnnounceIndex {
+                            network_id: network_id.clone(),
+                            payload,
+                        })
+                        .await;
+                    // Also update our own local index eagerly.
+                    if let Ok(mut idx) = state.remote_fragment_index.write() {
+                        idx.upsert(ann);
                     }
                 }
             }
@@ -483,19 +520,43 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             // ── Fetch from remote Pouches if local fragments < k ────────────
             let mut fragments_remote = 0usize;
             if k_needed > 0 && all_fragments.len() < k_needed {
-                let remote_pouches: Vec<PeerId> = {
-                    let ns = state.network_state.read().unwrap();
-                    let local_peer = state.identity.peer_id.to_string();
-                    ns.in_network(&network_id)
-                        .into_iter()
-                        .filter(|n| n.service_type == ServiceType::Pouch && n.peer_id != local_peer)
-                        .filter_map(|n| n.peer_id.parse::<PeerId>().ok())
-                        .collect()
+                let local_peer = state.identity.peer_id.to_string();
+
+                // Build list of remote peers to query: prefer the fragment
+                // index (targeted fetch) and fall back to broadcasting to all
+                // known Pouches if the index has no entries for this chunk.
+                let target_peers: Vec<PeerId> = {
+                    let idx = state.remote_fragment_index.read().unwrap();
+                    let ptrs = idx.pointers_for(&chunk_id);
+                    if !ptrs.is_empty() {
+                        // Deduplicate peer IDs from the index.
+                        let mut seen = std::collections::HashSet::new();
+                        ptrs.iter()
+                            .filter(|p| p.peer_id != local_peer)
+                            .filter_map(|p| {
+                                if seen.insert(p.peer_id.clone()) {
+                                    p.peer_id.parse::<PeerId>().ok()
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect()
+                    } else {
+                        // Fallback: broadcast to all known Pouches in the network.
+                        let ns = state.network_state.read().unwrap();
+                        ns.in_network(&network_id)
+                            .into_iter()
+                            .filter(|n| {
+                                n.service_type == ServiceType::Pouch && n.peer_id != local_peer
+                            })
+                            .filter_map(|n| n.peer_id.parse::<PeerId>().ok())
+                            .collect()
+                    }
                 };
 
-                // Send FetchChunkFragments to each remote Pouch.
+                // Send FetchChunkFragments to each target peer.
                 let mut receivers = Vec::new();
-                for peer in &remote_pouches {
+                for peer in &target_peers {
                     let (tx, rx) = tokio::sync::oneshot::channel();
                     if state
                         .net_tx
