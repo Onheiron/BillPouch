@@ -120,9 +120,7 @@ pub fn compute_coding_params(
         ));
     }
     if !(0.0 < ph && ph < 1.0) {
-        return Err(BpError::Coding(format!(
-            "Ph ({ph}) must be in (0.0, 1.0)"
-        )));
+        return Err(BpError::Coding(format!("Ph ({ph}) must be in (0.0, 1.0)")));
     }
     if q_target <= 0.0 {
         return Err(BpError::Coding(format!(
@@ -311,7 +309,11 @@ mod tests {
         // probit(Φ(z)) ≈ z
         for z in [-3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0] {
             let p = standard_normal_cdf(z);
-            assert!(approx_eq(probit(p), z, 1e-4), "z={z} p={p} probit={}", probit(p));
+            assert!(
+                approx_eq(probit(p), z, 1e-4),
+                "z={z} p={p} probit={}",
+                probit(p)
+            );
         }
     }
 
@@ -332,7 +334,11 @@ mod tests {
         assert!(params.k > 0);
         assert!(params.k <= 10);
         assert!(params.n >= params.k);
-        assert!(approx_eq(params.q, (params.n - params.k) as f64 / params.k as f64, 1e-9));
+        assert!(approx_eq(
+            params.q,
+            (params.n - params.k) as f64 / params.k as f64,
+            1e-9
+        ));
     }
 
     #[test]

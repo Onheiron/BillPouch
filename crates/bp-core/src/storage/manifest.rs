@@ -132,9 +132,7 @@ impl NetworkMetaKey {
 
         let expected_mac = self.mac(&nonce, ciphertext);
         if expected_mac != stored_mac {
-            return Err(BpError::Coding(
-                "Metadata MAC verification failed".into(),
-            ));
+            return Err(BpError::Coding("Metadata MAC verification failed".into()));
         }
 
         let keystream = self.keystream(&nonce, ciphertext.len());
