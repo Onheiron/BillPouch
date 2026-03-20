@@ -15,7 +15,7 @@ use bp_core::control::protocol::{
 use bp_core::control::server::{run_control_server, DaemonState};
 use bp_core::identity::{fingerprint, Identity, UserProfile};
 use bp_core::network::state::NetworkState;
-use bp_core::network::NetworkCommand;
+use bp_core::network::{NetworkCommand, QosRegistry};
 use bp_core::service::ServiceRegistry;
 
 /// Build a `DaemonState` in-memory without touching disk.
@@ -44,6 +44,7 @@ fn make_daemon_state() -> (Arc<DaemonState>, mpsc::Receiver<NetworkCommand>) {
         networks: RwLock::new(Vec::new()),
         net_tx,
         storage_managers: Arc::new(RwLock::new(std::collections::HashMap::new())),
+        qos: Arc::new(RwLock::new(QosRegistry::new())),
     });
 
     (state, net_rx)
