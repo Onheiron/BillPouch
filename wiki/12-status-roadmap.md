@@ -119,7 +119,7 @@ Ultimo commit verde atteso: branch `main` (post push).
 | 24 | `6465596` `6b5fd13` | test: end-to-end PutFile/GetFile with adaptive k/n and local roundtrip |
 | 25 | `599aade` `39e6002` `031b85b` | feat: Rigenerazione Preventiva — rerouting frammenti quando fault_score ≥ FAULT_SUSPECTED |
 | 26 | `9ffa920` `52a0a87` | feat: Persistenza Kademlia — salvataggio/ripristino peer su disco (kad_peers.json) |
-| 27 | *(pending)* | feat: Bootstrap nodes — nodi noti per scoperta iniziale (bootstrap.json) |
+| 27 | `16ff6ed` | feat: Bootstrap nodes — nodi noti per scoperta iniziale (bootstrap.json) |
 
 ### Prossimi step consigliati
 | Priorità | Cosa | Dove |
