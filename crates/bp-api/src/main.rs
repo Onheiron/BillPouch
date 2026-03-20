@@ -127,11 +127,7 @@ fn daemon_unavailable(e: impl std::fmt::Display) -> Response {
 }
 
 fn api_error(status: StatusCode, message: String) -> Response {
-    (
-        status,
-        Json(serde_json::json!({ "error": message })),
-    )
-        .into_response()
+    (status, Json(serde_json::json!({ "error": message }))).into_response()
 }
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
@@ -166,10 +162,7 @@ struct HatchBody {
 
 /// `POST /services` — hatch (start) a new service.
 #[instrument(skip_all)]
-async fn hatch(
-    State(state): State<AppState>,
-    Json(body): Json<HatchBody>,
-) -> Response {
+async fn hatch(State(state): State<AppState>, Json(body): Json<HatchBody>) -> Response {
     let req = ControlRequest::Hatch {
         service_type: body.service_type,
         network_id: body.network_id,
@@ -187,10 +180,7 @@ async fn hatch(
 
 /// `DELETE /services/:service_id` — stop a service.
 #[instrument(skip_all)]
-async fn farewell(
-    State(state): State<AppState>,
-    Path(service_id): Path<String>,
-) -> Response {
+async fn farewell(State(state): State<AppState>, Path(service_id): Path<String>) -> Response {
     daemon_call!(state, ControlRequest::Farewell { service_id })
 }
 
@@ -203,24 +193,24 @@ struct NetworkBody {
 
 /// `POST /networks/join` — subscribe to a gossip network.
 #[instrument(skip_all)]
-async fn network_join(
-    State(state): State<AppState>,
-    Json(body): Json<NetworkBody>,
-) -> Response {
-    daemon_call!(state, ControlRequest::Join {
-        network_id: body.network_id
-    })
+async fn network_join(State(state): State<AppState>, Json(body): Json<NetworkBody>) -> Response {
+    daemon_call!(
+        state,
+        ControlRequest::Join {
+            network_id: body.network_id
+        }
+    )
 }
 
 /// `POST /networks/leave` — unsubscribe from a gossip network.
 #[instrument(skip_all)]
-async fn network_leave(
-    State(state): State<AppState>,
-    Json(body): Json<NetworkBody>,
-) -> Response {
-    daemon_call!(state, ControlRequest::Leave {
-        network_id: body.network_id
-    })
+async fn network_leave(State(state): State<AppState>, Json(body): Json<NetworkBody>) -> Response {
+    daemon_call!(
+        state,
+        ControlRequest::Leave {
+            network_id: body.network_id
+        }
+    )
 }
 
 // ── /files ────────────────────────────────────────────────────────────────────
@@ -252,10 +242,7 @@ fn default_network() -> String {
 /// Body JSON: `{ "chunk_data": "<base64>", "network_id": "public", "ph": 0.999, "q_target": 1.0 }`
 /// Returns: `{ "chunk_id": "<hex>" }`
 #[instrument(skip_all)]
-async fn put_file(
-    State(state): State<AppState>,
-    Json(body): Json<PutFileBody>,
-) -> Response {
+async fn put_file(State(state): State<AppState>, Json(body): Json<PutFileBody>) -> Response {
     let raw = match B64.decode(&body.chunk_data) {
         Ok(b) => b,
         Err(e) => {
@@ -328,7 +315,10 @@ async fn get_file(
             Err(e) => {
                 let msg = e.to_string();
                 if msg.contains("not found") || msg.contains("NotFound") {
-                    api_error(StatusCode::NOT_FOUND, format!("Chunk '{chunk_id}' not found"))
+                    api_error(
+                        StatusCode::NOT_FOUND,
+                        format!("Chunk '{chunk_id}' not found"),
+                    )
                 } else {
                     api_error(StatusCode::INTERNAL_SERVER_ERROR, msg)
                 }
@@ -373,7 +363,10 @@ async fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("Invalid bind address: {e}"))?;
 
     tracing::info!("bp-api listening on http://{addr}");
-    tracing::info!("Proxying requests to daemon at {:?}", config::socket_path()?);
+    tracing::info!(
+        "Proxying requests to daemon at {:?}",
+        config::socket_path()?
+    );
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
