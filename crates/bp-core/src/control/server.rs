@@ -284,7 +284,7 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
 
         // ── ConnectRelay ──────────────────────────────────────────────────
         ControlRequest::ConnectRelay { relay_addr } => {
-            let addr: libp2p::Multiaddr = match relay_addr.parse() {
+            let addr: Multiaddr = match relay_addr.parse() {
                 Ok(a) => a,
                 Err(e) => {
                     return ControlResponse::err(format!("Invalid relay multiaddr: {}", e));
