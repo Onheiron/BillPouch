@@ -237,8 +237,7 @@ pub async fn run_network_loop(
 
     // How often (in seconds) to flush known peers to disk.
     const KAD_SAVE_INTERVAL_SECS: u64 = 600;
-    let mut kad_save_interval =
-        tokio::time::interval(Duration::from_secs(KAD_SAVE_INTERVAL_SECS));
+    let mut kad_save_interval = tokio::time::interval(Duration::from_secs(KAD_SAVE_INTERVAL_SECS));
     kad_save_interval.reset(); // skip the first immediate tick
 
     loop {
