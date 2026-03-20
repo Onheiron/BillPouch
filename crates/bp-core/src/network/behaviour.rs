@@ -32,6 +32,8 @@ pub enum FragmentRequest {
         fragment_id: String,
         data: Vec<u8>,
     },
+    /// Liveness ping — expects a `Pong` with the same nonce.
+    Ping { nonce: u64 },
 }
 
 /// Response to a fragment request.
@@ -47,6 +49,8 @@ pub enum FragmentResponse {
     Stored,
     /// Store failed (response to Store).
     StoreFailed { reason: String },
+    /// Pong response to a Ping — echoes the nonce.
+    Pong { nonce: u64 },
 }
 
 // ── Combined behaviour ────────────────────────────────────────────────────────

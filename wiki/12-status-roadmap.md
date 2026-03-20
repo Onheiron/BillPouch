@@ -39,6 +39,7 @@
 | **Parametri k/n adattativi**      | ✅ Done | `coding/params.rs` — Poisson-Binomial → k da Ph e stabilità dei peer |
 | **FileManifest + NetworkMetaKey** | ✅ Done | `storage/manifest.rs` — metadati file cifrati con chiave di rete BLAKE3 |
 | **PutFile con k/n adattativi**    | ✅ Done | `server.rs` — `compute_coding_params()` sostituisce k/n hardcoded dalla CLI |
+| **Network quality monitor**       | ✅ Done | `network/quality_monitor.rs` — Ping loop 60s, RTT EWMA → QosRegistry |
 
 ### CLI (`bp-cli`)
 
@@ -107,17 +108,19 @@ Ultimo commit verde atteso: branch `main` (post push).
 | 15 | `dbeda3f` | style: fix cargo fmt violations |
 | 16 | `6c691bc` | fix(core): clippy — unused var, excessive precision |
 | 17 | `a78636c` | fix(core): reversed Horner coefficients in erfc_approx |
-| 18 | *(pending)* | feat: PutFile adaptive k/n + QosRegistry in DaemonState |
+| 18 | `616323e` | feat: PutFile adaptive k/n + QosRegistry in DaemonState |
+| 19 | `03642d4` | fix(tests): missing qos field in test DaemonState helpers |
+| 20 | `4451817` | style: fmt diffs put.rs, server.rs, architecture_test.rs |
+| 21 | *(pending)* | feat: network quality monitor — Ping challenge loop, RTT→QoS |
 
 ### Prossimi step consigliati
 | Priorità | Cosa | Dove |
 |----------|------|------|
-| � Alta  | **Network quality monitor** — loop di Ping challenge periodici che popolano `QosRegistry` con RTT reali | nuovo `network/quality_monitor.rs` |
-| 🔴 Alta  | **Proof-of-Storage challenge** — verifica che i Pouch abbiano davvero i fragment dichiarati | `network/quality_monitor.rs` + `network/mod.rs` |
+| 🔴 Alta  | **Proof-of-Storage challenge** — PoS in `quality_monitor.rs`: challenge su fragment random, verifica BLAKE3(data\|\|nonce), fault score | `network/quality_monitor.rs` |
 | 🟡 Media | **FragmentIndex gossip** — broadcast `{chunk_id, fragment_ids, pouch_peer_id}` su gossipsub per discovery distribuita | nuovo `network/fragment_index.rs` |
 | 🟡 Media | **Test end-to-end bp put / bp get** con QoS e k adattivo | `tests/integration_test.rs` |
-| 🟡 Media | **Rigenerazione preventiva** — recoding automatico quando un Pouch è `suspected`/`blacklisted` | `control/server.rs` → handler qualità |
-| 🟢 Bassa | **Persistenza Kademlia** | `network/behaviour.rs` → file store |
+| 🟡 Media | **Rigenerazione preventiva** — recoding automatico quando un Pouch è `suspected`/`blacklisted` | `control/server.rs` |
+| 🟢 Bassa | **Persistenza Kademlia** | `network/behaviour.rs` |
 
 ---
 
@@ -152,13 +155,12 @@ Ultimo commit verde atteso: branch `main` (post push).
 ## Changelog recente
 
 ### v0.1.4 (Marzo 2026)
-- **feat:** `network/qos.rs` — `PeerQos` (RTT EWMA α=0.125 + challenge success EWMA β=0.10) e `QosRegistry`
-- **feat:** `coding/params.rs` — `compute_coding_params()`: approssimazione normale Poisson-Binomial per derivare k da Ph; `effective_recovery_probability()` per Pe rolling
-- **feat:** `storage/manifest.rs` — `FileManifest`, `ChunkManifest`, `FragmentLocation`; `NetworkMetaKey` con keystream BLAKE3 + MAC per metadati cifrati
-- **feat:** `DaemonState.qos: Arc<RwLock<QosRegistry>>` — registry condiviso per futuri challenge
-- **feat:** `PutFile` adattivo — k/n calcolati da `compute_coding_params()` sui QoS live; `--k`/`--n` CLI rimossi, sostituiti da `--ph`/`--q-target`
-- **fix:** coefficienti Horner invertiti in `erfc_approx` (probit scorretto)
-- **fix:** variabile non usata + precisione eccessiva costante probit (clippy)
+- **feat:** `network/qos.rs` — `PeerQos` + `QosRegistry`
+- **feat:** `coding/params.rs` — `compute_coding_params()`, `effective_recovery_probability()`
+- **feat:** `storage/manifest.rs` — `FileManifest`, `NetworkMetaKey`
+- **feat:** `DaemonState.qos` + `PutFile` adattivo (`--ph`/`--q-target`)
+- **feat:** `network/quality_monitor.rs` — loop Ping 60s, RTT EWMA → `QosRegistry`; `FragmentRequest::Ping`/`Pong`; `NetworkCommand::Ping`
+- **fix:** coefficienti Horner `erfc_approx`, clippy, fmt
 
 ### v0.1.3 (Marzo 2026)
 - **feat:** GF(2⁸) + RLNC erasure coding (`coding/gf256.rs`, `coding/rlnc.rs`)
