@@ -154,7 +154,7 @@ impl PeerQos {
 
     /// Record a successful Proof-of-Storage response.
     ///
-    /// Decays `fault_score` by [`FAULT_DECAY`] and records a successful
+    /// Decays `fault_score` by `FAULT_DECAY` and records a successful
     /// challenge in the reliability EWMA.
     pub fn record_pos_success(&mut self) {
         self.fault_score = self.fault_score.saturating_sub(FAULT_DECAY);
@@ -163,7 +163,7 @@ impl PeerQos {
 
     /// Record a failed Proof-of-Storage response (timeout or invalid proof).
     ///
-    /// Increments `fault_score` by [`FAULT_INCREMENT`] (capped at 100) and
+    /// Increments `fault_score` by `FAULT_INCREMENT` (capped at 100) and
     /// records a failed challenge in the reliability EWMA.
     pub fn record_pos_failure(&mut self) {
         self.fault_score = self.fault_score.saturating_add(FAULT_INCREMENT).min(100);
