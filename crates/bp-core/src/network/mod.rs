@@ -552,6 +552,7 @@ async fn handle_swarm_event(
             libp2p::relay::client::Event::ReservationReqAccepted {
                 relay_peer_id,
                 renewed,
+                ..
             },
         )) => {
             tracing::info!(
