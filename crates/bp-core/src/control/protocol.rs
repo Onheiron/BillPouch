@@ -55,6 +55,16 @@ pub enum ControlRequest {
         /// Network ID to search for the chunk.
         network_id: String,
     },
+    /// Dial a relay node to enable NAT traversal via circuit relay v2.
+    ///
+    /// The daemon dials `relay_addr`, establishes a reservation, and
+    /// subsequently becomes reachable through the relay at
+    /// `/p2p-circuit` addresses.
+    ConnectRelay {
+        /// Full multiaddr of the relay node, e.g.
+        /// `/ip4/1.2.3.4/tcp/4001/p2p/12D3KooW...`
+        relay_addr: String,
+    },
 }
 
 /// Response sent from daemon → CLI.

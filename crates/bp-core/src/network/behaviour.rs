@@ -6,10 +6,12 @@
 //!   • Identify         — exchange protocol version and listen addresses
 //!   • mDNS             — local-network peer discovery (zero-config)
 //!   • RequestResponse  — direct fragment fetch/push between Pouches
+//!   • AutoNAT          — detect public reachability from the internet
+//!   • RelayClient      — dial peers through a relay when behind NAT
 
 use libp2p::{
-    gossipsub, identify, identity::Keypair, kad, mdns, request_response, swarm::NetworkBehaviour,
-    PeerId, StreamProtocol,
+    autonat, gossipsub, identify, identity::Keypair, kad, mdns, relay, request_response,
+    swarm::NetworkBehaviour, PeerId, StreamProtocol,
 };
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -71,7 +73,7 @@ pub enum FragmentResponse {
 
 /// Single combined behaviour injected into the libp2p Swarm.
 ///
-/// All five sub-behaviours are polled by the swarm in a single `select!`-style
+/// All seven sub-behaviours are polled by the swarm in a single `select!`-style
 /// event loop inside [`run_network_loop`].
 ///
 /// [`run_network_loop`]: crate::network::run_network_loop
@@ -89,22 +91,35 @@ pub struct BillPouchBehaviour {
     pub mdns: mdns::tokio::Behaviour,
     /// Direct fragment fetch/push between Pouch nodes.
     pub fragment_exchange: request_response::cbor::Behaviour<FragmentRequest, FragmentResponse>,
+    /// AutoNAT: probes remote peers to detect whether this node is publicly reachable.
+    ///
+    /// Reports [`autonat::NatStatus`] changes so the daemon can decide whether to
+    /// activate relay-assisted connectivity.
+    pub autonat: autonat::Behaviour,
+    /// Relay client: allows this node to route connections through a relay peer
+    /// when a direct connection is not possible (e.g. behind symmetric NAT).
+    pub relay: relay::client::Behaviour,
 }
 
 impl BillPouchBehaviour {
-    /// Build the combined behaviour from a keypair (called inside `SwarmBuilder`).
+    /// Build the combined behaviour from a keypair and a relay client handle.
+    ///
+    /// The `relay_client` is obtained from the `SwarmBuilder::with_relay_client()`
+    /// step and must be passed in rather than constructed here.
     ///
     /// Configures:
     /// - Gossipsub with strict message signing and a 10-second heartbeat.
     /// - Kademlia with an in-memory record store.
     /// - Identify with the `/billpouch/id/1.0.0` protocol string.
     /// - mDNS with default settings.
-    /// - RequestResponse with the `/billpouch/fragment/1.0.0` protocol.
+    /// - RequestResponse with the `/billpouch/fragment/1.1.0` protocol.
+    /// - AutoNAT with default probe config.
+    /// - Relay client (handle passed by the SwarmBuilder).
     ///
     /// # Errors
     /// Returns an error if gossipsub config validation fails or mDNS cannot
     /// bind its multicast socket.
-    pub fn new(keypair: &Keypair) -> anyhow::Result<Self> {
+    pub fn new(keypair: &Keypair, relay_client: relay::client::Behaviour) -> anyhow::Result<Self> {
         let peer_id = PeerId::from_public_key(&keypair.public());
 
         // ── Gossipsub ─────────────────────────────────────────────────────────
@@ -143,12 +158,17 @@ impl BillPouchBehaviour {
             request_response::Config::default(),
         );
 
+        // ── AutoNAT ────────────────────────────────────────────────────────────
+        let autonat = autonat::Behaviour::new(peer_id, autonat::Config::default());
+
         Ok(Self {
             gossipsub,
             kad,
             identify,
             mdns,
             fragment_exchange,
+            autonat,
+            relay: relay_client,
         })
     }
 }

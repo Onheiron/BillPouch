@@ -16,8 +16,7 @@
 //! | POST   | `/networks/join`             | Join a gossip network              |
 //! | POST   | `/networks/leave`            | Leave a gossip network             |
 //! | POST   | `/files`                     | Store a file (base64 chunk_data)   |
-//! | GET    | `/files/:chunk_id`           | Retrieve a file (`?network=public`)|
-//!
+//! | GET    | `/files/:chunk_id`           | Retrieve a file (`?network=public`)|//! | POST   | `/relay/connect`             | Dial a relay node for NAT traversal|//!
 //! ## Usage
 //!
 //! ```text
@@ -324,6 +323,27 @@ async fn get_file(
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
+/// Body for `POST /relay/connect`.
+#[derive(Deserialize)]
+struct RelayConnectBody {
+    /// Full multiaddr of the relay node, e.g.
+    /// `/ip4/1.2.3.4/tcp/4001/p2p/12D3KooW...`
+    relay_addr: String,
+}
+
+/// `POST /relay/connect` — dial a relay node for NAT traversal.
+///
+/// Body: `{ "relay_addr": "/ip4/..." }`
+#[instrument(skip(state, body))]
+async fn relay_connect(State(state): State<AppState>, Json(body): Json<RelayConnectBody>) -> Response {
+    daemon_call!(
+        state,
+        ControlRequest::ConnectRelay {
+            relay_addr: body.relay_addr,
+        }
+    )
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
@@ -351,6 +371,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/networks/leave", post(network_leave))
         .route("/files", post(put_file))
         .route("/files/:chunk_id", get(get_file))
+        .route("/relay/connect", post(relay_connect))
         .with_state(state);
 
     let addr: SocketAddr = format!("{}:{}", args.host, args.port)

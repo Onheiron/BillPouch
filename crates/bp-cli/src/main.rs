@@ -11,6 +11,7 @@
 //!    bp bootstrap list              Show configured WAN bootstrap nodes
 //!    bp bootstrap add <addr>        Add a bootstrap node
 //!    bp bootstrap remove <addr>     Remove a bootstrap node
+//!    bp relay connect <addr>        Dial a relay node for NAT traversal
 //!    bp --daemon                    (internal) run the background daemon
 //! ```
 
@@ -125,6 +126,15 @@ enum Cmd {
         #[command(subcommand)]
         action: BootstrapAction,
     },
+
+    /// NAT traversal — connect to a relay node for circuit-relay v2.
+    ///
+    /// Dials the given relay peer and establishes a reservation so this
+    /// node is reachable from the public internet even when behind NAT.
+    Relay {
+        #[command(subcommand)]
+        action: RelayAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -140,6 +150,20 @@ enum BootstrapAction {
     /// Remove a bootstrap node by its multiaddr string.
     Remove {
         /// The exact multiaddr string to remove.
+        addr: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum RelayAction {
+    /// Dial a relay node and establish a circuit-relay v2 reservation.
+    ///
+    /// Once the reservation is accepted, this node becomes reachable at
+    /// `/p2p-circuit` addresses through the relay, enabling inbound
+    /// connections from peers on the public internet.
+    Connect {
+        /// Full multiaddr of the relay node including its PeerId, e.g.
+        /// `/ip4/1.2.3.4/tcp/4001/p2p/12D3KooW...`
         addr: String,
     },
 }
@@ -233,6 +257,12 @@ async fn main() -> anyhow::Result<()> {
             }
             BootstrapAction::Remove { addr } => {
                 commands::bootstrap::remove(&addr)?;
+            }
+        },
+
+        Some(Cmd::Relay { action }) => match action {
+            RelayAction::Connect { addr } => {
+                commands::relay::connect(addr).await?;
             }
         },
     }

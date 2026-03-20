@@ -27,6 +27,9 @@ libp2p = { version = "0.54", features = [
     "ed25519",
     "request-response",
     "cbor",
+    "autonat",
+    "relay",
+    "dns",
 ] }
 
 sha2    = "0.10"
