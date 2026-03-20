@@ -151,7 +151,6 @@ pub fn compute_coding_params(
 
     // n = round(k * (1 + q_target)), but at least k+1
     let n = ((k as f64) * (1.0 + q_target)).round().max(k as f64 + 1.0) as usize;
-    let q = (n - k) as f64 / k as f64;
 
     // n must not exceed total peer count (one fragment per Pouch)
     let n = n.min(peer_count);
@@ -221,7 +220,7 @@ pub fn probit(p: f64) -> f64 {
         -3.969_683_028_665_376e1,
         2.209_460_984_245_205e2,
         -2.759_285_104_469_687e2,
-        1.383_577_518_672_690e2,
+        1.383_577_518_672_69e2,
         -3.066_479_806_614_716e1,
         2.506_628_277_459_239,
     ];
