@@ -120,13 +120,13 @@ Ultimo commit verde atteso: branch `main` (post push).
 | 25 | `599aade` `39e6002` `031b85b` | feat: Rigenerazione Preventiva — rerouting frammenti quando fault_score ≥ FAULT_SUSPECTED |
 | 26 | `9ffa920` `52a0a87` | feat: Persistenza Kademlia — salvataggio/ripristino peer su disco (kad_peers.json) |
 | 27 | `16ff6ed` `cfd8ab5` | feat: Bootstrap nodes — nodi noti per scoperta iniziale (bootstrap.json) |
-| 28 | *(pending)* | feat: `bp bootstrap list/add/remove` — CLI per gestire bootstrap.json |
+| 28 | `d709864` | feat: `bp bootstrap list/add/remove` — CLI per gestire bootstrap.json |
 
 ### Prossimi step consigliati
 | Priorità | Cosa | Dove |
 |----------|------|------|
-| 🔴 Alta  | **`bp bootstrap list/add/remove`** — CLI per gestire bootstrap.json | `bp-cli/commands/bootstrap.rs` |
-| 🟢 Bassa | **REST API (axum)** — adapter HTTP per integrazioni terze | nuovo crate `bp-api` |
+| 🔴 Alta  | **REST API (axum)** — adapter HTTP per integrazioni terze | nuovo crate `bp-api` |
+| 🟢 Bassa | **NAT traversal** — AutoNAT + relay circuit v2 | `network/behaviour.rs` |
 
 ---
 
