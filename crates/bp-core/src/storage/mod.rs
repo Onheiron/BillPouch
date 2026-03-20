@@ -20,9 +20,11 @@
 //! ```
 
 pub mod fragment;
+pub mod manifest;
 pub mod meta;
 
 pub use fragment::{FragmentIndex, FragmentMeta};
+pub use manifest::{ChunkManifest, FileManifest, FragmentLocation, NetworkMetaKey};
 pub use meta::PouchMeta;
 
 use crate::{
