@@ -209,9 +209,7 @@ impl QosRegistry {
         &self,
         pouch_peer_ids: impl Iterator<Item = &'a str>,
     ) -> Vec<f64> {
-        pouch_peer_ids
-            .map(|id| self.stability_score(id))
-            .collect()
+        pouch_peer_ids.map(|id| self.stability_score(id)).collect()
     }
 
     /// Total number of tracked peers.
