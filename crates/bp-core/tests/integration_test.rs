@@ -45,6 +45,7 @@ fn make_daemon_state() -> (Arc<DaemonState>, mpsc::Receiver<NetworkCommand>) {
         net_tx,
         storage_managers: Arc::new(RwLock::new(std::collections::HashMap::new())),
         qos: Arc::new(RwLock::new(QosRegistry::new())),
+        outgoing_assignments: Arc::new(RwLock::new(std::collections::HashMap::new())),
     });
 
     (state, net_rx)

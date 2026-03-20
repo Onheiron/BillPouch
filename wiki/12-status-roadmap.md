@@ -40,6 +40,7 @@
 | **FileManifest + NetworkMetaKey** | ✅ Done | `storage/manifest.rs` — metadati file cifrati con chiave di rete BLAKE3 |
 | **PutFile con k/n adattativi**    | ✅ Done | `server.rs` — `compute_coding_params()` sostituisce k/n hardcoded dalla CLI |
 | **Network quality monitor**       | ✅ Done | `network/quality_monitor.rs` — Ping loop 60s, RTT EWMA → QosRegistry |
+| **Proof-of-Storage challenge**    | ✅ Done | `network/quality_monitor.rs` — PoS loop 300s, BLAKE3 challenge, fault score |
 
 ### CLI (`bp-cli`)
 
@@ -111,13 +112,13 @@ Ultimo commit verde atteso: branch `main` (post push).
 | 18 | `616323e` | feat: PutFile adaptive k/n + QosRegistry in DaemonState |
 | 19 | `03642d4` | fix(tests): missing qos field in test DaemonState helpers |
 | 20 | `4451817` | style: fmt diffs put.rs, server.rs, architecture_test.rs |
-| 21 | *(pending)* | feat: network quality monitor — Ping challenge loop, RTT→QoS |
+| 21 | `dc06e5e` `4eb6b1b` `c418cdc` `7d199a1` | feat: network quality monitor — Ping challenge loop, RTT→QoS |
+| 22 | *(pending)* | feat: Proof-of-Storage challenge — fault score, FragmentRequest::ProofOfStorage, OutgoingAssignments |
 
 ### Prossimi step consigliati
 | Priorità | Cosa | Dove |
 |----------|------|------|
-| 🔴 Alta  | **Proof-of-Storage challenge** — PoS in `quality_monitor.rs`: challenge su fragment random, verifica BLAKE3(data\|\|nonce), fault score | `network/quality_monitor.rs` |
-| 🟡 Media | **FragmentIndex gossip** — broadcast `{chunk_id, fragment_ids, pouch_peer_id}` su gossipsub per discovery distribuita | nuovo `network/fragment_index.rs` |
+| 🔴 Alta  | **FragmentIndex gossip** — broadcast `{chunk_id, fragment_ids, pouch_peer_id}` su gossipsub per discovery distribuita | nuovo `network/fragment_index.rs` |
 | 🟡 Media | **Test end-to-end bp put / bp get** con QoS e k adattivo | `tests/integration_test.rs` |
 | 🟡 Media | **Rigenerazione preventiva** — recoding automatico quando un Pouch è `suspected`/`blacklisted` | `control/server.rs` |
 | 🟢 Bassa | **Persistenza Kademlia** | `network/behaviour.rs` |
@@ -155,11 +156,11 @@ Ultimo commit verde atteso: branch `main` (post push).
 ## Changelog recente
 
 ### v0.1.4 (Marzo 2026)
-- **feat:** `network/qos.rs` — `PeerQos` + `QosRegistry`
+- **feat:** `network/qos.rs` — `PeerQos` + `QosRegistry` + `fault_score` con soglie degraded/suspected/blacklisted
 - **feat:** `coding/params.rs` — `compute_coding_params()`, `effective_recovery_probability()`
 - **feat:** `storage/manifest.rs` — `FileManifest`, `NetworkMetaKey`
-- **feat:** `DaemonState.qos` + `PutFile` adattivo (`--ph`/`--q-target`)
-- **feat:** `network/quality_monitor.rs` — loop Ping 60s, RTT EWMA → `QosRegistry`; `FragmentRequest::Ping`/`Pong`; `NetworkCommand::Ping`
+- **feat:** `DaemonState.qos` + `DaemonState.outgoing_assignments` + `PutFile` adattivo (`--ph`/`--q-target`)
+- **feat:** `network/quality_monitor.rs` — loop Ping 60s + loop PoS 300s, RTT+fault EWMA → `QosRegistry`; `FragmentRequest::ProofOfStorage`; `NetworkCommand::ProofOfStorage`; `OutgoingAssignments`
 - **fix:** coefficienti Horner `erfc_approx`, clippy, fmt
 
 ### v0.1.3 (Marzo 2026)
