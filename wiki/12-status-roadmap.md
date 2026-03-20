@@ -121,13 +121,13 @@ Ultimo commit verde atteso: branch `main` (post push).
 | 26 | `9ffa920` `52a0a87` | feat: Persistenza Kademlia — salvataggio/ripristino peer su disco (kad_peers.json) |
 | 27 | `16ff6ed` `cfd8ab5` | feat: Bootstrap nodes — nodi noti per scoperta iniziale (bootstrap.json) |
 | 28 | `d709864` `28bcfb1` | feat: `bp bootstrap list/add/remove` — CLI per gestire bootstrap.json |
-| 29 | *(pending)* | feat: `bp-api` — REST API Axum (GET /status, /peers, /files; POST /hatch, /files; DELETE /services) |
+| 29 | `6e5ca17` | feat: `bp-api` — REST API Axum (GET /status, /peers, /files; POST /hatch, /files; DELETE /services) |
 
 ### Prossimi step consigliati
 | Priorità | Cosa | Dove |
 |----------|------|------|
-| 🔴 Alta  | **REST API (axum)** — adapter HTTP per integrazioni terze | nuovo crate `bp-api` |
-| 🟢 Bassa | **NAT traversal** — AutoNAT + relay circuit v2 | `network/behaviour.rs` |
+| 🔴 Alta  | **NAT traversal** — AutoNAT + relay circuit v2 | `network/behaviour.rs` |
+| 🟢 Bassa | **Storage marketplace** — accordi di storage tra utenti | `control/server.rs`, nuovo `storage/agreement.rs` |
 
 ---
 
