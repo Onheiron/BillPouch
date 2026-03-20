@@ -89,11 +89,11 @@ impl BootstrapList {
             match addr_str.parse::<Multiaddr>() {
                 Ok(addr) => match peer_id_from_multiaddr(&addr) {
                     Some(peer_id) => {
-                        swarm.behaviour_mut().kad.add_address(&peer_id, addr.clone());
                         swarm
                             .behaviour_mut()
-                            .gossipsub
-                            .add_explicit_peer(&peer_id);
+                            .kad
+                            .add_address(&peer_id, addr.clone());
+                        swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
                         if let Err(e) = swarm.dial(addr.clone()) {
                             tracing::warn!(addr = %addr_str, "bootstrap: dial failed: {e}");
                         } else {
