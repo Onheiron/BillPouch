@@ -116,13 +116,13 @@ Ultimo commit verde atteso: branch `main` (post push).
 | 21 | `dc06e5e` `4eb6b1b` `c418cdc` `7d199a1` | feat: network quality monitor — Ping challenge loop, RTT→QoS |
 | 22 | `7461367` `702d8d8` `7a9dee4` `bd294f7` | feat: Proof-of-Storage challenge — fault score, FragmentRequest::ProofOfStorage, OutgoingAssignments |
 | 23 | `5bf7c86` `e33bab8` `b3c7637` `bd9d27b` | feat: FragmentIndex gossip — RemoteFragmentIndex, AnnounceIndex, targeted GetFile fetch |
-| 24 | *(pending)* | test: end-to-end PutFile/GetFile with adaptive k/n and local roundtrip |
+| 24 | `6465596` `6b5fd13` | test: end-to-end PutFile/GetFile with adaptive k/n and local roundtrip |
+| 25 | *(pending)* | feat: Rigenerazione Preventiva — rerouting frammenti quando fault_score ≥ FAULT_SUSPECTED |
 
 ### Prossimi step consigliati
 | Priorità | Cosa | Dove |
 |----------|------|------|
-| 🔴 Alta  | **Test end-to-end bp put / bp get** con encode lokale e decode roundtrip | `tests/integration_test.rs` |
-| 🟡 Media | **Rigenerazione preventiva** — recoding automatico quando un Pouch è `suspected`/`blacklisted` | `control/server.rs` |
+| 🔴 Alta  | **Rigenerazione Preventiva** — recoding automatico quando `fault_score ≥ FAULT_SUSPECTED` | `network/quality_monitor.rs` |
 | 🟢 Bassa | **Persistenza Kademlia** | `network/behaviour.rs` |
 
 ---
