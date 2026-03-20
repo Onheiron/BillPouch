@@ -33,7 +33,14 @@
 //! dead peer does not delay the others.
 
 use crate::{
-    network::{qos::QosRegistry, state::NetworkState, NetworkCommand, OutgoingAssignments},
+    coding::rlnc,
+    coding::rlnc::EncodedFragment,
+    network::{
+        qos::QosRegistry,
+        state::NetworkState,
+        FragmentResponse, NetworkCommand, OutgoingAssignments, OutgoingFragment,
+        FAULT_DEGRADED, FAULT_SUSPECTED,
+    },
     service::ServiceType,
 };
 use libp2p::PeerId;
@@ -93,7 +100,7 @@ pub async fn run_quality_monitor(
                 run_ping_round(&network_state, &qos, &net_tx).await;
             }
             _ = pos_interval.tick() => {
-                run_pos_round(&outgoing_assignments, &qos, &net_tx).await;
+                run_pos_round(&outgoing_assignments, &network_state, &qos, &net_tx).await;
             }
         }
     }
@@ -158,6 +165,7 @@ async fn run_ping_round(
 
 async fn run_pos_round(
     outgoing_assignments: &OutgoingAssignments,
+    network_state: &Arc<RwLock<NetworkState>>,
     qos: &Arc<RwLock<QosRegistry>>,
     net_tx: &mpsc::Sender<NetworkCommand>,
 ) {
@@ -206,7 +214,7 @@ async fn run_pos_round(
     );
 
     let mut handles = Vec::with_capacity(challenges.len());
-    for (peer_id_str, peer_id, chunk_id, fragment_id) in challenges {
+    for (peer_id_str, peer_id, chunk_id, fragment_id) in challenges.iter().cloned() {
         let qos = Arc::clone(qos);
         let net_tx = net_tx.clone();
         let handle = tokio::spawn(async move {
@@ -220,6 +228,206 @@ async fn run_pos_round(
     }
 
     tracing::debug!("quality_monitor: PoS round complete");
+
+    // ── Preventive rerouting ────────────────────────────────────────────────
+    // After all PoS results are recorded, check if any challenged peer has
+    // crossed the FAULT_SUSPECTED threshold.  If so, recode its assigned
+    // fragments and push new copies to a healthy peer.
+    let suspected: Vec<(String, PeerId)> = challenges
+        .iter()
+        .filter(|(peer_id_str, _, _, _)| {
+            qos.read()
+                .map(|g| g.fault_score(peer_id_str) >= FAULT_SUSPECTED)
+                .unwrap_or(false)
+        })
+        .map(|(peer_id_str, peer_id, _, _)| (peer_id_str.clone(), peer_id.clone()))
+        // Deduplicate by peer_id_str.
+        .fold(
+            Vec::<(String, PeerId)>::new(),
+            |mut acc, (s, p)| {
+                if !acc.iter().any(|(x, _)| x == &s) {
+                    acc.push((s, p));
+                }
+                acc
+            },
+        );
+
+    for (peer_id_str, peer_id) in suspected {
+        reroute_suspected_peer(
+            &peer_id_str,
+            peer_id,
+            outgoing_assignments,
+            network_state,
+            qos,
+            net_tx,
+        )
+        .await;
+    }
+}
+
+// ── Preventive rerouting ──────────────────────────────────────────────────────
+
+/// Recode fragments assigned to `suspected_peer` and push new copies to a
+/// healthy peer when `fault_score` has crossed [`FAULT_SUSPECTED`].
+///
+/// Steps
+/// 1. Collect unique `chunk_id`s assigned to the suspected peer.
+/// 2. Find a healthy Pouch whose `fault_score < FAULT_DEGRADED`.
+/// 3. For each chunk: fetch all fragments → [`rlnc::recode`] (1 new fragment)
+///    → [`NetworkCommand::PushFragment`] to the healthy peer → record the new
+///    assignment in [`OutgoingAssignments`].
+async fn reroute_suspected_peer(
+    suspected_peer_str: &str,
+    suspected_peer: PeerId,
+    outgoing: &OutgoingAssignments,
+    network_state: &Arc<RwLock<NetworkState>>,
+    qos: &Arc<RwLock<QosRegistry>>,
+    net_tx: &mpsc::Sender<NetworkCommand>,
+) {
+    // 1. Collect unique chunk_ids assigned to the suspected peer.
+    let chunks: Vec<String> = {
+        let guard = match outgoing.read() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        guard
+            .get(suspected_peer_str)
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .map(|f| f.chunk_id.clone())
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect()
+    };
+
+    if chunks.is_empty() {
+        tracing::debug!(
+            peer = %suspected_peer_str,
+            "reroute: no assigned chunks, nothing to reroute"
+        );
+        return;
+    }
+
+    // 2. Find a healthy replacement peer (not the suspected one, fault < FAULT_DEGRADED).
+    let healthy_peer: Option<(String, PeerId)> = {
+        let ns = match network_state.read() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        let qos_g = match qos.read() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        ns.all()
+            .into_iter()
+            .filter(|n| n.service_type == ServiceType::Pouch)
+            .filter(|n| n.peer_id != suspected_peer_str)
+            .filter(|n| qos_g.fault_score(&n.peer_id) < FAULT_DEGRADED)
+            .filter_map(|n| {
+                n.peer_id
+                    .parse::<PeerId>()
+                    .ok()
+                    .map(|pid| (n.peer_id.clone(), pid))
+            })
+            .next()
+    };
+
+    let (healthy_str, healthy_pid) = match healthy_peer {
+        Some(p) => p,
+        None => {
+            tracing::warn!(
+                peer = %suspected_peer_str,
+                "reroute: no healthy peer available, aborting rerouting"
+            );
+            return;
+        }
+    };
+
+    tracing::info!(
+        suspected = %suspected_peer_str,
+        healthy   = %healthy_str,
+        chunks    = chunks.len(),
+        "reroute: starting preventive fragment rerouting"
+    );
+
+    // 3. For each chunk: fetch → recode → push.
+    for chunk_id in chunks {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        if net_tx
+            .send(NetworkCommand::FetchChunkFragments {
+                peer_id: suspected_peer,
+                chunk_id: chunk_id.clone(),
+                resp_tx: tx,
+            })
+            .await
+            .is_err()
+        {
+            tracing::debug!(chunk = %chunk_id, "reroute: net_tx closed");
+            continue;
+        }
+
+        match tokio::time::timeout(Duration::from_secs(POS_TIMEOUT_SECS), rx).await {
+            Ok(Ok(FragmentResponse::FoundMany { fragments })) if !fragments.is_empty() => {
+                let encoded: Vec<EncodedFragment> = fragments
+                    .iter()
+                    .filter_map(|(fid, bytes)| {
+                        EncodedFragment::from_bytes(fid.clone(), chunk_id.clone(), bytes).ok()
+                    })
+                    .collect();
+
+                if encoded.is_empty() {
+                    tracing::debug!(chunk = %chunk_id, "reroute: all fragments unparseable");
+                    continue;
+                }
+
+                match rlnc::recode(&encoded, 1) {
+                    Ok(mut recoded) => {
+                        if let Some(new_frag) = recoded.pop() {
+                            let frag_id = new_frag.id.clone();
+                            let _ = net_tx
+                                .send(NetworkCommand::PushFragment {
+                                    peer_id: healthy_pid,
+                                    chunk_id: chunk_id.clone(),
+                                    fragment_id: frag_id.clone(),
+                                    data: new_frag.to_bytes(),
+                                })
+                                .await;
+
+                            if let Ok(mut oa) = outgoing.write() {
+                                oa.entry(healthy_str.clone())
+                                    .or_default()
+                                    .push(OutgoingFragment {
+                                        chunk_id: chunk_id.clone(),
+                                        fragment_id: frag_id,
+                                    });
+                            }
+
+                            tracing::info!(
+                                chunk   = %chunk_id,
+                                healthy = %healthy_str,
+                                "reroute: recoded fragment pushed to healthy peer"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        tracing::debug!(
+                            chunk = %chunk_id,
+                            err   = %e,
+                            "reroute: recode failed"
+                        );
+                    }
+                }
+            }
+            _ => {
+                tracing::debug!(
+                    chunk = %chunk_id,
+                    peer  = %suspected_peer_str,
+                    "reroute: fragment fetch failed or timed out"
+                );
+            }
+        }
+    }
 }
 
 // ── Per-peer PoS helper ───────────────────────────────────────────────────────
