@@ -238,7 +238,7 @@ async fn run_pos_round(
                 .map(|g| g.fault_score(peer_id_str) >= FAULT_SUSPECTED)
                 .unwrap_or(false)
         })
-        .map(|(peer_id_str, peer_id, _, _)| (peer_id_str.clone(), peer_id.clone()))
+        .map(|(peer_id_str, peer_id, _, _)| (peer_id_str.clone(), *peer_id))
         // Deduplicate by peer_id_str.
         .fold(Vec::<(String, PeerId)>::new(), |mut acc, (s, p)| {
             if !acc.iter().any(|(x, _)| x == &s) {
