@@ -271,9 +271,9 @@ fn erfc_approx(x: f64) -> f64 {
     // Horner-form Chebyshev approximation; error < 1.5e-7 for all real x.
     let t = 1.0 / (1.0 + 0.3275911 * x.abs());
     let poly = t
-        * (1.061_405_429
-            + t * (-1.453_152_027
-                + t * (1.421_413_741 + t * (-0.284_496_736 + t * 0.254_829_592))));
+        * (0.254_829_592
+            + t * (-0.284_496_736
+                + t * (1.421_413_741 + t * (-1.453_152_027 + t * 1.061_405_429))));
     let approx = poly * (-x * x).exp();
     if x >= 0.0 {
         approx
