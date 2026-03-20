@@ -169,7 +169,10 @@ mod tests {
     #[test]
     fn upsert_and_query() {
         let mut idx = RemoteFragmentIndex::new();
-        idx.upsert(make_ann("chunk-1", &[("peer-a", "frag-1"), ("peer-b", "frag-2")]));
+        idx.upsert(make_ann(
+            "chunk-1",
+            &[("peer-a", "frag-1"), ("peer-b", "frag-2")],
+        ));
         let ptrs = idx.pointers_for("chunk-1");
         assert_eq!(ptrs.len(), 2);
         assert_eq!(idx.chunk_count(), 1);
@@ -224,7 +227,11 @@ mod tests {
         let mut idx = RemoteFragmentIndex::new();
         idx.upsert(make_ann(
             "chunk-1",
-            &[("peer-a", "frag-1"), ("peer-b", "frag-2"), ("peer-a", "frag-3")],
+            &[
+                ("peer-a", "frag-1"),
+                ("peer-b", "frag-2"),
+                ("peer-a", "frag-3"),
+            ],
         ));
         let count = idx.pointers_for_peer("chunk-1", "peer-a").count();
         assert_eq!(count, 2);
