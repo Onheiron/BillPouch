@@ -185,7 +185,6 @@ fn record_timeout(peer_id_str: &str, qos: &Arc<RwLock<QosRegistry>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::network::qos::PeerQos;
 
     #[test]
     fn record_timeout_degrades_score() {
