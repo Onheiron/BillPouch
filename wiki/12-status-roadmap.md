@@ -41,6 +41,7 @@
 | **PutFile con k/n adattativi**    | ✅ Done | `server.rs` — `compute_coding_params()` sostituisce k/n hardcoded dalla CLI |
 | **Network quality monitor**       | ✅ Done | `network/quality_monitor.rs` — Ping loop 60s, RTT EWMA → QosRegistry |
 | **Proof-of-Storage challenge**    | ✅ Done | `network/quality_monitor.rs` — PoS loop 300s, BLAKE3 challenge, fault score |
+| **FragmentIndex gossip**           | ✅ Done | `network/fragment_gossip.rs` — `RemoteFragmentIndex`, topic `billpouch/v1/{net}/index`, targeted GetFile |
 
 ### CLI (`bp-cli`)
 
@@ -113,12 +114,12 @@ Ultimo commit verde atteso: branch `main` (post push).
 | 19 | `03642d4` | fix(tests): missing qos field in test DaemonState helpers |
 | 20 | `4451817` | style: fmt diffs put.rs, server.rs, architecture_test.rs |
 | 21 | `dc06e5e` `4eb6b1b` `c418cdc` `7d199a1` | feat: network quality monitor — Ping challenge loop, RTT→QoS |
-| 22 | *(pending)* | feat: Proof-of-Storage challenge — fault score, FragmentRequest::ProofOfStorage, OutgoingAssignments |
+| 22 | `7461367` `702d8d8` `7a9dee4` `bd294f7` | feat: Proof-of-Storage challenge — fault score, FragmentRequest::ProofOfStorage, OutgoingAssignments |
+| 23 | *(pending)* | feat: FragmentIndex gossip — RemoteFragmentIndex, AnnounceIndex, targeted GetFile fetch |
 
 ### Prossimi step consigliati
 | Priorità | Cosa | Dove |
 |----------|------|------|
-| 🔴 Alta  | **FragmentIndex gossip** — broadcast `{chunk_id, fragment_ids, pouch_peer_id}` su gossipsub per discovery distribuita | nuovo `network/fragment_index.rs` |
 | 🟡 Media | **Test end-to-end bp put / bp get** con QoS e k adattivo | `tests/integration_test.rs` |
 | 🟡 Media | **Rigenerazione preventiva** — recoding automatico quando un Pouch è `suspected`/`blacklisted` | `control/server.rs` |
 | 🟢 Bassa | **Persistenza Kademlia** | `network/behaviour.rs` |
@@ -156,6 +157,7 @@ Ultimo commit verde atteso: branch `main` (post push).
 ## Changelog recente
 
 ### v0.1.4 (Marzo 2026)
+- **feat:** `network/fragment_gossip.rs` — `FragmentIndexAnnouncement`, `RemoteFragmentIndex`; `NetworkCommand::AnnounceIndex`; PutFile pubblica indice, GetFile fetch mirato
 - **feat:** `network/qos.rs` — `PeerQos` + `QosRegistry` + `fault_score` con soglie degraded/suspected/blacklisted
 - **feat:** `coding/params.rs` — `compute_coding_params()`, `effective_recovery_probability()`
 - **feat:** `storage/manifest.rs` — `FileManifest`, `NetworkMetaKey`

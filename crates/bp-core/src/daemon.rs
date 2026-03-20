@@ -8,7 +8,10 @@ use crate::{
     control::server::{run_control_server, DaemonState},
     error::{BpError, BpResult},
     identity::Identity,
-    network::{self, run_quality_monitor, NetworkState, OutgoingAssignments, StorageManagerMap},
+    network::{
+        self, run_quality_monitor, NetworkState, OutgoingAssignments, RemoteFragmentIndex,
+        StorageManagerMap,
+    },
     service::ServiceRegistry,
 };
 use std::{
@@ -41,6 +44,7 @@ pub async fn run_daemon() -> BpResult<()> {
 
     let qos = Arc::new(RwLock::new(crate::network::QosRegistry::new()));
     let outgoing_assignments: OutgoingAssignments = Arc::new(RwLock::new(HashMap::new()));
+    let remote_fragment_index = Arc::new(RwLock::new(RemoteFragmentIndex::new()));
 
     let daemon_state = Arc::new(DaemonState {
         identity: identity.clone(),
@@ -51,6 +55,7 @@ pub async fn run_daemon() -> BpResult<()> {
         storage_managers: Arc::clone(&storage_managers),
         qos,
         outgoing_assignments: Arc::clone(&outgoing_assignments),
+        remote_fragment_index: Arc::clone(&remote_fragment_index),
     });
 
     // ── Build libp2p swarm ────────────────────────────────────────────────
@@ -65,6 +70,7 @@ pub async fn run_daemon() -> BpResult<()> {
     let net_state = Arc::clone(&network_state);
     let net_storage = Arc::clone(&storage_managers);
     let net_outgoing = Arc::clone(&outgoing_assignments);
+    let net_fragment_idx = Arc::clone(&remote_fragment_index);
     tokio::spawn(async move {
         if let Err(e) = network::run_network_loop(
             swarm,
@@ -73,6 +79,7 @@ pub async fn run_daemon() -> BpResult<()> {
             listen_addr,
             net_storage,
             net_outgoing,
+            net_fragment_idx,
         )
         .await
         {
