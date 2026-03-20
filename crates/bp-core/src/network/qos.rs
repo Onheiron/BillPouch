@@ -46,6 +46,25 @@ const W_LATENCY: f64 = 0.6;
 /// Weight of the reliability component in the composite stability score.
 const W_RELIABILITY: f64 = 0.4;
 
+// ── Fault-score thresholds ────────────────────────────────────────────────────
+
+/// Fault score (0–100) at which a peer is considered *degraded* — no new
+/// fragments will be assigned to it.
+pub const FAULT_DEGRADED: u8 = 70;
+
+/// Fault score at which a peer is *suspected* — preventive recoding begins.
+pub const FAULT_SUSPECTED: u8 = 90;
+
+/// Fault score at which a peer is *blacklisted* — evicted from routing and
+/// announced as blacklisted on gossip.
+pub const FAULT_BLACKLISTED: u8 = 100;
+
+/// Points added to `fault_score` per failed Proof-of-Storage challenge.
+const FAULT_INCREMENT: u8 = 5;
+
+/// Points subtracted from `fault_score` per successful PoS challenge.
+const FAULT_DECAY: u8 = 1;
+
 // ── PeerQos ───────────────────────────────────────────────────────────────────
 
 /// Live QoS data for a single remote Pouch peer.
@@ -73,6 +92,15 @@ pub struct PeerQos {
 
     /// Total successful challenge responses received.
     pub challenges_succeeded: u64,
+
+    /// Accumulated fault score in `[0, 100]`.
+    ///
+    /// Incremented by `FAULT_INCREMENT` on each failed Proof-of-Storage
+    /// challenge; decremented by `FAULT_DECAY` on each success.
+    /// At [`FAULT_DEGRADED`] (70) no new fragments are sent; at
+    /// [`FAULT_SUSPECTED`] (90) preventive recoding begins; at
+    /// [`FAULT_BLACKLISTED`] (100) the peer is evicted.
+    pub fault_score: u8,
 }
 
 impl PeerQos {
@@ -85,6 +113,7 @@ impl PeerQos {
             last_ping_at: None,
             challenges_sent: 0,
             challenges_succeeded: 0,
+            fault_score: 0,
         }
     }
 
@@ -120,6 +149,36 @@ impl PeerQos {
         self.challenges_sent += 1;
         if success {
             self.challenges_succeeded += 1;
+        }
+    }
+
+    /// Record a successful Proof-of-Storage response.
+    ///
+    /// Decays `fault_score` by [`FAULT_DECAY`] and records a successful
+    /// challenge in the reliability EWMA.
+    pub fn record_pos_success(&mut self) {
+        self.fault_score = self.fault_score.saturating_sub(FAULT_DECAY);
+        self.record_challenge(true);
+    }
+
+    /// Record a failed Proof-of-Storage response (timeout or invalid proof).
+    ///
+    /// Increments `fault_score` by [`FAULT_INCREMENT`] (capped at 100) and
+    /// records a failed challenge in the reliability EWMA.
+    pub fn record_pos_failure(&mut self) {
+        self.fault_score = self.fault_score.saturating_add(FAULT_INCREMENT).min(100);
+        self.record_challenge(false);
+    }
+
+    /// Current fault status derived from [`Self::fault_score`].
+    ///
+    /// Returns `"ok"`, `"degraded"`, `"suspected"`, or `"blacklisted"`.
+    pub fn fault_status(&self) -> &'static str {
+        match self.fault_score {
+            s if s >= FAULT_BLACKLISTED => "blacklisted",
+            s if s >= FAULT_SUSPECTED => "suspected",
+            s if s >= FAULT_DEGRADED => "degraded",
+            _ => "ok",
         }
     }
 
@@ -220,6 +279,19 @@ impl QosRegistry {
     /// All peer IDs currently tracked.
     pub fn peer_ids(&self) -> impl Iterator<Item = &str> {
         self.peers.keys().map(String::as_str)
+    }
+
+    /// Fault status of a peer: `"ok"`, `"degraded"`, `"suspected"`, or
+    /// `"blacklisted"`.  Returns `"ok"` if the peer has never been seen.
+    pub fn fault_status(&self, peer_id: &str) -> &'static str {
+        self.peers
+            .get(peer_id)
+            .map_or("ok", PeerQos::fault_status)
+    }
+
+    /// Fault score of a peer in `[0, 100]`.  Returns `0` if never seen.
+    pub fn fault_score(&self, peer_id: &str) -> u8 {
+        self.peers.get(peer_id).map_or(0, |p| p.fault_score)
     }
 }
 

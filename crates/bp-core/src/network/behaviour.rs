@@ -34,6 +34,16 @@ pub enum FragmentRequest {
     },
     /// Liveness ping — expects a `Pong` with the same nonce.
     Ping { nonce: u64 },
+    /// Proof-of-Storage challenge — expects a BLAKE3 proof.
+    ///
+    /// The responder must load the fragment identified by `(chunk_id,
+    /// fragment_id)`, compute `BLAKE3(raw_data || nonce.to_le_bytes())`,
+    /// and return it in a [`FragmentResponse::ProofOfStorageOk`].
+    ProofOfStorage {
+        chunk_id: String,
+        fragment_id: String,
+        nonce: u64,
+    },
 }
 
 /// Response to a fragment request.
@@ -51,6 +61,10 @@ pub enum FragmentResponse {
     StoreFailed { reason: String },
     /// Pong response to a Ping — echoes the nonce.
     Pong { nonce: u64 },
+    /// Proof-of-Storage response: `BLAKE3(fragment_data || nonce.to_le_bytes())`.
+    ///
+    /// Returned by a Pouch that successfully loaded the challenged fragment.
+    ProofOfStorageOk { proof: [u8; 32] },
 }
 
 // ── Combined behaviour ────────────────────────────────────────────────────────

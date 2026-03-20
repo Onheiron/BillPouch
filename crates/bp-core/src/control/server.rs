@@ -9,7 +9,10 @@ use crate::{
     },
     error::BpResult,
     identity::Identity,
-    network::{state::NodeInfo, FragmentResponse, NetworkCommand, QosRegistry, StorageManagerMap},
+    network::{
+        state::NodeInfo, FragmentResponse, NetworkCommand, OutgoingAssignments, QosRegistry,
+        StorageManagerMap,
+    },
     service::{ServiceInfo, ServiceRegistry, ServiceStatus, ServiceType},
     storage::StorageManager,
 };
@@ -40,6 +43,11 @@ pub struct DaemonState {
     /// Per-peer QoS data updated by the network quality monitor.
     /// Used by `PutFile` to derive adaptive k/n from live stability scores.
     pub qos: Arc<RwLock<QosRegistry>>,
+    /// Tracks which fragments were pushed to which remote Pouch peer.
+    ///
+    /// Updated by the network loop on every `PushFragment`; read by the
+    /// quality monitor to select Proof-of-Storage challenge targets.
+    pub outgoing_assignments: OutgoingAssignments,
 }
 
 /// Accept connections on the Unix socket and dispatch requests.

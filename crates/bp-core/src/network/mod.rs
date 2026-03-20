@@ -18,7 +18,7 @@ pub mod quality_monitor;
 pub mod state;
 
 pub use behaviour::{BillPouchBehaviour, FragmentRequest, FragmentResponse};
-pub use qos::{PeerQos, QosRegistry};
+pub use qos::{PeerQos, QosRegistry, FAULT_BLACKLISTED, FAULT_DEGRADED, FAULT_SUSPECTED};
 pub use quality_monitor::run_quality_monitor;
 pub use state::{NetworkState, NodeInfo};
 
@@ -34,6 +34,27 @@ use tokio::sync::mpsc;
 
 /// Shared map of active Pouch `StorageManager`s, keyed by `service_id`.
 pub type StorageManagerMap = Arc<RwLock<HashMap<String, Arc<RwLock<StorageManager>>>>>;
+
+/// A single fragment that was pushed to a remote Pouch.
+///
+/// Stored in [`OutgoingAssignments`] so the quality monitor can later issue
+/// Proof-of-Storage challenges for exactly the fragments each Pouch is
+/// supposed to hold.
+#[derive(Debug, Clone)]
+pub struct OutgoingFragment {
+    /// BLAKE3 prefix that identifies the chunk.
+    pub chunk_id: String,
+    /// UUID of the specific fragment within the chunk.
+    pub fragment_id: String,
+}
+
+/// Map of remote Pouch peer IDs → fragments pushed to them.
+///
+/// Updated by the network loop whenever a `PushFragment` command is executed.
+/// Read by [`run_quality_monitor`] to select challenge targets.
+///
+/// [`run_quality_monitor`]: crate::network::run_quality_monitor
+pub type OutgoingAssignments = Arc<RwLock<HashMap<String, Vec<OutgoingFragment>>>>;
 
 /// Commands the daemon can send to the network task over the [`mpsc`] channel.
 ///
@@ -84,6 +105,19 @@ pub enum NetworkCommand {
         sent_at_ms: u64,
         /// Receives `rtt_ms` when the Pong arrives.
         resp_tx: tokio::sync::oneshot::Sender<u64>,
+    },
+    /// Issue a Proof-of-Storage challenge to a remote Pouch.
+    ///
+    /// The network loop sends `FragmentRequest::ProofOfStorage`, awaits a
+    /// `FragmentResponse::ProofOfStorageOk`, and delivers `true` (proof
+    /// received) or `false` (no response / fragment not found) to `resp_tx`.
+    ProofOfStorage {
+        peer_id: PeerId,
+        chunk_id: String,
+        fragment_id: String,
+        nonce: u64,
+        /// Receives `true` if a proof was returned, `false` otherwise.
+        resp_tx: tokio::sync::oneshot::Sender<bool>,
     },
 }
 
@@ -138,6 +172,7 @@ pub async fn run_network_loop(
     state: Arc<RwLock<NetworkState>>,
     listen_addr: Multiaddr,
     storage_managers: StorageManagerMap,
+    outgoing_assignments: OutgoingAssignments,
 ) -> BpResult<()> {
     swarm
         .listen_on(listen_addr.clone())
@@ -159,11 +194,17 @@ pub async fn run_network_loop(
         (u64, tokio::sync::oneshot::Sender<u64>),
     > = HashMap::new();
 
+    // Map outbound request IDs → oneshot for Proof-of-Storage challenges.
+    let mut pending_pos: HashMap<
+        request_response::OutboundRequestId,
+        tokio::sync::oneshot::Sender<bool>,
+    > = HashMap::new();
+
     loop {
         tokio::select! {
             // ── Incoming swarm event ──────────────────────────────────────────
             event = swarm.select_next_some() => {
-                handle_swarm_event(event, &mut swarm, &state, &mut subscribed_networks, &storage_managers, &mut pending_fetches, &mut pending_pings).await;
+                handle_swarm_event(event, &mut swarm, &state, &mut subscribed_networks, &storage_managers, &mut pending_fetches, &mut pending_pings, &mut pending_pos).await;
             }
             // ── Command from daemon ───────────────────────────────────────────
             cmd = cmd_rx.recv() => {
@@ -218,6 +259,16 @@ pub async fn run_network_loop(
                             .behaviour_mut()
                             .fragment_exchange
                             .send_request(&peer_id, req);
+                        // Record the assignment so the quality monitor can issue PoS challenges.
+                        if let Ok(mut assignments) = outgoing_assignments.write() {
+                            assignments
+                                .entry(peer_id.to_string())
+                                .or_default()
+                                .push(OutgoingFragment {
+                                    chunk_id: chunk_id.clone(),
+                                    fragment_id: fragment_id.clone(),
+                                });
+                        }
                         tracing::debug!(peer=%peer_id, chunk=%chunk_id, frag=%fragment_id, "PushFragment sent");
                     }
                     Some(NetworkCommand::FetchChunkFragments {
@@ -249,6 +300,31 @@ pub async fn run_network_loop(
                         pending_pings.insert(req_id, (sent_at_ms, resp_tx));
                         tracing::debug!(peer=%peer_id, nonce=%nonce, "Ping sent");
                     }
+                    Some(NetworkCommand::ProofOfStorage {
+                        peer_id,
+                        chunk_id,
+                        fragment_id,
+                        nonce,
+                        resp_tx,
+                    }) => {
+                        let req = FragmentRequest::ProofOfStorage {
+                            chunk_id: chunk_id.clone(),
+                            fragment_id: fragment_id.clone(),
+                            nonce,
+                        };
+                        let req_id = swarm
+                            .behaviour_mut()
+                            .fragment_exchange
+                            .send_request(&peer_id, req);
+                        pending_pos.insert(req_id, resp_tx);
+                        tracing::debug!(
+                            peer = %peer_id,
+                            chunk = %chunk_id,
+                            frag = %fragment_id,
+                            nonce = %nonce,
+                            "ProofOfStorage challenge sent"
+                        );
+                    }
                 }
             }
         }
@@ -270,6 +346,10 @@ async fn handle_swarm_event(
     pending_pings: &mut HashMap<
         request_response::OutboundRequestId,
         (u64, tokio::sync::oneshot::Sender<u64>),
+    >,
+    pending_pos: &mut HashMap<
+        request_response::OutboundRequestId,
+        tokio::sync::oneshot::Sender<bool>,
     >,
 ) {
     match event {
@@ -390,6 +470,22 @@ async fn handle_swarm_event(
                     return;
                 }
             }
+            // Route ProofOfStorageOk to the waiting PoS oneshot channel.
+            if let FragmentResponse::ProofOfStorageOk { .. } = &response {
+                if let Some(tx) = pending_pos.remove(&request_id) {
+                    tracing::debug!(peer = %peer, "ProofOfStorage: proof received");
+                    let _ = tx.send(true);
+                    return;
+                }
+            }
+            // NotFound on a PoS challenge counts as a failure.
+            if let FragmentResponse::NotFound = &response {
+                if let Some(tx) = pending_pos.remove(&request_id) {
+                    tracing::debug!(peer = %peer, "ProofOfStorage: fragment not found");
+                    let _ = tx.send(false);
+                    return;
+                }
+            }
             // Route fragment responses to the waiting fetch oneshot channel.
             if let Some(tx) = pending_fetches.remove(&request_id) {
                 let _ = tx.send(response);
@@ -405,9 +501,12 @@ async fn handle_swarm_event(
             },
         )) => {
             tracing::warn!("Fragment request failed: {:?}", error);
-            // Drop both channels so callers get notified via RecvError.
+            // Drop all channels so callers get notified via RecvError.
             pending_fetches.remove(&request_id);
             pending_pings.remove(&request_id);
+            if let Some(tx) = pending_pos.remove(&request_id) {
+                let _ = tx.send(false);
+            }
         }
 
         _ => {}
@@ -493,5 +592,40 @@ fn serve_fragment_request(
             }
         }
         FragmentRequest::Ping { nonce } => FragmentResponse::Pong { nonce: *nonce },
+        FragmentRequest::ProofOfStorage {
+            chunk_id,
+            fragment_id,
+            nonce,
+        } => {
+            // Load the fragment data and compute BLAKE3(data || nonce.to_le_bytes()).
+            for sm_arc in managers.values() {
+                let sm = sm_arc.read().unwrap();
+                if sm
+                    .index
+                    .fragments_for_chunk(chunk_id)
+                    .iter()
+                    .any(|m| m.fragment_id == *fragment_id)
+                {
+                    match sm.load_fragment(chunk_id, fragment_id) {
+                        Ok(fragment) => {
+                            let data = fragment.to_bytes();
+                            let mut hasher = blake3::Hasher::new();
+                            hasher.update(&data);
+                            hasher.update(&nonce.to_le_bytes());
+                            let proof: [u8; 32] = hasher.finalize().into();
+                            return FragmentResponse::ProofOfStorageOk { proof };
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                chunk = %chunk_id,
+                                frag = %fragment_id,
+                                "serve_fragment PoS load error: {e}"
+                            );
+                        }
+                    }
+                }
+            }
+            FragmentResponse::NotFound
+        }
     }
 }

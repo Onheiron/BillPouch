@@ -8,7 +8,7 @@ use crate::{
     control::server::{run_control_server, DaemonState},
     error::{BpError, BpResult},
     identity::Identity,
-    network::{self, run_quality_monitor, NetworkState, StorageManagerMap},
+    network::{self, run_quality_monitor, NetworkState, OutgoingAssignments, StorageManagerMap},
     service::ServiceRegistry,
 };
 use std::{
@@ -40,6 +40,7 @@ pub async fn run_daemon() -> BpResult<()> {
     let storage_managers: StorageManagerMap = Arc::new(RwLock::new(HashMap::new()));
 
     let qos = Arc::new(RwLock::new(crate::network::QosRegistry::new()));
+    let outgoing_assignments: OutgoingAssignments = Arc::new(RwLock::new(HashMap::new()));
 
     let daemon_state = Arc::new(DaemonState {
         identity: identity.clone(),
@@ -49,6 +50,7 @@ pub async fn run_daemon() -> BpResult<()> {
         net_tx: net_tx.clone(),
         storage_managers: Arc::clone(&storage_managers),
         qos,
+        outgoing_assignments: Arc::clone(&outgoing_assignments),
     });
 
     // ── Build libp2p swarm ────────────────────────────────────────────────
@@ -62,9 +64,17 @@ pub async fn run_daemon() -> BpResult<()> {
     // ── Spawn network loop ────────────────────────────────────────────────
     let net_state = Arc::clone(&network_state);
     let net_storage = Arc::clone(&storage_managers);
+    let net_outgoing = Arc::clone(&outgoing_assignments);
     tokio::spawn(async move {
-        if let Err(e) =
-            network::run_network_loop(swarm, net_rx, net_state, listen_addr, net_storage).await
+        if let Err(e) = network::run_network_loop(
+            swarm,
+            net_rx,
+            net_state,
+            listen_addr,
+            net_storage,
+            net_outgoing,
+        )
+        .await
         {
             tracing::error!("Network loop exited with error: {}", e);
         }
@@ -86,8 +96,9 @@ pub async fn run_daemon() -> BpResult<()> {
     let monitor_state = Arc::clone(&network_state);
     let monitor_qos = Arc::clone(&daemon_state.qos);
     let monitor_tx = net_tx.clone();
+    let monitor_outgoing = Arc::clone(&outgoing_assignments);
     tokio::spawn(async move {
-        run_quality_monitor(monitor_state, monitor_qos, monitor_tx).await;
+        run_quality_monitor(monitor_state, monitor_qos, monitor_tx, monitor_outgoing).await;
     });
 
     // ── Run control socket (blocks until daemon is killed) ────────────────
