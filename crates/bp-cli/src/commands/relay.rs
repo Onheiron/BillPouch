@@ -14,11 +14,13 @@ use bp_core::control::protocol::ControlRequest;
 /// Dial `relay_addr` and request a relay reservation.
 pub async fn connect(relay_addr: String) -> anyhow::Result<()> {
     let mut client = ControlClient::connect().await?;
-    let resp = client
-        .call(ControlRequest::ConnectRelay {
+    let resp: Option<serde_json::Value> = client
+        .request(ControlRequest::ConnectRelay {
             relay_addr: relay_addr.clone(),
         })
         .await?;
-    println!("{}", serde_json::to_string_pretty(&resp)?);
+    if let Some(data) = resp {
+        println!("{}", serde_json::to_string_pretty(&data)?);
+    }
     Ok(())
 }
