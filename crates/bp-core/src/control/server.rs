@@ -17,7 +17,7 @@ use crate::{
     service::{ServiceInfo, ServiceRegistry, ServiceStatus, ServiceType},
     storage::StorageManager,
 };
-use libp2p::PeerId;
+use libp2p::{Multiaddr, PeerId};
 use std::{
     collections::HashMap,
     path::Path,
@@ -279,6 +279,24 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             ControlResponse::ok(serde_json::json!({
                 "network_id": network_id,
                 "message": format!("Left network '{}'", network_id),
+            }))
+        }
+
+        // ── ConnectRelay ──────────────────────────────────────────────────
+        ControlRequest::ConnectRelay { relay_addr } => {
+            let addr: libp2p::Multiaddr = match relay_addr.parse() {
+                Ok(a) => a,
+                Err(e) => {
+                    return ControlResponse::err(format!("Invalid relay multiaddr: {}", e));
+                }
+            };
+            let _ = state
+                .net_tx
+                .send(NetworkCommand::DialRelay { relay_addr: addr })
+                .await;
+            ControlResponse::ok(serde_json::json!({
+                "relay_addr": relay_addr,
+                "message": format!("Dialing relay '{}'", relay_addr),
             }))
         }
 

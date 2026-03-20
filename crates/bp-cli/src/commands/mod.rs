@@ -16,3 +16,4 @@ pub mod get;
 pub mod hatch;
 pub mod join;
 pub mod put;
+pub mod relay;

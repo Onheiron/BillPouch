@@ -108,6 +108,12 @@ pub enum NetworkCommand {
     },
     /// Ask the network loop to exit cleanly.
     Shutdown,
+    /// Dial a relay node and create a circuit reservation.
+    ///
+    /// After a successful reservation the node becomes reachable at
+    /// `/p2p-circuit` addresses routed through the relay, enabling
+    /// connectivity even when behind symmetric NAT.
+    DialRelay { relay_addr: Multiaddr },
     /// Ping a remote peer for RTT measurement.
     ///
     /// The network loop sends a `FragmentRequest::Ping`, waits for the
@@ -138,8 +144,10 @@ pub enum NetworkCommand {
 
 /// Construct a fully configured libp2p [`Swarm`] using the Tokio runtime.
 ///
-/// The transport stack is: TCP → Noise (encryption) → Yamux (multiplexing).
-/// The behaviour stack is: gossipsub + Kademlia + Identify + mDNS.
+/// The transport stack is: TCP → Noise (encryption) → Yamux (multiplexing) +
+/// a relay-circuit transport for NAT traversal.
+/// The behaviour stack is: gossipsub + Kademlia + Identify + mDNS +
+/// AutoNAT + relay client.
 ///
 /// # Errors
 /// Returns an error if any behaviour or transport component fails to initialise
@@ -154,8 +162,9 @@ pub fn build_swarm(
             libp2p::noise::Config::new,
             libp2p::yamux::Config::default,
         )?
-        .with_behaviour(|key| {
-            BillPouchBehaviour::new(key)
+        .with_relay_client(libp2p::noise::Config::new, libp2p::yamux::Config::default)?
+        .with_behaviour(|key, relay_client| {
+            BillPouchBehaviour::new(key, relay_client)
                 .map_err(|e| Box::<dyn std::error::Error + Send + Sync>::from(e.to_string()))
         })
         .map_err(|e| anyhow::anyhow!("{}", e))?
@@ -356,6 +365,13 @@ pub async fn run_network_loop(
                         pending_fetches.insert(req_id, resp_tx);
                         tracing::debug!(peer=%peer_id, chunk=%chunk_id, "FetchChunkFragments sent");
                     }
+                    Some(NetworkCommand::DialRelay { relay_addr }) => {
+                        if let Err(e) = swarm.dial(relay_addr.clone()) {
+                            tracing::warn!(addr=%relay_addr, "Failed to dial relay: {}", e);
+                        } else {
+                            tracing::info!(addr=%relay_addr, "Dialing relay node for NAT traversal");
+                        }
+                    }
                     Some(NetworkCommand::Ping {
                         peer_id,
                         sent_at_ms,
@@ -515,7 +531,52 @@ async fn handle_swarm_event(
                 swarm.behaviour_mut().kad.add_address(&peer_id, addr);
             }
         }
+        // ── AutoNAT: public reachability status changed ────────────────────
+        SwarmEvent::Behaviour(behaviour::BillPouchBehaviourEvent::Autonat(
+            libp2p::autonat::Event::StatusChanged { old, new },
+        )) => {
+            tracing::info!(
+                old = ?old,
+                new = ?new,
+                "AutoNAT: public reachability status changed"
+            );
+        }
 
+        // ── AutoNAT: probe events (debug only) ───────────────────────────
+        SwarmEvent::Behaviour(behaviour::BillPouchBehaviourEvent::Autonat(ev)) => {
+            tracing::debug!(event = ?ev, "AutoNAT probe event");
+        }
+
+        // ── Relay client: reservation accepted ─────────────────────────────
+        SwarmEvent::Behaviour(behaviour::BillPouchBehaviourEvent::Relay(
+            libp2p::relay::client::Event::ReservationReqAccepted {
+                relay_peer_id,
+                renewed,
+            },
+        )) => {
+            tracing::info!(
+                relay = %relay_peer_id,
+                renewed = %renewed,
+                "Relay reservation accepted — node is reachable via relay"
+            );
+        }
+
+        // ── Relay client: outbound circuit established ───────────────────────
+        SwarmEvent::Behaviour(behaviour::BillPouchBehaviourEvent::Relay(
+            libp2p::relay::client::Event::OutboundCircuitEstablished {
+                relay_peer_id, ..
+            },
+        )) => {
+            tracing::info!(
+                relay = %relay_peer_id,
+                "Relay outbound circuit established"
+            );
+        }
+
+        // ── Relay client: other events (debug) ────────────────────────────
+        SwarmEvent::Behaviour(behaviour::BillPouchBehaviourEvent::Relay(ev)) => {
+            tracing::debug!(event = ?ev, "Relay client event");
+        }
         // ── New listen address ────────────────────────────────────────────
         SwarmEvent::NewListenAddr { address, .. } => {
             tracing::info!(addr=%address, "Now listening");
