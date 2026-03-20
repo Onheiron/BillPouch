@@ -333,6 +333,7 @@ pub async fn run_network_loop(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_swarm_event(
     event: SwarmEvent<behaviour::BillPouchBehaviourEvent>,
     swarm: &mut Swarm<BillPouchBehaviour>,
