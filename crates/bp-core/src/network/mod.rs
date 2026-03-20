@@ -13,9 +13,11 @@
 //! - [`state`]     — in-memory [`NetworkState`] updated from incoming gossip messages.
 
 pub mod behaviour;
+pub mod qos;
 pub mod state;
 
 pub use behaviour::{BillPouchBehaviour, FragmentRequest, FragmentResponse};
+pub use qos::{PeerQos, QosRegistry};
 pub use state::{NetworkState, NodeInfo};
 
 use crate::{
