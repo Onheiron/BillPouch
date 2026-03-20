@@ -13,11 +13,13 @@
 //! - [`state`]     — in-memory [`NetworkState`] updated from incoming gossip messages.
 
 pub mod behaviour;
+pub mod quality_monitor;
 pub mod qos;
 pub mod state;
 
 pub use behaviour::{BillPouchBehaviour, FragmentRequest, FragmentResponse};
 pub use qos::{PeerQos, QosRegistry};
+pub use quality_monitor::run_quality_monitor;
 pub use state::{NetworkState, NodeInfo};
 
 use crate::{
@@ -70,6 +72,19 @@ pub enum NetworkCommand {
     },
     /// Ask the network loop to exit cleanly.
     Shutdown,
+    /// Ping a remote peer for RTT measurement.
+    ///
+    /// The network loop sends a `FragmentRequest::Ping`, waits for the
+    /// `FragmentResponse::Pong`, computes the RTT in milliseconds and
+    /// forwards it to `resp_tx`.  On timeout or failure the sender is
+    /// dropped without sending.
+    Ping {
+        peer_id: PeerId,
+        /// Monotonic timestamp (ms) at send time — used to compute RTT.
+        sent_at_ms: u64,
+        /// Receives `rtt_ms` when the Pong arrives.
+        resp_tx: tokio::sync::oneshot::Sender<u64>,
+    },
 }
 
 /// Construct a fully configured libp2p [`Swarm`] using the Tokio runtime.
@@ -138,11 +153,17 @@ pub async fn run_network_loop(
         tokio::sync::oneshot::Sender<FragmentResponse>,
     > = HashMap::new();
 
+    // Map outbound request IDs → (sent_at_ms, oneshot) for Ping RTT tracking.
+    let mut pending_pings: HashMap<
+        request_response::OutboundRequestId,
+        (u64, tokio::sync::oneshot::Sender<u64>),
+    > = HashMap::new();
+
     loop {
         tokio::select! {
             // ── Incoming swarm event ──────────────────────────────────────────
             event = swarm.select_next_some() => {
-                handle_swarm_event(event, &mut swarm, &state, &mut subscribed_networks, &storage_managers, &mut pending_fetches).await;
+                handle_swarm_event(event, &mut swarm, &state, &mut subscribed_networks, &storage_managers, &mut pending_fetches, &mut pending_pings).await;
             }
             // ── Command from daemon ───────────────────────────────────────────
             cmd = cmd_rx.recv() => {
@@ -214,6 +235,20 @@ pub async fn run_network_loop(
                         pending_fetches.insert(req_id, resp_tx);
                         tracing::debug!(peer=%peer_id, chunk=%chunk_id, "FetchChunkFragments sent");
                     }
+                    Some(NetworkCommand::Ping {
+                        peer_id,
+                        sent_at_ms,
+                        resp_tx,
+                    }) => {
+                        let nonce = sent_at_ms; // reuse timestamp as nonce
+                        let req = FragmentRequest::Ping { nonce };
+                        let req_id = swarm
+                            .behaviour_mut()
+                            .fragment_exchange
+                            .send_request(&peer_id, req);
+                        pending_pings.insert(req_id, (sent_at_ms, resp_tx));
+                        tracing::debug!(peer=%peer_id, nonce=%nonce, "Ping sent");
+                    }
                 }
             }
         }
@@ -231,6 +266,10 @@ async fn handle_swarm_event(
     pending_fetches: &mut HashMap<
         request_response::OutboundRequestId,
         tokio::sync::oneshot::Sender<FragmentResponse>,
+    >,
+    pending_pings: &mut HashMap<
+        request_response::OutboundRequestId,
+        (u64, tokio::sync::oneshot::Sender<u64>),
     >,
 ) {
     match event {
@@ -338,7 +377,20 @@ async fn handle_swarm_event(
                     },
             },
         )) => {
-            // Route response to the waiting oneshot channel if present.
+            // Route Pong responses to the waiting Ping oneshot channel.
+            if let FragmentResponse::Pong { nonce } = &response {
+                if let Some((sent_at_ms, tx)) = pending_pings.remove(&request_id) {
+                    let now_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64;
+                    let rtt_ms = now_ms.saturating_sub(sent_at_ms);
+                    tracing::debug!(peer=%peer, nonce=%nonce, rtt_ms=%rtt_ms, "Pong received");
+                    let _ = tx.send(rtt_ms);
+                    return;
+                }
+            }
+            // Route fragment responses to the waiting fetch oneshot channel.
             if let Some(tx) = pending_fetches.remove(&request_id) {
                 let _ = tx.send(response);
             } else {
@@ -353,8 +405,9 @@ async fn handle_swarm_event(
             },
         )) => {
             tracing::warn!("Fragment request failed: {:?}", error);
-            // Drop the oneshot so the caller gets a RecvError.
+            // Drop both channels so callers get notified via RecvError.
             pending_fetches.remove(&request_id);
+            pending_pings.remove(&request_id);
         }
 
         _ => {}
@@ -439,5 +492,6 @@ fn serve_fragment_request(
                 },
             }
         }
+        FragmentRequest::Ping { nonce } => FragmentResponse::Pong { nonce: *nonce },
     }
 }

@@ -8,7 +8,7 @@ use crate::{
     control::server::{run_control_server, DaemonState},
     error::{BpError, BpResult},
     identity::Identity,
-    network::{self, NetworkState, StorageManagerMap},
+    network::{self, run_quality_monitor, NetworkState, StorageManagerMap},
     service::ServiceRegistry,
 };
 use std::{
@@ -80,6 +80,14 @@ pub async fn run_daemon() -> BpResult<()> {
                 ns.evict_stale(120); // evict nodes silent for >2 min
             }
         }
+    });
+
+    // ── Network quality monitor — Ping all Pouch peers, update QoS ──────
+    let monitor_state = Arc::clone(&network_state);
+    let monitor_qos = Arc::clone(&daemon_state.qos);
+    let monitor_tx = net_tx.clone();
+    tokio::spawn(async move {
+        run_quality_monitor(monitor_state, monitor_qos, monitor_tx).await;
     });
 
     // ── Run control socket (blocks until daemon is killed) ────────────────
