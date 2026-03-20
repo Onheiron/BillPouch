@@ -16,13 +16,15 @@
 | ServiceType (pouch/bill/post)     | ✅ Done | Parsing case-insensitive                                    |
 | ServiceRegistry (in-memory)       | ✅ Done | register, get, remove, all con UUID v4                      |
 | libp2p Swarm                      | ✅ Done | gossipsub + Kademlia + mDNS + Identify + Noise + Yamux      |
-| Fragment exchange (req/resp)      | ✅ Done | `/billpouch/fragment/1.0.0` via `request_response::cbor`    |
+| Fragment exchange (req/resp)      | ✅ Done | `/billpouch/fragment/1.1.0` via `request_response::cbor`    |
 | Gossip NodeInfo                   | ✅ Done | publish, subscribe, deserialize                             |
 | NetworkState store                | ✅ Done | upsert, evict_stale(120s), in_network                       |
 | Topic naming gossipsub            | ✅ Done | `billpouch/v1/{network_id}/nodes`                           |
 | Unix socket IPC                   | ✅ Done | newline-delimited JSON, async Tokio                         |
 | Protocollo controllo              | ✅ Done | Ping, Status, Hatch, Flock, Farewell, Join, Leave           |
 | **PutFile / GetFile**             | ✅ Done | Encode+store e decode+retrieve via controllo socket         |
+| **Distribuzione automatica frammenti** | ✅ Done | PutFile push round-robin ai Pouch remoti via PushFragment |
+| **Raccolta frammenti remoti**     | ✅ Done | GetFile fetch da Pouch remoti via FetchChunkFragments se local < k |
 | DaemonState condiviso             | ✅ Done | Arc + RwLock + `StorageManagerMap` type alias               |
 | PID file                          | ✅ Done | Rilevamento daemon in esecuzione                            |
 | Multi-rete                        | ✅ Done | Join/leave reti indipendenti                                |
@@ -45,8 +47,8 @@
 | `bp farewell`    | ✅ Done | Stop servizio per UUID                                       |
 | `bp join`        | ✅ Done | Join rete, errore se già joined                              |
 | `bp --daemon`    | ✅ Done | Avvio daemon interno                                         |
-| **`bp put`**     | ✅ Done | RLNC encode + store in Pouch locale (`--k`, `--n`, `--network`) |
-| **`bp get`**     | ✅ Done | Decode + write file da chunk_id (`--network`, `--output`)    |
+| **`bp put`**     | ✅ Done | RLNC encode + store locale + distribute a Pouch remoti      |
+| **`bp get`**     | ✅ Done | Decode da frammenti locali + fetch remoti se necessario      |
 
 ### Testing & DevOps
 
@@ -68,8 +70,6 @@
 
 | Limitazione                        | Impatto | Descrizione                                                              |
 |------------------------------------|---------|--------------------------------------------------------------------------|
-| **Distribuzione frammenti stub**   | Alto    | `PutFile` store solo in locale; nessun push automatico ad altri Pouch    |
-| **`PushFragment` non completato**  | Alto    | `NetworkCommand::PushFragment` invia la request ma ignora la risposta     |
 | **Kademlia in memoria**            | Medio   | `MemoryStore` si svuota ad ogni riavvio del daemon                       |
 | **Nessuna persistenza gossip**     | Medio   | I peer noti vengono persi al riavvio                                     |
 | **Nessun NAT traversal**           | Medio   | Funziona su LAN/Docker, non testato attraverso NAT                       |
@@ -79,11 +79,11 @@
 
 ---
 
-## Stato sessione di sviluppo (aggiornato 19 Marzo 2026)
+## Stato sessione di sviluppo (aggiornato 20 Marzo 2026)
 
-Ultimo commit verde atteso: `6a37a44` (branch `main`).
+Ultimo commit verde atteso: branch `main` (post push).
 
-### Fatto in questa sessione
+### Fatto nelle sessioni recenti
 | # | Commit | Descrizione |
 |---|--------|-------------|
 | 1 | `77dbf6a` | feat(core): GF(2⁸) + RLNC (encode/recode/decode) + StorageManager |
@@ -98,12 +98,12 @@ Ultimo commit verde atteso: `6a37a44` (branch `main`).
 | 10 | `e039109` | fix(clippy): StorageManagerMap type alias |
 | 11 | `95e8a89` | fix(test+clippy): storage_managers in architecture_test + clamp() |
 | 12 | `6a37a44` | fix(test): storage_managers in integration_test.rs |
+| 13 | `c92573f` | docs: update roadmap with session progress |
+| 14 | *(pending)* | feat: P2P fragment distribution + remote fragment collection |
 
 ### Prossimi step consigliati
 | Priorità | Cosa | Dove |
 |----------|------|------|
-| 🔴 Alta | **Distribuzione automatica frammenti** — quando un Pouch hatches, iterare i Pouch noti in `NetworkState` e fare `PushFragment` per ogni chunk locale | `control/server.rs` → dispatch Hatch |
-| 🔴 Alta | **Raccolta frammenti remoti in GetFile** — se i frammenti locali sono < k, interrogare i Pouch remoti via `FetchFragment` prima di decode | `control/server.rs` → dispatch GetFile |
 | 🟡 Media | **Test end-to-end bp put / bp get** — aggiungere scenario in `integration_test.rs` | `tests/integration_test.rs` |
 | 🟡 Media | **FragmentIndex gossip** — broadcast `chunk_id + fragment_ids + pouch_peer_id` su gossipsub per discovery distribuita | nuovo `network/fragment_index.rs` |
 | 🟡 Media | **Network quality monitor** — ping challenge + proof-of-storage + fault score | vedi `wiki/16-network-quality.md` |
@@ -147,134 +147,12 @@ Ultimo commit verde atteso: `6a37a44` (branch `main`).
 - **feat:** StorageManager con quota enforcement (`storage/mod.rs`, `meta.rs`, `fragment.rs`)
 - **feat:** `ControlRequest::PutFile` / `GetFile` — encode+store e decode locale
 - **feat:** `DaemonState::storage_managers` (`StorageManagerMap`) — un manager per Pouch attivo
-- **feat:** libp2p `request_response::cbor` su `/billpouch/fragment/1.0.0`
-- **feat:** `NetworkCommand::PushFragment` / `FetchFragment`
+- **feat:** libp2p `request_response::cbor` su `/billpouch/fragment/1.1.0`
+- **feat:** `NetworkCommand::PushFragment` / `FetchChunkFragments` con oneshot channel
 - **feat:** `bp put <file>` e `bp get <chunk_id>` CLI
-- **fix:** build binari nel workflow release-please
-
-### v0.1.2
-- **fix:** trigger release su tag `billpouch-v*`
-
-### v0.1.1
-- **feat:** smoke test Docker con 3 nodi P2P reali
-- **fix:** accetta swarm build failure in ambienti CI limitati
-- **fix:** `#[tokio::test]` per il test swarm su Linux (netlink)
-- **fix:** Rust image 1.85 per edition 2024
-- **fix:** propagazione errori mDNS invece di panic
-
-### v0.1.0
-- Release iniziale — architettura completa, CLI funzionante, gossip DHT
-
-## Versione corrente
-
-**v0.1.3** (Alpha) — rilasciata Marzo 2026
-
----
-
-## Funzionalità implementate ✅
-
-### Core (`bp-core`)
-
-| Funzionalità                      | Stato   | Note                                         |
-|-----------------------------------|---------|----------------------------------------------|
-| Gestione identità Ed25519         | ✅ Done | login, logout, fingerprint, alias            |
-| ServiceType (pouch/bill/post)     | ✅ Done | Parsing case-insensitive                     |
-| ServiceRegistry (in-memory)       | ✅ Done | register, get, remove, all con UUID v4       |
-| libp2p Swarm                      | ✅ Done | gossipsub + Kademlia + mDNS + Noise + Yamux  |
-| Gossip NodeInfo                   | ✅ Done | publish, subscribe, deserialize              |
-| NetworkState store                | ✅ Done | upsert, evict_stale(120s), in_network        |
-| Topic naming gossipsub            | ✅ Done | `billpouch/v1/{network_id}/nodes`            |
-| Unix socket IPC                   | ✅ Done | newline-delimited JSON, async Tokio          |
-| Protocollo controllo              | ✅ Done | Ping, Status, Hatch, Flock, Farewell, Join   |
-| DaemonState condiviso             | ✅ Done | Arc + RwLock thread-safe                     |
-| PID file                          | ✅ Done | Rilevamento daemon in esecuzione             |
-| Multi-rete                        | ✅ Done | Join/leave reti indipendenti                 |
-| Metadata estensibili NodeInfo     | ✅ Done | HashMap<String, Value>                       |
-| Percorsi XDG-aware                | ✅ Done | `directories` crate                          |
-
-### CLI (`bp-cli`)
-
-| Comando          | Stato   | Note                                         |
-|------------------|---------|----------------------------------------------|
-| `bp login`       | ✅ Done | Con `--alias` opzionale                      |
-| `bp logout`      | ✅ Done | Rimozione irreversibile keypair              |
-| `bp hatch`       | ✅ Done | Auto-avvio daemon, metadata pouch/bill       |
-| `bp flock`       | ✅ Done | Output formattato con tabelle                |
-| `bp farewell`    | ✅ Done | Stop servizio per UUID                       |
-| `bp join`        | ✅ Done | Join rete, errore se già joined              |
-| `bp --daemon`    | ✅ Done | Avvio daemon interno                         |
-
-### Testing & DevOps
-
-| Componente                    | Stato   |
-|-------------------------------|---------|
-| 43+ test di architettura      | ✅ Done |
-| Integration test end-to-end   | ✅ Done |
-| Smoke test Docker 3 nodi      | ✅ Done |
-| Playground interattivo 5+1    | ✅ Done |
-| CI (fmt + clippy + test)      | ✅ Done |
-| Coverage → Codecov            | ✅ Done |
-| Docs → GitHub Pages           | ✅ Done |
-| Security audit                | ✅ Done |
-| Release binari cross-platform | ✅ Done |
-
----
-
-## Limitazioni attuali (Alpha) ⚠️
-
-| Limitazione                      | Impatto | Descrizione                                               |
-|----------------------------------|---------|-----------------------------------------------------------|
-| **Nessun trasferimento file**    | Alto    | Pouch, bill, post sono stub — nessun dato viene trasferito |
-| **Kademlia in memoria**          | Medio   | `MemoryStore` si svuota ad ogni riavvio del daemon        |
-| **Nessuna persistenza gossip**   | Medio   | I peer noti vengono persi al riavvio                      |
-| **Nessun NAT traversal**         | Medio   | Funziona su LAN/Docker, non testato attraverso NAT       |
-| **Chiave in chiaro su disco**    | Medio   | Nessuna passphrase/cifratura del file identità            |
-| **Nessun multi-device sync**     | Basso   | Non è possibile usare la stessa identità su più macchine  |
-| **Nessuna autenticazione rete**  | Basso   | Chiunque conosce il network_id può partecipare            |
-
----
-
-## Roadmap
-
-### In progress 🔨
-
-| Funzionalità | Descrizione | Spec |
-|---|---|---|
-| **Pouch — storage bid** | Directory locale, meta.json, quota enforcement | [14-storage-bidding.md](./14-storage-bidding.md) |
-| **RLNC encoding** | Chunking, GF(2⁸), encoding/decoding/recoding | [15-erasure-coding.md](./15-erasure-coding.md) |
-| **Fragment distribution** | Push fragment ai Pouch disponibili, fill nuovi nodi | [15-erasure-coding.md](./15-erasure-coding.md) |
-| **Network quality monitor** | Challenge Ping + PoS, fault score, blacklist gossip | [16-network-quality.md](./16-network-quality.md) |
-
-### Pianificato 📋
-
-| Funzionalità | Descrizione |
-|---|---|
-| Bill — `bp put <file>` | Upload file: chunking → RLNC encoding → distribuzione ai Pouch |
-| Bill — `bp get <file>` | Download: raccolta k fragment → decodifica → ricostruzione file |
-| FragmentIndex gossip | Indice distribuito `{chunk_id, fragment_id, fragment_hash, pouch_id}` |
-| Parametri N/K dinamici | Calcolo ridondanza in base a numero Pouch, stabilità, target durability |
-| Rigenerazione preventiva | Recoding automatico quando un Pouch è `suspected` o `blacklisted` |
-| Storage marketplace | Accordi di storage tra utenti |
-| REST API (axum) | Adapter HTTP per integrazioni terze |
-| gRPC API (tonic) | Adapter gRPC per sistemi enterprise |
-| Persistenza Kademlia | Store su disco (sled/rocksdb) per il DHT |
-| Bootstrap nodes | Nodi noti per la scoperta iniziale oltre mDNS |
-
-### Futuro 🔮
-
-| Funzionalità              | Descrizione                                   |
-|---------------------------|-----------------------------------------------|
-| NAT traversal             | AutoNAT + relay circuit v2                    |
-| Web dashboard (Tauri)     | UI desktop cross-platform                     |
-| Erasure coding (Pouch)    | Ridondanza dei dati con Reed-Solomon          |
-| Encryption at rest        | Cifratura file prima del upload               |
-| Passphrase identità       | Cifratura del file `identity.key`             |
-
----
-
-## Changelog recente
-
-### v0.1.3 (Marzo 2026)
+- **feat:** Distribuzione automatica frammenti a Pouch remoti (round-robin)
+- **feat:** Raccolta frammenti remoti in GetFile (con timeout 10s)
+- **feat:** `FragmentRequest` enum (Fetch/FetchChunkFragments/Store) + `FragmentResponse` esteso
 - **fix:** build binari nel workflow release-please
 
 ### v0.1.2

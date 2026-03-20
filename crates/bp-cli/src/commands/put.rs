@@ -56,9 +56,16 @@ pub async fn put(
             file_bytes,
             path.file_name().unwrap_or_default()
         );
-        println!("   chunk_id  : {}", d.chunk_id);
-        println!("   fragments : {}/{} stored", d.fragments_stored, n);
-        println!("   network   : {}", network);
+        println!("   chunk_id     : {}", d.chunk_id);
+        println!(
+            "   fragments    : {}/{} stored locally",
+            d.fragments_stored, n
+        );
+        println!(
+            "   distributed  : {} pushed to remote pouches",
+            d.fragments_distributed
+        );
+        println!("   network      : {}", network);
     }
 
     Ok(())

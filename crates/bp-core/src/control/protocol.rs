@@ -120,6 +120,8 @@ pub struct PutFileData {
     pub chunk_id: String,
     /// How many fragments were stored locally.
     pub fragments_stored: usize,
+    /// How many fragments were pushed to remote Pouches.
+    pub fragments_distributed: usize,
     /// Human-readable summary.
     pub message: String,
 }
@@ -133,4 +135,6 @@ pub struct GetFileData {
     pub data: Vec<u8>,
     /// How many fragments were used for decoding.
     pub fragments_used: usize,
+    /// How many of those fragments came from remote Pouches.
+    pub fragments_remote: usize,
 }

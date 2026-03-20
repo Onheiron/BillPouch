@@ -34,9 +34,14 @@ pub async fn get(chunk_id: String, network: String, output: PathBuf) -> anyhow::
         .map_err(|e| anyhow::anyhow!("Cannot write {:?}: {}", output, e))?;
 
     println!("✓ Decoded {} bytes → {:?}", d.data.len(), output);
-    println!("   chunk_id       : {}", d.chunk_id);
-    println!("   fragments used : {}", d.fragments_used);
-    println!("   network        : {}", network);
+    println!("   chunk_id        : {}", d.chunk_id);
+    println!(
+        "   fragments used  : {} ({} local, {} remote)",
+        d.fragments_used,
+        d.fragments_used - d.fragments_remote,
+        d.fragments_remote
+    );
+    println!("   network         : {}", network);
 
     Ok(())
 }

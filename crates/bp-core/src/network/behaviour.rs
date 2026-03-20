@@ -16,23 +16,37 @@ use std::time::Duration;
 
 // ── Fragment exchange protocol ────────────────────────────────────────────────
 
-/// Request sent from a Bill (or Pouch) to a remote Pouch asking for one
-/// specific fragment.
+/// Request sent between Pouch nodes for fragment operations.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FragmentRequest {
-    /// BLAKE3 chunk hash prefix of the target chunk.
-    pub chunk_id: String,
-    /// UUID of the specific fragment to retrieve.
-    pub fragment_id: String,
+pub enum FragmentRequest {
+    /// Ask a remote Pouch for a specific fragment by id.
+    Fetch {
+        chunk_id: String,
+        fragment_id: String,
+    },
+    /// Ask a remote Pouch for ALL fragments it holds for a chunk.
+    FetchChunkFragments { chunk_id: String },
+    /// Push a fragment to a remote Pouch for storage.
+    Store {
+        chunk_id: String,
+        fragment_id: String,
+        data: Vec<u8>,
+    },
 }
 
-/// Response carrying the raw `.frag` blob, or a not-found signal.
+/// Response to a fragment request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FragmentResponse {
-    /// Fragment bytes in the `EncodedFragment` binary format.
+    /// Single fragment found (response to Fetch).
     Found { data: Vec<u8> },
-    /// This peer does not hold the requested fragment.
+    /// Multiple fragments found (response to FetchChunkFragments).
+    FoundMany { fragments: Vec<(String, Vec<u8>)> },
+    /// Fragment/chunk not found on this peer.
     NotFound,
+    /// Fragment stored successfully (response to Store).
+    Stored,
+    /// Store failed (response to Store).
+    StoreFailed { reason: String },
 }
 
 // ── Combined behaviour ────────────────────────────────────────────────────────
@@ -105,7 +119,7 @@ impl BillPouchBehaviour {
         // ── Fragment exchange ──────────────────────────────────────────────────
         let fragment_exchange = request_response::cbor::Behaviour::new(
             [(
-                StreamProtocol::new("/billpouch/fragment/1.0.0"),
+                StreamProtocol::new("/billpouch/fragment/1.1.0"),
                 request_response::ProtocolSupport::Full,
             )],
             request_response::Config::default(),
