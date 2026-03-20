@@ -1544,9 +1544,7 @@ fn make_in_memory_state() -> std::sync::Arc<bp_core::control::server::DaemonStat
         storage_managers: std::sync::Arc::new(std::sync::RwLock::new(
             std::collections::HashMap::new(),
         )),
-        qos: std::sync::Arc::new(std::sync::RwLock::new(
-            bp_core::network::QosRegistry::new(),
-        )),
+        qos: std::sync::Arc::new(std::sync::RwLock::new(bp_core::network::QosRegistry::new())),
     })
 }
 

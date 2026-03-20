@@ -330,8 +330,7 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             let (k, n, q, pe) =
                 match coding_params::compute_coding_params(&stabilities, ph, q_target) {
                     Ok(p) => {
-                        let pe =
-                            coding_params::effective_recovery_probability(&stabilities, p.k);
+                        let pe = coding_params::effective_recovery_probability(&stabilities, p.k);
                         (p.k, p.n, p.q, pe)
                     }
                     Err(e) => {
@@ -339,10 +338,8 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                         let peer_n = stabilities.len().max(2);
                         let fallback_k = (peer_n / 2).max(1);
                         let fallback_q = (peer_n - fallback_k) as f64 / fallback_k as f64;
-                        let pe = coding_params::effective_recovery_probability(
-                            &stabilities,
-                            fallback_k,
-                        );
+                        let pe =
+                            coding_params::effective_recovery_probability(&stabilities, fallback_k);
                         (fallback_k, peer_n, fallback_q, pe)
                     }
                 };

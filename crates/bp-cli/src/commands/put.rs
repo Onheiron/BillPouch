@@ -10,12 +10,7 @@ use crate::client::ControlClient;
 ///
 /// `k` and `n` are computed by the daemon from live peer QoS data and the
 /// `ph` target recovery probability.
-pub async fn put(
-    path: PathBuf,
-    network: String,
-    ph: f64,
-    q_target: f64,
-) -> anyhow::Result<()> {
+pub async fn put(path: PathBuf, network: String, ph: f64, q_target: f64) -> anyhow::Result<()> {
     if !Identity::exists()? {
         anyhow::bail!("Not logged in. Run `bp login` first.");
     }
