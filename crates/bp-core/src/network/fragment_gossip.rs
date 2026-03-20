@@ -102,11 +102,11 @@ impl RemoteFragmentIndex {
     }
 
     /// Pointers for a chunk hosted by a specific peer.
-    pub fn pointers_for_peer<'a>(
+    pub fn pointers_for_peer<'a, 'b>(
         &'a self,
-        chunk_id: &str,
-        peer_id: &str,
-    ) -> impl Iterator<Item = &'a FragmentPointer> + use<'a, '_, '_> {
+        chunk_id: &'b str,
+        peer_id: &'b str,
+    ) -> impl Iterator<Item = &'a FragmentPointer> + use<'a, 'b> {
         self.pointers_for(chunk_id)
             .iter()
             .filter(move |p| p.peer_id == peer_id)
