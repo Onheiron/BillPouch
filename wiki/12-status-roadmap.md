@@ -118,13 +118,14 @@ Ultimo commit verde atteso: branch `main` (post push).
 | 23 | `5bf7c86` `e33bab8` `b3c7637` `bd9d27b` | feat: FragmentIndex gossip — RemoteFragmentIndex, AnnounceIndex, targeted GetFile fetch |
 | 24 | `6465596` `6b5fd13` | test: end-to-end PutFile/GetFile with adaptive k/n and local roundtrip |
 | 25 | `599aade` `39e6002` `031b85b` | feat: Rigenerazione Preventiva — rerouting frammenti quando fault_score ≥ FAULT_SUSPECTED |
-| 26 | `9ffa920` | feat: Persistenza Kademlia — salvataggio/ripristino peer su disco (kad_peers.json) |
+| 26 | `9ffa920` `52a0a87` | feat: Persistenza Kademlia — salvataggio/ripristino peer su disco (kad_peers.json) |
+| 27 | *(pending)* | feat: Bootstrap nodes — nodi noti per scoperta iniziale (bootstrap.json) |
 
 ### Prossimi step consigliati
 | Priorità | Cosa | Dove |
 |----------|------|------|
-| 🔴 Alta  | **Persistenza Kademlia** — save/load peer addresses su disco | `network/mod.rs`, `network/kad_store.rs` |
-| 🟢 Bassa | **Bootstrap nodes** — nodi noti per scoperta iniziale | `network/behaviour.rs` |
+| 🔴 Alta  | **Bootstrap nodes** — nodi noti per scoperta iniziale WAN | `network/bootstrap.rs`, `network/mod.rs` |
+| 🟢 Bassa | **REST API (axum)** — adapter HTTP per integrazioni terze | nuovo crate `bp-api` |
 
 ---
 

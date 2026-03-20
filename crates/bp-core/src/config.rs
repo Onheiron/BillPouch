@@ -47,6 +47,16 @@ pub fn kad_peers_path() -> BpResult<PathBuf> {
     Ok(base_dir()?.join("kad_peers.json"))
 }
 
+/// Path to the user-editable bootstrap node list.
+///
+/// Each entry is a multiaddr string that includes a `/p2p/<PeerId>` suffix,
+/// for example `/ip4/203.0.113.1/tcp/4001/p2p/12D3KooW...`.
+/// The list is read once at daemon startup; add entries with a text editor
+/// or via `bp bootstrap add <addr>` (when implemented).
+pub fn bootstrap_path() -> BpResult<PathBuf> {
+    Ok(base_dir()?.join("bootstrap.json"))
+}
+
 /// Ensure the base directory (and any subdirs) exist.
 pub fn ensure_dirs() -> BpResult<()> {
     std::fs::create_dir_all(base_dir()?).map_err(BpError::Io)

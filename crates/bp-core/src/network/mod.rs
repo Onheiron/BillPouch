@@ -13,6 +13,7 @@
 //! - [`state`]     — in-memory [`NetworkState`] updated from incoming gossip messages.
 
 pub mod behaviour;
+pub mod bootstrap;
 pub mod fragment_gossip;
 pub mod kad_store;
 pub mod qos;
@@ -20,6 +21,7 @@ pub mod quality_monitor;
 pub mod state;
 
 pub use behaviour::{BillPouchBehaviour, FragmentRequest, FragmentResponse};
+pub use bootstrap::BootstrapList;
 pub use fragment_gossip::{FragmentIndexAnnouncement, FragmentPointer, RemoteFragmentIndex};
 pub use kad_store::KadPeers;
 pub use qos::{PeerQos, QosRegistry, FAULT_BLACKLISTED, FAULT_DEGRADED, FAULT_SUSPECTED};
@@ -233,6 +235,13 @@ pub async fn run_network_loop(
                 }
             }
         }
+    }
+
+    // ── Bootstrap nodes ───────────────────────────────────────────────────
+    // Load user-configured bootstrap peers (supports WAN discovery where
+    // mDNS multicast is unavailable) and add them to Kademlia + gossipsub.
+    if let Ok(bp_path) = crate::config::bootstrap_path() {
+        bootstrap::BootstrapList::load(&bp_path).apply(&mut swarm);
     }
 
     // How often (in seconds) to flush known peers to disk.
