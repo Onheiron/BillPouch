@@ -335,7 +335,10 @@ struct RelayConnectBody {
 ///
 /// Body: `{ "relay_addr": "/ip4/..." }`
 #[instrument(skip(state, body))]
-async fn relay_connect(State(state): State<AppState>, Json(body): Json<RelayConnectBody>) -> Response {
+async fn relay_connect(
+    State(state): State<AppState>,
+    Json(body): Json<RelayConnectBody>,
+) -> Response {
     daemon_call!(
         state,
         ControlRequest::ConnectRelay {

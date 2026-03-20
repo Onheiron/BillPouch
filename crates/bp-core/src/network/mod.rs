@@ -563,9 +563,7 @@ async fn handle_swarm_event(
 
         // ── Relay client: outbound circuit established ───────────────────────
         SwarmEvent::Behaviour(behaviour::BillPouchBehaviourEvent::Relay(
-            libp2p::relay::client::Event::OutboundCircuitEstablished {
-                relay_peer_id, ..
-            },
+            libp2p::relay::client::Event::OutboundCircuitEstablished { relay_peer_id, .. },
         )) => {
             tracing::info!(
                 relay = %relay_peer_id,
