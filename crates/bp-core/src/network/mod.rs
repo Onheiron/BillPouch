@@ -549,15 +549,10 @@ async fn handle_swarm_event(
 
         // ── Relay client: reservation accepted ─────────────────────────────
         SwarmEvent::Behaviour(behaviour::BillPouchBehaviourEvent::Relay(
-            libp2p::relay::client::Event::ReservationReqAccepted {
-                relay_peer_id,
-                renewed,
-                ..
-            },
+            libp2p::relay::client::Event::ReservationReqAccepted { relay_peer_id, .. },
         )) => {
             tracing::info!(
                 relay = %relay_peer_id,
-                renewed = %renewed,
                 "Relay reservation accepted — node is reachable via relay"
             );
         }
