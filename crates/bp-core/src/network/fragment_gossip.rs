@@ -106,7 +106,7 @@ impl RemoteFragmentIndex {
         &'a self,
         chunk_id: &str,
         peer_id: &str,
-    ) -> impl Iterator<Item = &'a FragmentPointer> + use<'a, '_> {
+    ) -> impl Iterator<Item = &'a FragmentPointer> + use<'a, '_, '_> {
         self.pointers_for(chunk_id)
             .iter()
             .filter(move |p| p.peer_id == peer_id)
