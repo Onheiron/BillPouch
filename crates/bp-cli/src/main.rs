@@ -131,7 +131,7 @@ enum Cmd {
 enum BootstrapAction {
     /// List all configured bootstrap nodes.
     List,
-    /// Add a bootstrap node (must include /p2p/<PeerId>).
+    /// Add a bootstrap node (must include /p2p/`<PeerId>`).
     Add {
         /// Multiaddr of the bootstrap node, e.g.
         /// `/ip4/203.0.113.1/tcp/4001/p2p/12D3KooW...`
