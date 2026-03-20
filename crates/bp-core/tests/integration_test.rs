@@ -10,7 +10,7 @@ use tokio::net::UnixStream;
 use tokio::sync::mpsc;
 
 use bp_core::control::protocol::{
-    ControlRequest, ControlResponse, FlockData, HatchData, StatusData,
+    ControlRequest, ControlResponse, FlockData, GetFileData, HatchData, PutFileData, StatusData,
 };
 use bp_core::control::server::{run_control_server, DaemonState};
 use bp_core::identity::{fingerprint, Identity, UserProfile};
@@ -264,6 +264,172 @@ async fn full_user_journey() {
     );
 
     // ── Cleanup ──────────────────────────────────────────────────────────────
+    server_handle.abort();
+    let _ = std::fs::remove_file(&socket_path);
+}
+
+/// End-to-end test: encode a chunk with PutFile, then recover it with GetFile.
+///
+/// Only one daemon node is involved (no remote Pouches), so the system falls
+/// back to k=1, n=2 and stores all fragments locally.  The test verifies that
+/// the original bytes survive the full encode → store → decode → verify cycle.
+#[tokio::test]
+async fn put_file_get_file_roundtrip() {
+    let socket_path = temp_socket_path();
+    let (state, mut _net_rx) = make_daemon_state();
+
+    let server_state = Arc::clone(&state);
+    let server_path = socket_path.clone();
+    let server_handle = tokio::spawn(async move {
+        let _ = run_control_server(&server_path, server_state).await;
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Hatch a Pouch with enough quota for the test fragment.
+    send_request(
+        &socket_path,
+        &ControlRequest::Hatch {
+            service_type: bp_core::service::ServiceType::Pouch,
+            network_id: "test-net".to_string(),
+            metadata: {
+                let mut m = HashMap::new();
+                // 1 MiB quota — plenty for a small test chunk.
+                m.insert(
+                    "storage_bytes".to_string(),
+                    serde_json::json!(1_048_576u64),
+                );
+                m
+            },
+        },
+    )
+    .await;
+
+    // ── PutFile ───────────────────────────────────────────────────────────
+    let original: Vec<u8> = b"BillPouch put/get roundtrip test payload".to_vec();
+    let put_resp = send_request(
+        &socket_path,
+        &ControlRequest::PutFile {
+            chunk_data: original.clone(),
+            ph: Some(0.99),
+            q_target: Some(1.0),
+            network_id: "test-net".to_string(),
+        },
+    )
+    .await;
+
+    let put_data: PutFileData = serde_json::from_value(unwrap_ok(put_resp))
+        .expect("PutFile should succeed");
+
+    assert!(!put_data.chunk_id.is_empty(), "chunk_id must not be empty");
+    assert!(put_data.k >= 1, "k must be at least 1");
+    assert!(put_data.fragments_stored >= put_data.k, "must store at least k fragments");
+
+    // ── GetFile ───────────────────────────────────────────────────────────
+    let get_resp = send_request(
+        &socket_path,
+        &ControlRequest::GetFile {
+            chunk_id: put_data.chunk_id.clone(),
+            network_id: "test-net".to_string(),
+        },
+    )
+    .await;
+
+    let get_data: GetFileData = serde_json::from_value(unwrap_ok(get_resp))
+        .expect("GetFile should succeed");
+
+    assert_eq!(
+        get_data.data, original,
+        "decoded data must match original bytes"
+    );
+    assert!(
+        get_data.fragments_used >= put_data.k,
+        "should have used at least k fragments"
+    );
+    assert_eq!(get_data.fragments_remote, 0, "no remote peers in this test");
+
+    server_handle.abort();
+    let _ = std::fs::remove_file(&socket_path);
+}
+
+/// Error case: PutFile with no active Pouch returns a meaningful error.
+#[tokio::test]
+async fn put_file_without_pouch_returns_error() {
+    let socket_path = temp_socket_path();
+    let (state, mut _net_rx) = make_daemon_state();
+
+    let server_state = Arc::clone(&state);
+    let server_path = socket_path.clone();
+    let server_handle = tokio::spawn(async move {
+        let _ = run_control_server(&server_path, server_state).await;
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // No Hatch → no storage manager.
+    let resp = send_request(
+        &socket_path,
+        &ControlRequest::PutFile {
+            chunk_data: b"test".to_vec(),
+            ph: None,
+            q_target: None,
+            network_id: "test-net".to_string(),
+        },
+    )
+    .await;
+
+    let err_msg = unwrap_err(resp);
+    assert!(
+        err_msg.to_lowercase().contains("no active pouch")
+            || err_msg.to_lowercase().contains("no storage"),
+        "expected 'no active pouch' error, got: {err_msg}"
+    );
+
+    server_handle.abort();
+    let _ = std::fs::remove_file(&socket_path);
+}
+
+/// Error case: GetFile for an unknown chunk_id returns a meaningful error.
+#[tokio::test]
+async fn get_file_unknown_chunk_returns_error() {
+    let socket_path = temp_socket_path();
+    let (state, mut _net_rx) = make_daemon_state();
+
+    let server_state = Arc::clone(&state);
+    let server_path = socket_path.clone();
+    let server_handle = tokio::spawn(async move {
+        let _ = run_control_server(&server_path, server_state).await;
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Hatch Pouch so GetFile can at least search.
+    send_request(
+        &socket_path,
+        &ControlRequest::Hatch {
+            service_type: bp_core::service::ServiceType::Pouch,
+            network_id: "test-net".to_string(),
+            metadata: {
+                let mut m = HashMap::new();
+                m.insert("storage_bytes".to_string(), serde_json::json!(1_048_576u64));
+                m
+            },
+        },
+    )
+    .await;
+
+    let resp = send_request(
+        &socket_path,
+        &ControlRequest::GetFile {
+            chunk_id: "deadbeef12345678".to_string(),
+            network_id: "test-net".to_string(),
+        },
+    )
+    .await;
+
+    let err_msg = unwrap_err(resp);
+    assert!(
+        err_msg.contains("deadbeef") || err_msg.to_lowercase().contains("not found"),
+        "expected not-found error, got: {err_msg}"
+    );
+
     server_handle.abort();
     let _ = std::fs::remove_file(&socket_path);
 }

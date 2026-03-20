@@ -115,12 +115,13 @@ Ultimo commit verde atteso: branch `main` (post push).
 | 20 | `4451817` | style: fmt diffs put.rs, server.rs, architecture_test.rs |
 | 21 | `dc06e5e` `4eb6b1b` `c418cdc` `7d199a1` | feat: network quality monitor — Ping challenge loop, RTT→QoS |
 | 22 | `7461367` `702d8d8` `7a9dee4` `bd294f7` | feat: Proof-of-Storage challenge — fault score, FragmentRequest::ProofOfStorage, OutgoingAssignments |
-| 23 | *(pending)* | feat: FragmentIndex gossip — RemoteFragmentIndex, AnnounceIndex, targeted GetFile fetch |
+| 23 | `5bf7c86` `e33bab8` `b3c7637` `bd9d27b` | feat: FragmentIndex gossip — RemoteFragmentIndex, AnnounceIndex, targeted GetFile fetch |
+| 24 | *(pending)* | test: end-to-end PutFile/GetFile with adaptive k/n and local roundtrip |
 
 ### Prossimi step consigliati
 | Priorità | Cosa | Dove |
 |----------|------|------|
-| 🟡 Media | **Test end-to-end bp put / bp get** con QoS e k adattivo | `tests/integration_test.rs` |
+| 🔴 Alta  | **Test end-to-end bp put / bp get** con encode lokale e decode roundtrip | `tests/integration_test.rs` |
 | 🟡 Media | **Rigenerazione preventiva** — recoding automatico quando un Pouch è `suspected`/`blacklisted` | `control/server.rs` |
 | 🟢 Bassa | **Persistenza Kademlia** | `network/behaviour.rs` |
 
