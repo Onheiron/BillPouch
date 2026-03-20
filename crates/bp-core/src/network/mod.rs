@@ -52,18 +52,19 @@ pub enum NetworkCommand {
     },
     /// Dial a remote peer at a known [`Multiaddr`].
     Dial { addr: Multiaddr },
-    /// Push a fragment to a remote Pouch peer.
+    /// Push a fragment to a remote Pouch peer for storage.
     PushFragment {
         peer_id: PeerId,
         chunk_id: String,
         fragment_id: String,
         data: Vec<u8>,
     },
-    /// Fetch a specific fragment from a remote Pouch peer.
-    FetchFragment {
+    /// Fetch all fragments a remote Pouch holds for a given chunk.
+    /// The response is sent back through the oneshot channel.
+    FetchChunkFragments {
         peer_id: PeerId,
         chunk_id: String,
-        fragment_id: String,
+        resp_tx: tokio::sync::oneshot::Sender<FragmentResponse>,
     },
     /// Ask the network loop to exit cleanly.
     Shutdown,
@@ -129,11 +130,17 @@ pub async fn run_network_loop(
 
     let mut subscribed_networks: HashSet<String> = HashSet::new();
 
+    // Map outbound request IDs → oneshot response channels for FetchChunkFragments.
+    let mut pending_fetches: HashMap<
+        request_response::OutboundRequestId,
+        tokio::sync::oneshot::Sender<FragmentResponse>,
+    > = HashMap::new();
+
     loop {
         tokio::select! {
             // ── Incoming swarm event ──────────────────────────────────────────
             event = swarm.select_next_some() => {
-                handle_swarm_event(event, &mut swarm, &state, &mut subscribed_networks, &storage_managers).await;
+                handle_swarm_event(event, &mut swarm, &state, &mut subscribed_networks, &storage_managers, &mut pending_fetches).await;
             }
             // ── Command from daemon ───────────────────────────────────────────
             cmd = cmd_rx.recv() => {
@@ -179,31 +186,31 @@ pub async fn run_network_loop(
                         fragment_id,
                         data,
                     }) => {
-                        // Send fragment data to a remote peer via request-response.
-                        // We encode the push as a request carrying the data; the
-                        // remote side will store it. The response is ignored.
-                        let req = FragmentRequest {
+                        let req = FragmentRequest::Store {
                             chunk_id: chunk_id.clone(),
                             fragment_id: fragment_id.clone(),
+                            data,
                         };
-                        // Attach data as a separate gossip publish for simplicity;
-                        // real implementation would extend the protocol.
                         let _ = swarm
                             .behaviour_mut()
                             .fragment_exchange
                             .send_request(&peer_id, req);
-                        tracing::debug!(peer=%peer_id, chunk=%chunk_id, frag=%fragment_id, bytes=%data.len(), "PushFragment sent");
+                        tracing::debug!(peer=%peer_id, chunk=%chunk_id, frag=%fragment_id, "PushFragment sent");
                     }
-                    Some(NetworkCommand::FetchFragment {
+                    Some(NetworkCommand::FetchChunkFragments {
                         peer_id,
                         chunk_id,
-                        fragment_id,
+                        resp_tx,
                     }) => {
-                        let req = FragmentRequest { chunk_id, fragment_id };
-                        let _req_id = swarm
+                        let req = FragmentRequest::FetchChunkFragments {
+                            chunk_id: chunk_id.clone(),
+                        };
+                        let req_id = swarm
                             .behaviour_mut()
                             .fragment_exchange
                             .send_request(&peer_id, req);
+                        pending_fetches.insert(req_id, resp_tx);
+                        tracing::debug!(peer=%peer_id, chunk=%chunk_id, "FetchChunkFragments sent");
                     }
                 }
             }
@@ -219,6 +226,10 @@ async fn handle_swarm_event(
     state: &Arc<RwLock<NetworkState>>,
     _subscribed: &mut HashSet<String>,
     storage_managers: &StorageManagerMap,
+    pending_fetches: &mut HashMap<
+        request_response::OutboundRequestId,
+        tokio::sync::oneshot::Sender<FragmentResponse>,
+    >,
 ) {
     match event {
         // ── Gossipsub: incoming NodeInfo announcement ─────────────────────
@@ -318,16 +329,31 @@ async fn handle_swarm_event(
         SwarmEvent::Behaviour(behaviour::BillPouchBehaviourEvent::FragmentExchange(
             request_response::Event::Message {
                 peer,
-                message: request_response::Message::Response { response, .. },
+                message:
+                    request_response::Message::Response {
+                        request_id,
+                        response,
+                    },
             },
-        )) => match response {
-            FragmentResponse::Found { data } => {
-                tracing::debug!(peer=%peer, bytes=%data.len(), "Fragment response received");
+        )) => {
+            // Route response to the waiting oneshot channel if present.
+            if let Some(tx) = pending_fetches.remove(&request_id) {
+                let _ = tx.send(response);
+            } else {
+                tracing::debug!(peer=%peer, "Untracked fragment response (fire-and-forget)");
             }
-            FragmentResponse::NotFound => {
-                tracing::debug!(peer=%peer, "Fragment not found on remote");
-            }
-        },
+        }
+
+        // ── Fragment exchange: outbound failure ─────────────────────────
+        SwarmEvent::Behaviour(behaviour::BillPouchBehaviourEvent::FragmentExchange(
+            request_response::Event::OutboundFailure {
+                request_id, error, ..
+            },
+        )) => {
+            tracing::warn!("Fragment request failed: {:?}", error);
+            // Drop the oneshot so the caller gets a RecvError.
+            pending_fetches.remove(&request_id);
+        }
 
         _ => {}
     }
@@ -339,23 +365,77 @@ fn serve_fragment_request(
     storage_managers: &StorageManagerMap,
 ) -> FragmentResponse {
     let managers = storage_managers.read().unwrap();
-    for sm_arc in managers.values() {
-        let sm = sm_arc.read().unwrap();
-        if sm
-            .index
-            .fragments_for_chunk(&req.chunk_id)
-            .iter()
-            .any(|m| m.fragment_id == req.fragment_id)
-        {
-            match sm.load_fragment(&req.chunk_id, &req.fragment_id) {
-                Ok(fragment) => {
-                    return FragmentResponse::Found {
-                        data: fragment.to_bytes(),
+    match req {
+        FragmentRequest::Fetch {
+            chunk_id,
+            fragment_id,
+        } => {
+            for sm_arc in managers.values() {
+                let sm = sm_arc.read().unwrap();
+                if sm
+                    .index
+                    .fragments_for_chunk(chunk_id)
+                    .iter()
+                    .any(|m| m.fragment_id == *fragment_id)
+                {
+                    match sm.load_fragment(chunk_id, fragment_id) {
+                        Ok(fragment) => {
+                            return FragmentResponse::Found {
+                                data: fragment.to_bytes(),
+                            }
+                        }
+                        Err(e) => tracing::warn!("serve_fragment load error: {e}"),
                     }
                 }
-                Err(e) => tracing::warn!("serve_fragment load error: {e}"),
+            }
+            FragmentResponse::NotFound
+        }
+        FragmentRequest::FetchChunkFragments { chunk_id } => {
+            let mut fragments = Vec::new();
+            for sm_arc in managers.values() {
+                let sm = sm_arc.read().unwrap();
+                for meta in sm.index.fragments_for_chunk(chunk_id) {
+                    match sm.load_fragment(chunk_id, &meta.fragment_id) {
+                        Ok(f) => fragments.push((meta.fragment_id.clone(), f.to_bytes())),
+                        Err(e) => tracing::warn!("serve_fragment load error: {e}"),
+                    }
+                }
+            }
+            if fragments.is_empty() {
+                FragmentResponse::NotFound
+            } else {
+                FragmentResponse::FoundMany { fragments }
+            }
+        }
+        FragmentRequest::Store {
+            chunk_id,
+            fragment_id,
+            data,
+        } => {
+            // Try to store in any manager that has capacity.
+            use crate::coding::rlnc::EncodedFragment;
+            match EncodedFragment::from_bytes(fragment_id.clone(), chunk_id.clone(), data) {
+                Ok(fragment) => {
+                    for sm_arc in managers.values() {
+                        let mut sm = sm_arc.write().unwrap();
+                        match sm.store_fragment(&fragment) {
+                            Ok(()) => {
+                                tracing::debug!(chunk=%chunk_id, frag=%fragment_id, "Remote fragment stored");
+                                return FragmentResponse::Stored;
+                            }
+                            Err(e) => {
+                                tracing::debug!("Store attempt failed: {e}");
+                            }
+                        }
+                    }
+                    FragmentResponse::StoreFailed {
+                        reason: "No storage manager with capacity".into(),
+                    }
+                }
+                Err(e) => FragmentResponse::StoreFailed {
+                    reason: format!("Invalid fragment data: {e}"),
+                },
             }
         }
     }
-    FragmentResponse::NotFound
 }

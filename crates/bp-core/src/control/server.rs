@@ -9,10 +9,11 @@ use crate::{
     },
     error::BpResult,
     identity::Identity,
-    network::{state::NodeInfo, NetworkCommand, StorageManagerMap},
+    network::{state::NodeInfo, FragmentResponse, NetworkCommand, StorageManagerMap},
     service::{ServiceInfo, ServiceRegistry, ServiceStatus, ServiceType},
     storage::StorageManager,
 };
+use libp2p::PeerId;
 use std::{
     collections::HashMap,
     path::Path,
@@ -304,32 +305,70 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 None => return ControlResponse::err("Encoding produced no fragments"),
             };
 
-            // Store all fragments in the first candidate with capacity.
-            let (_, sm_arc) = candidates[0];
-            let mut sm = sm_arc.write().unwrap();
+            // Store all fragments locally in the first candidate with capacity.
             let mut stored = 0usize;
-            for fragment in &fragments {
-                match sm.store_fragment(fragment) {
-                    Ok(()) => stored += 1,
-                    Err(e) => {
-                        tracing::warn!(chunk_id=%chunk_id, "store_fragment failed: {e}");
-                        break;
+            {
+                let (_, sm_arc) = candidates[0];
+                let mut sm = sm_arc.write().unwrap();
+                for fragment in &fragments {
+                    match sm.store_fragment(fragment) {
+                        Ok(()) => stored += 1,
+                        Err(e) => {
+                            tracing::warn!(chunk_id=%chunk_id, "store_fragment failed: {e}");
+                            break;
+                        }
                     }
                 }
-            }
+            } // write lock released before async work
 
             if stored == 0 {
                 return ControlResponse::err("Failed to store any fragments (quota exceeded?)");
             }
 
-            tracing::info!(chunk_id=%chunk_id, stored=%stored, total=%fragments.len(), "PutFile stored");
+            // ── Distribute fragments to remote Pouch peers (round-robin) ────
+            let remote_pouches: Vec<PeerId> = {
+                let ns = state.network_state.read().unwrap();
+                let local_peer = state.identity.peer_id.to_string();
+                ns.in_network(&network_id)
+                    .into_iter()
+                    .filter(|n| n.service_type == ServiceType::Pouch && n.peer_id != local_peer)
+                    .filter_map(|n| n.peer_id.parse::<PeerId>().ok())
+                    .collect()
+            };
+
+            let mut distributed = 0usize;
+            if !remote_pouches.is_empty() {
+                for (i, fragment) in fragments.iter().enumerate() {
+                    let peer = remote_pouches[i % remote_pouches.len()];
+                    if state
+                        .net_tx
+                        .send(NetworkCommand::PushFragment {
+                            peer_id: peer,
+                            chunk_id: chunk_id.clone(),
+                            fragment_id: fragment.id.clone(),
+                            data: fragment.to_bytes(),
+                        })
+                        .await
+                        .is_ok()
+                    {
+                        distributed += 1;
+                    }
+                }
+            }
+
+            tracing::info!(
+                chunk_id=%chunk_id, stored=%stored, distributed=%distributed,
+                total=%fragments.len(), "PutFile stored + distributed"
+            );
 
             ControlResponse::ok(PutFileData {
                 chunk_id: chunk_id.clone(),
                 fragments_stored: stored,
+                fragments_distributed: distributed,
                 message: format!(
-                    "Stored {stored}/{} fragments — chunk_id: {chunk_id}",
-                    fragments.len()
+                    "Stored {stored}/{total} locally, pushed {distributed} to {peers} remote pouch(es) — chunk_id: {chunk_id}",
+                    total = fragments.len(),
+                    peers = remote_pouches.len(),
                 ),
             })
         }
@@ -354,7 +393,7 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 return ControlResponse::err("No active Pouch found — daemon has no storage");
             }
 
-            // Collect fragments from all matching managers.
+            // Collect fragments from all matching local managers.
             let mut all_fragments = Vec::new();
             for sm_arc in &managers_snap {
                 let sm = sm_arc.read().unwrap();
@@ -367,18 +406,103 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 }
             }
 
+            let local_count = all_fragments.len();
+
+            // Determine k from existing fragments (if any) to know if we need more.
+            let k_needed = all_fragments.first().map(|f| f.k).unwrap_or(0);
+
+            // ── Fetch from remote Pouches if local fragments < k ────────────
+            let mut fragments_remote = 0usize;
+            if k_needed > 0 && all_fragments.len() < k_needed {
+                let remote_pouches: Vec<PeerId> = {
+                    let ns = state.network_state.read().unwrap();
+                    let local_peer = state.identity.peer_id.to_string();
+                    ns.in_network(&network_id)
+                        .into_iter()
+                        .filter(|n| n.service_type == ServiceType::Pouch && n.peer_id != local_peer)
+                        .filter_map(|n| n.peer_id.parse::<PeerId>().ok())
+                        .collect()
+                };
+
+                // Send FetchChunkFragments to each remote Pouch.
+                let mut receivers = Vec::new();
+                for peer in &remote_pouches {
+                    let (tx, rx) = tokio::sync::oneshot::channel();
+                    if state
+                        .net_tx
+                        .send(NetworkCommand::FetchChunkFragments {
+                            peer_id: *peer,
+                            chunk_id: chunk_id.clone(),
+                            resp_tx: tx,
+                        })
+                        .await
+                        .is_ok()
+                    {
+                        receivers.push(rx);
+                    }
+                }
+
+                // Await responses with a timeout.
+                use crate::coding::rlnc::EncodedFragment;
+                for rx in receivers {
+                    match tokio::time::timeout(std::time::Duration::from_secs(10), rx).await {
+                        Ok(Ok(FragmentResponse::FoundMany { fragments })) => {
+                            for (frag_id, bytes) in fragments {
+                                if all_fragments.len() >= k_needed {
+                                    break;
+                                }
+                                match EncodedFragment::from_bytes(frag_id, chunk_id.clone(), &bytes)
+                                {
+                                    Ok(f) => {
+                                        all_fragments.push(f);
+                                        fragments_remote += 1;
+                                    }
+                                    Err(e) => tracing::warn!("Remote fragment parse error: {e}"),
+                                }
+                            }
+                        }
+                        Ok(Ok(FragmentResponse::Found { data })) => {
+                            if all_fragments.len() < k_needed {
+                                let frag_id = uuid::Uuid::new_v4().to_string();
+                                match EncodedFragment::from_bytes(frag_id, chunk_id.clone(), &data)
+                                {
+                                    Ok(f) => {
+                                        all_fragments.push(f);
+                                        fragments_remote += 1;
+                                    }
+                                    Err(e) => tracing::warn!("Remote fragment parse error: {e}"),
+                                }
+                            }
+                        }
+                        Ok(Ok(_)) => {} // NotFound, Stored, StoreFailed — skip
+                        Ok(Err(_)) => tracing::debug!("Remote fetch: oneshot dropped"),
+                        Err(_) => tracing::debug!("Remote fetch: timeout"),
+                    }
+                    if all_fragments.len() >= k_needed {
+                        break;
+                    }
+                }
+            }
+
             if all_fragments.is_empty() {
-                return ControlResponse::err(format!("Chunk '{chunk_id}' not found locally"));
+                return ControlResponse::err(format!(
+                    "Chunk '{chunk_id}' not found locally or on remote peers"
+                ));
             }
 
             let fragments_used = all_fragments.len();
             match rlnc::decode(&all_fragments) {
                 Ok(data) => {
-                    tracing::info!(chunk_id=%chunk_id, fragments_used=%fragments_used, "GetFile decoded");
+                    tracing::info!(
+                        chunk_id=%chunk_id, local=%local_count,
+                        remote=%fragments_remote, total=%fragments_used,
+                        "GetFile decoded"
+                    );
                     ControlResponse::ok(GetFileData {
                         chunk_id,
                         data,
                         fragments_used,
+                        fragments_remote,
                     })
                 }
                 Err(e) => ControlResponse::err(format!("Decode failed: {e}")),
