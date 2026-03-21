@@ -5,7 +5,8 @@
 use crate::{
     coding::{params as coding_params, rlnc},
     control::protocol::{
-        ControlRequest, ControlResponse, FlockData, GetFileData, HatchData, PutFileData, StatusData,
+        ControlRequest, ControlResponse, FlockData, GetFileData, HatchData, InviteData,
+        PutFileData, StatusData,
     },
     error::BpResult,
     identity::Identity,
@@ -263,6 +264,14 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                     ));
                 }
             }
+            // Ensure a NetworkMetaKey exists for this network.
+            // If none was installed via an invite token, we generate a fresh
+            // random one (this node is creating the network).
+            if let Err(e) =
+                crate::storage::manifest::NetworkMetaKey::load_or_create(&network_id)
+            {
+                tracing::warn!(network = %network_id, "Failed to ensure NetworkMetaKey: {e}");
+            }
             let _ = state
                 .net_tx
                 .send(NetworkCommand::JoinNetwork {
@@ -450,6 +459,33 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                     .collect()
             };
             ControlResponse::ok(serde_json::json!({ "offers": offers }))
+        }
+        // ── CreateInvite ──────────────────────────────────────────────────
+        ControlRequest::CreateInvite {
+            network_id,
+            invitee_fingerprint,
+            invite_password,
+            ttl_hours,
+        } => {
+            let ttl = ttl_hours.unwrap_or(24);
+            let expires_at = (chrono::Utc::now()
+                + chrono::Duration::hours(ttl as i64))
+            .timestamp() as u64;
+            match crate::invite::create_invite(
+                &state.identity,
+                &network_id,
+                invitee_fingerprint,
+                ttl,
+                &invite_password,
+            ) {
+                Ok(blob) => ControlResponse::ok(InviteData {
+                    blob,
+                    network_id,
+                    expires_at,
+                    inviter_fingerprint: state.identity.fingerprint.clone(),
+                }),
+                Err(e) => ControlResponse::err(format!("Failed to create invite: {e}")),
+            }
         }
         // ── PutFile ───────────────────────────────────────────────────────
         ControlRequest::PutFile {

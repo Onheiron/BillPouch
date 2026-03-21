@@ -80,8 +80,8 @@
 | ~~Chiave in chiaro su disco~~      | ✅ Risolto | Argon2id + ChaCha20-Poly1305 — `identity.key.enc` con passphrase opzionale  |
 | ~~NAT traversal~~                  | ✅ Risolto | AutoNAT + relay circuit v2 (commit 30)                                  |
 | ~~Persistenza Kademlia~~           | ✅ Risolto | `kad_peers.json` su disco (commit 26)                                   |
-| **🔴 CEK encryption mancante**    | Critico | I chunk sono cifrati con la chiave di rete, non con la chiave dell'utente. Chi è nella rete può leggere i dati altrui. |
-| **🔴 NetworkMetaKey derivabile**  | Critico | La chiave dei metadati è `BLAKE3("billpouch/meta/v1" \|\| network_id)` — derivabile da chiunque conosca il nome della rete. Deve essere una chiave segreta random distribuita tramite invito. |
+| ~~CEK encryption mancante~~        | ✅ Risolto | `ChunkCipher::for_user` — CEK derivata da identity + BLAKE3(plaintext) (commit 34) |
+| ~~NetworkMetaKey derivabile~~      | ✅ Risolto | `NetworkMetaKey::generate/load/save` — chiave random in `network_keys.json` (commit 34) |
 | **🟠 Nessun sistema di inviti**   | Alto    | Chiunque conosce il `network_id` può unirsi. L'accesso deve essere su invito firmato e cifrato. |
 | **Nessun multi-device**           | Basso   | Manca `bp export-identity` / `bp import-identity` per spostare il keypair su un'altra macchina. |
 
@@ -126,16 +126,15 @@ Ultimo commit verde atteso: branch `main` (post push).
 | 30 | `90cec5e` `1ae4a44` `744f421` `2439865` `1d23d51` `1b02520` | feat: **NAT traversal** — AutoNAT + relay client (`network/behaviour.rs`, `network/mod.rs`) |
 | 31 | `b9fd5a7` `7f8ded7` `2d5b3ee` `f5b85cf` `78eaaa2` | feat: **Storage marketplace** — accordi di storage gossipati tra utenti |
 | 32 | `f4045c5` `871bfc2` `5f35f4c` `214a1fd` | feat: **Passphrase identità** + fix CI (fmt, clap env, rlnc flaky tests) |
-| 33 | `b0ada4a` | feat: **Encryption at rest** — ChaCha20-Poly1305 prima di RLNC |
+| 33 | `b0ada4a` `9366e30` | feat: **Encryption at rest** — ChaCha20-Poly1305 prima di RLNC; fix rustfmt |
+| 34 | `23780cb` | feat: **CEK per-utente** + **NetworkMetaKey segreta** — `ChunkCipher::for_user` (CEK da identity + BLAKE3 plaintext); `NetworkMetaKey::generate/load/save` (random, non derivabile dal nome); `chunk_cek_hints` in `DaemonState`; `Identity::secret_material()` |
 
 ### Prossimi step consigliati
 | Priorità | Cosa | Dove |
 |----------|------|---------|
-| 🔴 Critica | **CEK per-utente** — ogni file ottiene una Content Encryption Key derivata dalla chiave privata dell'utente; `NetworkMetaKey` cifra solo i manifest, mai i chunk; `FileManifest` include `encrypted_cek` per ogni destinatario autorizzato (ECIES su Ed25519→X25519) | `storage/encryption.rs`, `storage/manifest.rs`, `control/server.rs` |
-| 🔴 Critica | **NetworkMetaKey come segreto di rete** — generata casualmente alla creazione della rete, non derivata dal `network_id`; storata cifrata localmente; distribuita solo via token di invito | `storage/manifest.rs`, `config.rs`, `control/server.rs` |
-| 🟠 Alta | **Sistema di inviti** — `bp invite create --for <fingerprint> [--network] [--ttl]` genera un token firmato (Ed25519) e cifrato (ECIES) che include `network_id` + `NetworkMetaKey` + scadenza + fingerprint destinatario; `bp join --invite <blob>` verifica firma e decifra | nuovo `control/protocol.rs` + `commands/invite.rs` |
-| 🔵 Bassa | **Multi-device** — `bp export-identity` / `bp import-identity` per spostare `identity.key.enc` su un'altra macchina | `commands/auth.rs` |
-| 🔵 Bassa | **Web dashboard** — UI servita da `bp-api` (HTML/JS statici in Axum, nessuna dipendenza Node.js) | `bp-api/static/` |
+| � Alta | **Sistema di inviti** — `bp invite create --for <fingerprint> [--network] [--ttl]` genera un token firmato (Ed25519) e cifrato (ECIES) che include `network_id` + `NetworkMetaKey` + scadenza + fingerprint destinatario; `bp join --invite <blob>` decifra e salva la chiave | nuovo `commands/invite.rs` + `control/protocol.rs` |
+| 🔵 Bassa | **Multi-device** — `bp export-identity` / `bp import-identity` | `commands/auth.rs` |
+| 🔵 Bassa | **Web dashboard** — UI HTML/JS servita da `bp-api` Axum | `bp-api/static/` |
 
 ---
 
@@ -145,8 +144,6 @@ Ultimo commit verde atteso: branch `main` (post push).
 
 | Funzionalità | Stato | Descrizione |
 |---|---|---|
-| CEK per-utente + ECIES sharing | ⏳ Prossimo | Chunk cifrati con chiave derivata dal keypair utente; condivisione tramite encrypted_cek nel manifest |
-| NetworkMetaKey come segreto di rete | ⏳ Prossimo | Chiave random generata alla creazione rete, non derivabile dal network_id |
 | Sistema di inviti | ⏳ Prossimo | Token firmato+cifrato per accesso controllato; veicola NetworkMetaKey al nuovo membro |
 | Multi-device identity | ⏳ Pianificato | `bp export-identity` / `bp import-identity` |
 | Web dashboard | ⏳ Pianificato | UI HTML/JS servita da `bp-api` Axum |
@@ -157,14 +154,19 @@ Ultimo commit verde atteso: branch `main` (post push).
 |---------------------------|-----------------------------------------------|
 | NAT traversal             | ✅ Done — AutoNAT + relay circuit v2          |
 | Passphrase identità       | ✅ Done — Argon2id + ChaCha20-Poly1305 su `identity.key.enc` |
-| Encryption at rest (v1)   | ⚠️ Parziale — ChaCha20-Poly1305 per-chunk presente, ma usa NetworkMetaKey invece di CEK utente → da correggere |
-| CEK per-utente            | ⏳ Chunk cifrati con chiave derivata dalla chiave privata dell'utente; ECIES per condivisione file tra più identità |
-| NetworkMetaKey segreta    | ⏳ Chiave di rete random, non derivabile da `network_id`; distribuita via invite token |
-| Sistema di inviti         | ⏳ Accesso a rete su invito firmato+cifrato; unico vettore di distribuzione della NetworkMetaKey |
+| Encryption at rest        | ✅ Done — ChaCha20-Poly1305 per-chunk; CEK derivata da identity + BLAKE3(plaintext) |
+| NetworkMetaKey segreta    | ✅ Done — chiave random in `network_keys.json`, non derivabile dal nome rete |
+| CEK per-utente            | ✅ Done — `ChunkCipher::for_user`; solo il proprietario decifra; ECIES sharing futuro |
+| Sistema di inviti         | ⏳ Prossimo — accesso a rete su invito firmato+cifrato; unico vettore di distribuzione della NetworkMetaKey |
 
 ---
 
 ## Changelog recente
+
+### v0.1.7 (Marzo 2026)
+- **feat:** CEK per-utente — `Identity::secret_material()` (BLAKE3 del keypair); `ChunkCipher::for_user(secret_material, plaintext_hash)` — CEK = `BLAKE3_keyed(secret, "billpouch/cek/v1" || BLAKE3(chunk))`; `chunk_cek_hints: RwLock<HashMap<chunk_id, [u8;32]>>` in `DaemonState`; PutFile/GetFile aggiornati
+- **feat:** `NetworkMetaKey` come segreto di rete — `generate()` + `load()` + `save()` + `load_or_create()` su `network_keys.json`; `for_network()` deprecato a `#[doc(hidden)]`
+- **feat:** `config::network_keys_path()` — `~/.local/share/billpouch/network_keys.json`
 
 ### v0.1.6 (Marzo 2026)
 - **feat:** Encryption at rest (v1) — `storage/encryption.rs` `ChunkCipher`; ChaCha20-Poly1305; PutFile cifra prima di RLNC, GetFile decifra dopo decode; 6 unit test — ⚠️ usa NetworkMetaKey come chiave chunk (da correggere con CEK utente)

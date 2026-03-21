@@ -14,6 +14,7 @@ pub mod farewell;
 pub mod flock;
 pub mod get;
 pub mod hatch;
+pub mod invite;
 pub mod join;
 pub mod marketplace;
 pub mod put;
