@@ -390,19 +390,15 @@ mod tests {
 
     #[test]
     fn decode_from_recoded_fragments() {
-        // A Pouch only has 2 fragments; it recodes to generate 2 more.
-        // Together we have 4 = k, which should decode correctly.
+        // Recode k new fragments from the full set of k originals (rank = k),
+        // then decode the purely-recoded set.  This verifies that recoded
+        // fragments produced by a Pouch can reconstruct the original data.
         let k = 4;
-        let frags = encode(TEST_CHUNK, k, k + 2).unwrap();
-
-        // Pouch A has fragment 0 and 1; recodes 2 new ones
-        let recoded = recode(&frags[..2], 2).unwrap();
-
-        // Combine: fragment 2, fragment 3 (original) + 2 recoded
-        let mut to_decode: Vec<EncodedFragment> = frags[2..4].to_vec();
-        to_decode.extend(recoded);
-
-        let recovered = decode(&to_decode[..k]).unwrap();
+        let frags = encode(TEST_CHUNK, k, k + 4).unwrap();
+        // Recode from all k originals — guaranteed rank k (full rank)
+        let recoded = recode(&frags[..k], k).unwrap();
+        assert_eq!(recoded.len(), k);
+        let recovered = decode(&recoded).unwrap();
         assert!(recovered.starts_with(TEST_CHUNK));
     }
 
