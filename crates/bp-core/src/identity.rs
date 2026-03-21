@@ -15,6 +15,7 @@ use crate::{
     error::{BpError, BpResult},
 };
 use argon2::Argon2;
+use blake3;
 use chacha20poly1305::{
     aead::{Aead, KeyInit},
     ChaCha20Poly1305, Key, Nonce,
@@ -256,5 +257,19 @@ impl Identity {
     /// Returns `true` if any identity (plaintext or encrypted) is stored on disk.
     pub fn exists() -> BpResult<bool> {
         Ok(config::identity_path()?.exists() || config::encrypted_identity_path()?.exists())
+    }
+
+    /// Derive 32 bytes of secret material from the keypair.
+    ///
+    /// Used as the master input for per-file Content Encryption Key (CEK)
+    /// derivation.  The output is deterministic for a given keypair but must
+    /// **never** be stored or logged — treat it like the private key itself.
+    pub fn secret_material(&self) -> [u8; 32] {
+        let raw = self.keypair.to_protobuf_encoding().unwrap_or_default();
+        *blake3::Hasher::new()
+            .update(b"billpouch/secret-material/v1")
+            .update(&raw)
+            .finalize()
+            .as_bytes()
     }
 }

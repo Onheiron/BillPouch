@@ -75,6 +75,7 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
         outgoing_assignments: Arc::clone(&outgoing_assignments),
         remote_fragment_index: Arc::clone(&remote_fragment_index),
         agreements: Arc::clone(&agreements),
+        chunk_cek_hints: RwLock::new(HashMap::new()),
     });
 
     // ── Build libp2p swarm ────────────────────────────────────────────────

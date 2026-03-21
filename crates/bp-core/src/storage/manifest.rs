@@ -12,31 +12,23 @@
 //!
 //! ## Network metadata key
 //!
-//! Each network derives a shared 32-byte symmetric key from its `network_id`:
+//! Each network has a 32-byte **random** secret key stored locally in
+//! `~/.local/share/billpouch/network_keys.json`.  The key is **not** derived
+//! from the network name — knowing `network_id` alone gives no information
+//! about the key.  Keys are distributed to new members exclusively via
+//! signed+encrypted invite tokens (see the invite subsystem).
+//!
+//! ## Chunk encryption
+//!
+//! Each chunk is encrypted with a **per-user CEK** (Content Encryption Key)
+//! before RLNC encoding.  The CEK is derived from the owner’s Ed25519
+//! secret material and a hash of the plaintext chunk, so Pouch nodes holding
+//! fragments never have access to plaintext data and cannot read files
+//! belonging to other users even if they share the same network.
 //!
 //! ```text
-//! network_meta_key = BLAKE3("billpouch/meta/v1" || network_id)
-//! ```
-//!
-//! All nodes in the network can compute this key autonomously, but it is not
-//! user-controlled or user-visible — the daemon uses it internally to encrypt
-//! and decrypt file names and other identifying metadata.
-//!
-//! > **v0.1 note:** The key is deterministically derived from `network_id`.
-//! > Future versions will use a Diffie-Hellman group keying scheme for stronger
-//! > isolation between networks.
-//!
-//! ## Encryption scheme
-//!
-//! Metadata is encrypted with a BLAKE3-based authenticated stream cipher:
-//!
-//! ```text
-//! nonce    = random 16 bytes
-//! keystream = concat(BLAKE3_keyed(key, nonce || i) for i = 0, 1, 2, …)
-//!             truncated to |plaintext| bytes
-//! ciphertext = plaintext XOR keystream
-//! mac        = BLAKE3_keyed(key, nonce || ciphertext)   (32 bytes)
-//! output     = nonce(16) || mac(32) || ciphertext
+//! cek = BLAKE3_keyed(identity.secret_material(),
+//!                    "billpouch/cek/v1" || BLAKE3(plaintext_chunk))
 //! ```
 //!
 //! ## File upload pipeline
@@ -46,7 +38,7 @@
 //!   │
 //!   ▼ 1. Chunking  (chunk_size bytes each)
 //!   │
-//!   ▼ 2. Encrypt each chunk  (ChunkCipher — ChaCha20-Poly1305, network key)
+//!   ▼ 2. Encrypt each chunk  (ChunkCipher::for_user — CEK from identity + plaintext hash)
 //!   │      chunk_id = BLAKE3(encrypted_chunk)[0..16]
 //!   │
 //!   ▼ 3. RLNC encode   k → n fragments per encrypted chunk
@@ -63,35 +55,117 @@
 //!   │
 //!   ▼  per chunk: collect ≥ k fragments from Pouch peers
 //!   ▼  RLNC decode  → encrypted chunk
-//!   ▼  ChunkCipher::decrypt (network key) → plaintext chunk
+//!   ▼  ChunkCipher::for_user (re-derived from identity + stored plaintext hash) → plaintext chunk
 //!   ▼  reassemble chunks → file
 //! ```
 
-use crate::error::{BpError, BpResult};
+use crate::{
+    config,
+    error::{BpError, BpResult},
+};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 // ── Network metadata key ──────────────────────────────────────────────────────
 
 /// 32-byte symmetric key shared by all nodes in a given network.
 ///
-/// Used exclusively to encrypt/decrypt file metadata (names, …) so that the
-/// network can manage files autonomously without user involvement.
+/// **This key is a randomly generated secret** — it is never derived from the
+/// network name.  It is stored locally in `network_keys.json` and distributed
+/// to new members *exclusively* via signed+encrypted invite tokens.
+///
+/// Used to encrypt/decrypt file metadata (names, …) stored in manifests.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NetworkMetaKey(pub [u8; 32]);
 
 impl NetworkMetaKey {
-    /// Derive the network metadata key from a `network_id` string.
+    /// Generate a new random 32-byte network key.
     ///
-    /// ```text
-    /// key = BLAKE3("billpouch/meta/v1" || network_id)
-    /// ```
+    /// Call once when *creating* a network.  The key must then be distributed
+    /// via invite tokens to all other members.
+    pub fn generate() -> Self {
+        let mut key = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut key);
+        Self(key)
+    }
+
+    /// Load the key for `network_id` from local storage.
+    ///
+    /// Returns `None` if this node has never joined that network
+    /// (i.e. no key has been stored yet).
+    pub fn load(network_id: &str) -> BpResult<Option<Self>> {
+        let path = config::network_keys_path()?;
+        if !path.exists() {
+            return Ok(None);
+        }
+        let json = std::fs::read_to_string(&path).map_err(BpError::Io)?;
+        let map: HashMap<String, String> = serde_json::from_str(&json)?;
+        match map.get(network_id) {
+            None => Ok(None),
+            Some(hex_key) => {
+                let bytes = hex::decode(hex_key).map_err(|e| {
+                    BpError::Config(format!("Invalid network key for '{network_id}': {e}"))
+                })?;
+                if bytes.len() != 32 {
+                    return Err(BpError::Config(format!(
+                        "Network key for '{network_id}' has wrong length: {}",
+                        bytes.len()
+                    )));
+                }
+                let mut arr = [0u8; 32];
+                arr.copy_from_slice(&bytes);
+                Ok(Some(Self(arr)))
+            }
+        }
+    }
+
+    /// Persist this key for `network_id` to local storage.
+    ///
+    /// Safe to call multiple times — overwrites an existing entry for the
+    /// same `network_id`.  Never logs or surfaces the key bytes.
+    pub fn save(&self, network_id: &str) -> BpResult<()> {
+        config::ensure_dirs()?;
+        let path = config::network_keys_path()?;
+        let mut map: HashMap<String, String> = if path.exists() {
+            let json = std::fs::read_to_string(&path).map_err(BpError::Io)?;
+            serde_json::from_str(&json)?
+        } else {
+            HashMap::new()
+        };
+        map.insert(network_id.to_string(), hex::encode(self.0));
+        let json = serde_json::to_string_pretty(&map)?;
+        std::fs::write(&path, json).map_err(BpError::Io)?;
+        Ok(())
+    }
+
+    /// Load the key for `network_id`, generating and saving a new one if absent.
+    ///
+    /// This is the production entry point used by the daemon when it joins or
+    /// creates a network.
+    pub fn load_or_create(network_id: &str) -> BpResult<Self> {
+        if let Some(key) = Self::load(network_id)? {
+            return Ok(key);
+        }
+        let key = Self::generate();
+        key.save(network_id)?;
+        tracing::info!(network = %network_id, "Generated new NetworkMetaKey");
+        Ok(key)
+    }
+
+    /// **Test/legacy only** — derive a key deterministically from `network_id`.
+    ///
+    /// <div class="warning">
+    /// This is <strong>NOT secure</strong> for production use: anyone who knows
+    /// the network name can compute this key.  Only used in unit tests and
+    /// legacy compatibility paths.
+    /// </div>
+    #[doc(hidden)]
     pub fn for_network(network_id: &str) -> Self {
         let mut h = blake3::Hasher::new();
         h.update(b"billpouch/meta/v1");
         h.update(network_id.as_bytes());
-        let hash = h.finalize();
-        Self(*hash.as_bytes())
+        Self(*h.finalize().as_bytes())
     }
 
     /// Encrypt `plaintext` and return an authenticated ciphertext blob.

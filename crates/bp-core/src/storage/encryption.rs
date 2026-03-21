@@ -3,22 +3,22 @@
 //! ## Overview
 //!
 //! Before a chunk is RLNC-encoded and distributed across Pouch peers, it is
-//! encrypted with a **network-scoped symmetric key** using ChaCha20-Poly1305.
-//! This ensures that Pouch nodes holding fragments never have access to
-//! plaintext data — they only ever see and forward opaque ciphertext.
+//! encrypted with a **per-user Content Encryption Key (CEK)** using
+//! ChaCha20-Poly1305.  This ensures that:
 //!
-//! ## Key derivation
+//! 1. Pouch nodes holding fragments never have access to plaintext data.
+//! 2. Even nodes in the same network cannot read files owned by other users.
 //!
-//! The per-chunk encryption key is derived from the network metadata key:
+//! ## CEK derivation
 //!
 //! ```text
-//! chunk_key = BLAKE3_keyed(network_meta_key, "billpouch/chunk-enc/v1")
+//! cek = BLAKE3_keyed(identity.secret_material(),
+//!                    "billpouch/cek/v1" || BLAKE3(plaintext_chunk))
 //! ```
 //!
-//! All nodes in the same network can re-derive this key autonomously without
-//! any additional key exchange.  The key is **network-scoped** — two chunks
-//! in the same network share the same key, but different nonces provide
-//! per-ciphertext IND-CPA security.
+//! The CEK is deterministic for a given `(identity, plaintext chunk)` pair.
+//! The daemon stores `(chunk_id → plaintext_hash)` in memory so that
+//! [`ChunkCipher::for_user`] can be re-derived at GetFile time.
 //!
 //! ## On-disk / on-wire format
 //!
@@ -29,10 +29,7 @@
 //! The nonce is randomly generated at encryption time.  The total overhead is
 //! 28 bytes per chunk (12-byte nonce + 16-byte authentication tag).
 
-use crate::{
-    error::{BpError, BpResult},
-    storage::manifest::NetworkMetaKey,
-};
+use crate::error::{BpError, BpResult};
 use chacha20poly1305::{
     aead::{Aead, KeyInit},
     ChaCha20Poly1305, Key, Nonce,
@@ -42,34 +39,63 @@ use rand::RngCore;
 /// Nonce length for ChaCha20-Poly1305.
 const NONCE_LEN: usize = 12;
 
-/// `ChunkCipher` wraps the network-scoped ChaCha20-Poly1305 key that is used
-/// to encrypt and decrypt chunk data before/after RLNC coding.
+/// `ChunkCipher` wraps the ChaCha20-Poly1305 key used to encrypt and decrypt
+/// chunk data before/after RLNC coding.
 ///
-/// Create one instance per upload/download operation via
-/// [`ChunkCipher::for_network`].
+/// **Production path:** create via [`ChunkCipher::for_user`] which derives a
+/// CEK from the owner’s identity secret and the plaintext chunk hash.
 pub struct ChunkCipher {
     cipher: ChaCha20Poly1305,
 }
 
 impl ChunkCipher {
-    /// Derive the chunk encryption key for `network_id` and build a cipher.
+    /// Derive the Content Encryption Key for a chunk and build a cipher.
+    ///
+    /// `secret_material` comes from [`crate::identity::Identity::secret_material`].
+    /// `plaintext_hash` is `BLAKE3(chunk_data)` computed before encryption.
     ///
     /// ```text
-    /// chunk_key = BLAKE3_keyed(NetworkMetaKey(network_id), "billpouch/chunk-enc/v1")
+    /// cek = BLAKE3_keyed(secret_material, "billpouch/cek/v1" || plaintext_hash)
     /// ```
+    pub fn for_user(secret_material: &[u8; 32], plaintext_hash: &[u8; 32]) -> Self {
+        let mut h = blake3::Hasher::new_keyed(secret_material);
+        h.update(b"billpouch/cek/v1");
+        h.update(plaintext_hash);
+        let cek: [u8; 32] = *h.finalize().as_bytes();
+        Self::from_raw_key(cek)
+    }
+
+    /// Build a cipher from a raw 32-byte key.
+    ///
+    /// Useful for tests and for future key-wrapping schemes.
+    pub fn from_raw_key(key: [u8; 32]) -> Self {
+        let cipher = ChaCha20Poly1305::new(Key::from_slice(&key));
+        Self { cipher }
+    }
+
+    /// **Test/legacy only** — derive a cipher from a network-scoped key.
+    ///
+    /// <div class="warning">
+    /// Not for production: uses the insecure deterministic
+    /// [`NetworkMetaKey::for_network`] derivation.  Use [`for_user`](Self::for_user)
+    /// in production code.
+    /// </div>
+    #[doc(hidden)]
     pub fn for_network(network_id: &str) -> Self {
+        use crate::storage::manifest::NetworkMetaKey;
         let net_key = NetworkMetaKey::for_network(network_id);
         Self::from_meta_key(&net_key)
     }
 
     /// Build a cipher from an already-computed [`NetworkMetaKey`].
-    pub fn from_meta_key(meta_key: &NetworkMetaKey) -> Self {
-        // Derive a distinct 32-byte key for chunk encryption.
+    ///
+    /// **Test/legacy only** — prefer [`for_user`](Self::for_user).
+    #[doc(hidden)]
+    pub fn from_meta_key(meta_key: &crate::storage::manifest::NetworkMetaKey) -> Self {
         let mut h = blake3::Hasher::new_keyed(&meta_key.0);
         h.update(b"billpouch/chunk-enc/v1");
         let chunk_key: [u8; 32] = *h.finalize().as_bytes();
-        let cipher = ChaCha20Poly1305::new(Key::from_slice(&chunk_key));
-        Self { cipher }
+        Self::from_raw_key(chunk_key)
     }
 
     /// Encrypt `plaintext` and return `nonce(12) || ciphertext_with_tag(len+16)`.
@@ -115,8 +141,14 @@ impl ChunkCipher {
 mod tests {
     use super::*;
 
-    fn cipher(net: &str) -> ChunkCipher {
-        ChunkCipher::for_network(net)
+    /// Fixed-key cipher for tests — isolates cipher mechanics from key management.
+    fn cipher(label: &str) -> ChunkCipher {
+        let key = *blake3::Hasher::new()
+            .update(b"bp-test-cipher")
+            .update(label.as_bytes())
+            .finalize()
+            .as_bytes();
+        ChunkCipher::from_raw_key(key)
     }
 
     #[test]
@@ -142,13 +174,13 @@ mod tests {
     }
 
     #[test]
-    fn wrong_network_decryption_fails() {
+    fn wrong_key_decryption_fails() {
         let c1 = cipher("amici");
         let c2 = cipher("lavoro");
         let blob = c1.encrypt(b"secret data").unwrap();
         assert!(
             c2.decrypt(&blob).is_err(),
-            "Decryption with wrong network key must fail"
+            "Decryption with wrong key must fail"
         );
     }
 
@@ -172,16 +204,37 @@ mod tests {
     }
 
     #[test]
-    fn network_keys_are_distinct() {
-        // Two networks must produce different keys so data is isolated.
+    fn different_keys_are_isolated() {
         let c1 = cipher("amici");
         let c2 = cipher("lavoro");
-        let plain = b"cross-network probe";
+        let plain = b"cross-key probe";
         let blob1 = c1.encrypt(plain).unwrap();
-        // Can't decrypt blob1 with c2 (different keys)
-        assert!(c2.decrypt(&blob1).is_err());
-        // Can't decrypt blob1 with wrong nonce padding (blob is not valid for c2)
         let blob2 = c2.encrypt(plain).unwrap();
+        assert!(c2.decrypt(&blob1).is_err());
         assert!(c1.decrypt(&blob2).is_err());
+    }
+
+    #[test]
+    fn for_user_produces_distinct_ceks() {
+        // Two users with different secret material encrypt the same plaintext.
+        let sm1 = [0x11u8; 32];
+        let sm2 = [0x22u8; 32];
+        let ph = *blake3::hash(b"my chunk").as_bytes();
+        let c1 = ChunkCipher::for_user(&sm1, &ph);
+        let c2 = ChunkCipher::for_user(&sm2, &ph);
+        let blob = c1.encrypt(b"secret").unwrap();
+        // User 2 cannot decrypt user 1’s data.
+        assert!(c2.decrypt(&blob).is_err());
+    }
+
+    #[test]
+    fn for_user_same_input_same_cek() {
+        let sm = [0xAAu8; 32];
+        let ph = *blake3::hash(b"chunk content").as_bytes();
+        let c1 = ChunkCipher::for_user(&sm, &ph);
+        let c2 = ChunkCipher::for_user(&sm, &ph);
+        let blob = c1.encrypt(b"data").unwrap();
+        // Re-derived cipher decrypts correctly.
+        assert_eq!(c2.decrypt(&blob).unwrap(), b"data");
     }
 }

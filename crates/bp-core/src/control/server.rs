@@ -59,6 +59,12 @@ pub struct DaemonState {
     /// Storage marketplace: local agreements (as offerer or requester) and
     /// offers received from remote peers via gossip.
     pub agreements: Arc<RwLock<AgreementStore>>,
+    /// Maps `chunk_id → BLAKE3(plaintext_chunk)` so that `GetFile` can
+    /// re-derive the per-user CEK for decryption after RLNC decode.
+    ///
+    /// Populated by `PutFile`; persisted only for the daemon’s lifetime
+    /// (lost on restart — full persistence comes with the manifest system).
+    pub chunk_cek_hints: RwLock<HashMap<String, [u8; 32]>>,
 }
 
 /// Accept connections on the Unix socket and dispatch requests.
@@ -529,10 +535,12 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 "PutFile: computed coding params"
             );
 
-            // Encode the chunk.
-            // Before RLNC encoding, encrypt the chunk with the network-scoped
-            // ChaCha20-Poly1305 key so Pouch nodes never see plaintext data.
-            let cipher = ChunkCipher::for_network(&network_id);
+            // Encrypt the chunk with a per-user CEK before RLNC encoding.
+            // The CEK is derived from the owner’s secret material and the
+            // BLAKE3 hash of the plaintext — Pouch nodes never see plaintext.
+            let plaintext_hash: [u8; 32] = *blake3::hash(&chunk_data).as_bytes();
+            let secret_mat = state.identity.secret_material();
+            let cipher = ChunkCipher::for_user(&secret_mat, &plaintext_hash);
             let encrypted_chunk = match cipher.encrypt(&chunk_data) {
                 Ok(b) => b,
                 Err(e) => return ControlResponse::err(format!("Chunk encryption error: {e}")),
@@ -547,6 +555,13 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 Some(f) => f.chunk_id.clone(),
                 None => return ControlResponse::err("Encoding produced no fragments"),
             };
+
+            // Store the plaintext hash so GetFile can re-derive the CEK.
+            state
+                .chunk_cek_hints
+                .write()
+                .unwrap()
+                .insert(chunk_id.clone(), plaintext_hash);
 
             // Store all fragments locally in the first candidate with capacity.
             let mut stored = 0usize;
@@ -794,13 +809,34 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             let fragments_used = all_fragments.len();
             match rlnc::decode(&all_fragments) {
                 Ok(encrypted_data) => {
-                    // Decrypt the recovered chunk — reverses the encryption performed
-                    // in PutFile before RLNC encoding.
-                    let cipher = ChunkCipher::for_network(&network_id);
-                    let data = match cipher.decrypt(&encrypted_data) {
-                        Ok(d) => d,
-                        Err(e) => {
-                            return ControlResponse::err(format!("Chunk decryption failed: {e}"))
+                    // Decrypt the recovered chunk using the per-user CEK.
+                    // Re-derive the CEK from the stored plaintext hash hint.
+                    let plaintext_hash = {
+                        state
+                            .chunk_cek_hints
+                            .read()
+                            .unwrap()
+                            .get(&chunk_id)
+                            .copied()
+                    };
+                    let data = match plaintext_hash {
+                        Some(ph) => {
+                            let secret_mat = state.identity.secret_material();
+                            let cipher = ChunkCipher::for_user(&secret_mat, &ph);
+                            match cipher.decrypt(&encrypted_data) {
+                                Ok(d) => d,
+                                Err(e) => {
+                                    return ControlResponse::err(format!(
+                                        "Chunk decryption failed: {e}"
+                                    ))
+                                }
+                            }
+                        }
+                        None => {
+                            return ControlResponse::err(format!(
+                                "CEK hint not found for chunk '{}' — daemon may have restarted",
+                                chunk_id
+                            ))
                         }
                     };
                     tracing::info!(
