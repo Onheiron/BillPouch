@@ -281,10 +281,8 @@ mod tests {
         store.upsert_offer(sample_offer("o1", "amici"));
         store.add_agreement(sample_agreement("a1", "o1", "amici"));
 
-        let path = std::env::temp_dir().join(format!(
-            "bp_agreement_test_{}.json",
-            uuid::Uuid::new_v4()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("bp_agreement_test_{}.json", uuid::Uuid::new_v4()));
         store.save(&path).unwrap();
 
         let loaded = AgreementStore::load(&path);

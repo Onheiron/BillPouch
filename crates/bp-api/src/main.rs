@@ -395,7 +395,12 @@ async fn marketplace_list_offers(
     State(state): State<AppState>,
     Query(q): Query<MarketplaceQuery>,
 ) -> Response {
-    daemon_call!(state, ControlRequest::ListOffers { network_id: q.network })
+    daemon_call!(
+        state,
+        ControlRequest::ListOffers {
+            network_id: q.network
+        }
+    )
 }
 
 /// Body for `POST /marketplace/accept`.

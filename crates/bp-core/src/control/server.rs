@@ -15,7 +15,7 @@ use crate::{
         FragmentResponse, NetworkCommand, OutgoingAssignments, QosRegistry, StorageManagerMap,
     },
     service::{ServiceInfo, ServiceRegistry, ServiceStatus, ServiceType},
-    storage::{AgreementStore, StorageAgreement, StorageOffer, StorageManager},
+    storage::{AgreementStore, StorageAgreement, StorageManager, StorageOffer},
 };
 use libp2p::{Multiaddr, PeerId};
 use std::{
@@ -312,7 +312,12 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             let offer = StorageOffer {
                 id: uuid::Uuid::new_v4().to_string(),
                 offerer_fingerprint: state.identity.fingerprint.clone(),
-                offerer_alias: state.identity.profile.alias.clone().unwrap_or_else(|| "anonymous".to_string()),
+                offerer_alias: state
+                    .identity
+                    .profile
+                    .alias
+                    .clone()
+                    .unwrap_or_else(|| "anonymous".to_string()),
                 network_id: network_id.clone(),
                 bytes_offered,
                 duration_secs,
