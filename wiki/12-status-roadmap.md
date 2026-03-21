@@ -125,7 +125,7 @@ Ultimo commit verde atteso: branch `main` (post push).
 | 30 | `90cec5e` `1ae4a44` `744f421` `2439865` `1d23d51` `1b02520` | feat: **NAT traversal** — AutoNAT + relay client (`network/behaviour.rs`, `network/mod.rs`) |
 | 31 | `b9fd5a7` `7f8ded7` `2d5b3ee` `f5b85cf` `78eaaa2` | feat: **Storage marketplace** — accordi di storage gossipati tra utenti |
 | 32 | `f4045c5` `871bfc2` `5f35f4c` `214a1fd` | feat: **Passphrase identità** + fix CI (fmt, clap env, rlnc flaky tests) |
-| 33 | *(pending)* | feat: **Encryption at rest** — ChaCha20-Poly1305 prima di RLNC |
+| 33 | `b0ada4a` | feat: **Encryption at rest** — ChaCha20-Poly1305 prima di RLNC |
 
 ### Prossimi step consigliati
 | Priorità | Cosa | Dove |
