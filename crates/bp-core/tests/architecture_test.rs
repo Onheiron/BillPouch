@@ -2020,7 +2020,10 @@ async fn dispatch_list_agreements_vuota() {
     .await;
     match resp {
         ControlResponse::Ok { data: Some(v) } => {
-            assert!(v["agreements"].is_array(), "deve contenere array agreements");
+            assert!(
+                v["agreements"].is_array(),
+                "deve contenere array agreements"
+            );
         }
         _ => panic!("Expected Ok"),
     }
@@ -2099,7 +2102,8 @@ fn identity_export_to_file_crea_json_valido() {
 
         // Il file deve esistere e contenere JSON valido con il fingerprint.
         let contents = std::fs::read_to_string(&export_path).expect("file export deve esistere");
-        let v: serde_json::Value = serde_json::from_str(&contents).expect("deve essere JSON valido");
+        let v: serde_json::Value =
+            serde_json::from_str(&contents).expect("deve essere JSON valido");
         assert_eq!(
             v["profile"]["fingerprint"].as_str().unwrap(),
             id.fingerprint,
@@ -2130,8 +2134,7 @@ fn identity_import_from_file_roundtrip() {
         assert!(!bp_core::identity::Identity::exists().unwrap());
 
         // Importa.
-        let profile =
-            bp_core::identity::Identity::import_from_file(&export_path, false).unwrap();
+        let profile = bp_core::identity::Identity::import_from_file(&export_path, false).unwrap();
         assert_eq!(profile.fingerprint, fp, "fingerprint deve corrispondere");
         assert_eq!(
             profile.alias,
@@ -2186,8 +2189,7 @@ fn identity_import_con_force_sovrascrive() {
         bp_core::identity::Identity::export_to_file(&export_path).unwrap();
 
         // Import con force=true — l'identità esiste già ma deve riuscire.
-        let profile =
-            bp_core::identity::Identity::import_from_file(&export_path, true).unwrap();
+        let profile = bp_core::identity::Identity::import_from_file(&export_path, true).unwrap();
         assert_eq!(profile.fingerprint, fp);
         assert_eq!(profile.alias, Some("originale".into()));
         let _ = std::fs::remove_file(&export_path);
@@ -2223,14 +2225,12 @@ async fn network_loop_accetta_e_processa_comandi() {
 
     let listen_addr: libp2p::Multiaddr = "/ip4/127.0.0.1/tcp/0".parse().unwrap();
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<NetworkCommand>(64);
-    let network_state =
-        std::sync::Arc::new(std::sync::RwLock::new(NetworkState::new()));
+    let network_state = std::sync::Arc::new(std::sync::RwLock::new(NetworkState::new()));
     let storage_managers: StorageManagerMap =
         std::sync::Arc::new(std::sync::RwLock::new(HashMap::new()));
     let outgoing: bp_core::network::OutgoingAssignments =
         std::sync::Arc::new(std::sync::RwLock::new(HashMap::new()));
-    let frag_idx =
-        std::sync::Arc::new(std::sync::RwLock::new(RemoteFragmentIndex::new()));
+    let frag_idx = std::sync::Arc::new(std::sync::RwLock::new(RemoteFragmentIndex::new()));
     let agreements = std::sync::Arc::new(std::sync::RwLock::new(
         bp_core::storage::AgreementStore::default(),
     ));
@@ -2381,7 +2381,9 @@ fn identity_export_con_passphrase_produce_variante_encrypted() {
 #[cfg(unix)]
 fn identity_import_encrypted_roundtrip() {
     with_temp_home(|| {
-        let orig = bp_core::identity::Identity::generate(Some("encrypted-user".into()), Some("s3cret!")).unwrap();
+        let orig =
+            bp_core::identity::Identity::generate(Some("encrypted-user".into()), Some("s3cret!"))
+                .unwrap();
         let fp = orig.fingerprint.clone();
 
         let export_path = std::env::temp_dir().join(format!(
@@ -2392,8 +2394,7 @@ fn identity_import_encrypted_roundtrip() {
 
         // Rimuovi e reimporta.
         bp_core::identity::Identity::remove().unwrap();
-        let profile =
-            bp_core::identity::Identity::import_from_file(&export_path, false).unwrap();
+        let profile = bp_core::identity::Identity::import_from_file(&export_path, false).unwrap();
 
         assert_eq!(profile.fingerprint, fp);
         assert_eq!(profile.alias, Some("encrypted-user".into()));
@@ -2412,8 +2413,10 @@ fn identity_import_encrypted_roundtrip() {
 fn identity_export_senza_identita_ritorna_not_authenticated() {
     with_temp_home(|| {
         // Nessuna identità generata.
-        let export_path = std::env::temp_dir()
-            .join(format!("bp_export_noauth_{}.json", uuid::Uuid::new_v4().simple()));
+        let export_path = std::env::temp_dir().join(format!(
+            "bp_export_noauth_{}.json",
+            uuid::Uuid::new_v4().simple()
+        ));
 
         let err = bp_core::identity::Identity::export_to_file(&export_path).unwrap_err();
         assert!(
