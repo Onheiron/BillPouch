@@ -124,13 +124,12 @@ Ultimo commit verde atteso: branch `main` (post push).
 | 29 | `6e5ca17` `1a258b8` `678007e` | feat: `bp-api` — REST API Axum (GET /status, /peers, /files; POST /hatch, /files; DELETE /services) |
 | 30 | `90cec5e` `1ae4a44` `744f421` `2439865` `1d23d51` `1b02520` | feat: **NAT traversal** — AutoNAT + relay client (`network/behaviour.rs`, `network/mod.rs`) |
 | 31 | `b9fd5a7` `7f8ded7` `2d5b3ee` `f5b85cf` `78eaaa2` | feat: **Storage marketplace** — accordi di storage gossipati tra utenti |
-| 32 | *(pending)* | feat: **Passphrase identità** — Argon2id KDF + AES-256-GCM, `--passphrase` flag |
+| 32 | `f4045c5` | feat: **Passphrase identità** — Argon2id KDF + ChaCha20-Poly1305, `--passphrase` flag |
 
 ### Prossimi step consigliati
 | Priorità | Cosa | Dove |
 |----------|------|------|
-| 🟡 Alta | **Passphrase identità** — *(in corso)* cifratura `identity.key.enc` | `identity.rs`, `config.rs`, `daemon.rs`, CLI |
-| 🔵 Bassa | **Encryption at rest** — cifratura chunk prima RLNC | `control/server.rs` PutFile/GetFile |
+| 🟡 Media | **Encryption at rest** — cifratura chunk prima RLNC | `control/server.rs` PutFile/GetFile |
 | 🔵 Bassa | **Web dashboard** — Tauri UI desktop | nuovo crate `bp-ui` |
 
 ---
