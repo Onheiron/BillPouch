@@ -1910,3 +1910,286 @@ async fn dispatch_linea_vuota_chiude_connessione_senza_crash() {
     // Il server non crasha e chiude silenziosamente la connessione
     drop(stream);
 }
+
+// ═════════════════════════════════════════════════════════════════════════════
+// DISPATCH — handler non ancora coperti
+// ═════════════════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+#[cfg(unix)]
+async fn dispatch_connect_relay_addr_invalida() {
+    let (sp, _s) = start_test_server().await;
+    let resp = send_cmd(
+        &sp,
+        &ControlRequest::ConnectRelay {
+            relay_addr: "questo-non-e-un-multiaddr".into(),
+        },
+    )
+    .await;
+    assert!(
+        matches!(resp, ControlResponse::Error { .. }),
+        "multiaddr invalido deve tornare errore"
+    );
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn dispatch_connect_relay_addr_valida() {
+    let (sp, _s) = start_test_server().await;
+    let resp = send_cmd(
+        &sp,
+        &ControlRequest::ConnectRelay {
+            relay_addr: "/ip4/127.0.0.1/tcp/4001".into(),
+        },
+    )
+    .await;
+    match resp {
+        ControlResponse::Ok { data: Some(v) } => {
+            assert!(v["relay_addr"].is_string());
+        }
+        _ => panic!("Expected Ok con data"),
+    }
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn dispatch_propose_storage_ritorna_offer_id() {
+    let (sp, _s) = start_test_server().await;
+    let resp = send_cmd(
+        &sp,
+        &ControlRequest::ProposeStorage {
+            network_id: "amici".into(),
+            bytes_offered: 1_073_741_824,
+            duration_secs: 86_400,
+            price_tokens: 0,
+        },
+    )
+    .await;
+    match resp {
+        ControlResponse::Ok { data: Some(v) } => {
+            assert!(v["offer_id"].is_string(), "deve avere offer_id");
+            assert!(!v["offer_id"].as_str().unwrap().is_empty());
+        }
+        _ => panic!("Expected Ok con data"),
+    }
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn dispatch_list_offers_vuota() {
+    let (sp, _s) = start_test_server().await;
+    let resp = send_cmd(
+        &sp,
+        &ControlRequest::ListOffers {
+            network_id: "".into(),
+        },
+    )
+    .await;
+    match resp {
+        ControlResponse::Ok { data: Some(v) } => {
+            assert!(v["offers"].is_array(), "deve contenere array offers");
+        }
+        _ => panic!("Expected Ok"),
+    }
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn dispatch_list_offers_filtrata_per_rete() {
+    let (sp, _s) = start_test_server().await;
+    let resp = send_cmd(
+        &sp,
+        &ControlRequest::ListOffers {
+            network_id: "specifica-rete".into(),
+        },
+    )
+    .await;
+    assert!(matches!(resp, ControlResponse::Ok { .. }));
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn dispatch_list_agreements_vuota() {
+    let (sp, _s) = start_test_server().await;
+    let resp = send_cmd(
+        &sp,
+        &ControlRequest::ListAgreements {
+            network_id: "".into(),
+        },
+    )
+    .await;
+    match resp {
+        ControlResponse::Ok { data: Some(v) } => {
+            assert!(v["agreements"].is_array(), "deve contenere array agreements");
+        }
+        _ => panic!("Expected Ok"),
+    }
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn dispatch_accept_storage_offer_non_trovato() {
+    let (sp, _s) = start_test_server().await;
+    let resp = send_cmd(
+        &sp,
+        &ControlRequest::AcceptStorage {
+            offer_id: "offer-non-esistente-uuid".into(),
+        },
+    )
+    .await;
+    assert!(
+        matches!(resp, ControlResponse::Error { .. }),
+        "offer non trovato deve tornare errore"
+    );
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn dispatch_accept_storage_offer_trovato() {
+    let (sp, state) = start_test_server().await;
+
+    // Inietta manualmente un'offer nello stato condiviso.
+    let offer_id = {
+        let offer = bp_core::storage::StorageOffer {
+            id: uuid::Uuid::new_v4().to_string(),
+            offerer_fingerprint: "deadbeef12345678".to_string(),
+            offerer_alias: "test-offerer".to_string(),
+            network_id: "test-net".to_string(),
+            bytes_offered: 1_073_741_824,
+            duration_secs: 86_400,
+            price_tokens: 0,
+            announced_at: 0,
+        };
+        let id = offer.id.clone();
+        state.agreements.write().unwrap().upsert_offer(offer);
+        id
+    };
+
+    let resp = send_cmd(
+        &sp,
+        &ControlRequest::AcceptStorage {
+            offer_id: offer_id.clone(),
+        },
+    )
+    .await;
+    match resp {
+        ControlResponse::Ok { data: Some(v) } => {
+            assert!(v["agreement_id"].is_string(), "deve avere agreement_id");
+            assert_eq!(v["offer_id"].as_str().unwrap(), offer_id);
+        }
+        _ => panic!("Expected Ok con data"),
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// IDENTITY — export / import (multi-device)
+// ═════════════════════════════════════════════════════════════════════════════
+
+#[test]
+#[cfg(unix)]
+fn identity_export_to_file_crea_json_valido() {
+    with_temp_home(|| {
+        let id = bp_core::identity::Identity::generate(Some("exportando".into()), None).unwrap();
+
+        let export_path = std::env::temp_dir().join(format!(
+            "bp_export_test_{}.json",
+            uuid::Uuid::new_v4().simple()
+        ));
+        bp_core::identity::Identity::export_to_file(&export_path).unwrap();
+
+        // Il file deve esistere e contenere JSON valido con il fingerprint.
+        let contents = std::fs::read_to_string(&export_path).expect("file export deve esistere");
+        let v: serde_json::Value = serde_json::from_str(&contents).expect("deve essere JSON valido");
+        assert_eq!(
+            v["profile"]["fingerprint"].as_str().unwrap(),
+            id.fingerprint,
+            "fingerprint nel file deve corrispondere"
+        );
+        assert_eq!(v["version"].as_u64().unwrap(), 1);
+        let _ = std::fs::remove_file(&export_path);
+    });
+}
+
+#[test]
+#[cfg(unix)]
+fn identity_import_from_file_roundtrip() {
+    with_temp_home(|| {
+        // Crea l'identità A.
+        let id = bp_core::identity::Identity::generate(Some("originale".into()), None).unwrap();
+        let fp = id.fingerprint.clone();
+
+        // Esporta.
+        let export_path = std::env::temp_dir().join(format!(
+            "bp_export_rt_{}.json",
+            uuid::Uuid::new_v4().simple()
+        ));
+        bp_core::identity::Identity::export_to_file(&export_path).unwrap();
+
+        // Rimuovi l'identità locale.
+        bp_core::identity::Identity::remove().unwrap();
+        assert!(!bp_core::identity::Identity::exists().unwrap());
+
+        // Importa.
+        let profile =
+            bp_core::identity::Identity::import_from_file(&export_path, false).unwrap();
+        assert_eq!(profile.fingerprint, fp, "fingerprint deve corrispondere");
+        assert_eq!(
+            profile.alias,
+            Some("originale".into()),
+            "alias deve corrispondere"
+        );
+
+        // L'identità deve ora essere presente.
+        assert!(
+            bp_core::identity::Identity::exists().unwrap(),
+            "identità deve esistere dopo import"
+        );
+        let _ = std::fs::remove_file(&export_path);
+    });
+}
+
+#[test]
+#[cfg(unix)]
+fn identity_import_senza_force_fallisce_se_esiste() {
+    with_temp_home(|| {
+        // Crea e poi esporta.
+        bp_core::identity::Identity::generate(None, None).unwrap();
+        let export_path = std::env::temp_dir().join(format!(
+            "bp_export_noforce_{}.json",
+            uuid::Uuid::new_v4().simple()
+        ));
+        bp_core::identity::Identity::export_to_file(&export_path).unwrap();
+
+        // L'identità esiste ancora — import senza force deve fallire.
+        let err = bp_core::identity::Identity::import_from_file(&export_path, false).unwrap_err();
+        assert!(
+            err.to_string().to_lowercase().contains("logout")
+                || err.to_string().to_lowercase().contains("already exists")
+                || err.to_string().to_lowercase().contains("esiste"),
+            "errore deve suggerire bp logout: {err}"
+        );
+        let _ = std::fs::remove_file(&export_path);
+    });
+}
+
+#[test]
+#[cfg(unix)]
+fn identity_import_con_force_sovrascrive() {
+    with_temp_home(|| {
+        // Crea e poi esporta.
+        let id = bp_core::identity::Identity::generate(Some("originale".into()), None).unwrap();
+        let fp = id.fingerprint.clone();
+        let export_path = std::env::temp_dir().join(format!(
+            "bp_export_force_{}.json",
+            uuid::Uuid::new_v4().simple()
+        ));
+        bp_core::identity::Identity::export_to_file(&export_path).unwrap();
+
+        // Import con force=true — l'identità esiste già ma deve riuscire.
+        let profile =
+            bp_core::identity::Identity::import_from_file(&export_path, true).unwrap();
+        assert_eq!(profile.fingerprint, fp);
+        assert_eq!(profile.alias, Some("originale".into()));
+        let _ = std::fs::remove_file(&export_path);
+    });
+}
