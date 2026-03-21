@@ -2,7 +2,7 @@
 
 ## Versione corrente
 
-**v0.2.0** (Alpha) — Marzo 2026
+**v0.2.1** (Alpha) — Marzo 2026
 
 ---
 
@@ -132,13 +132,15 @@ Ultimo commit verde atteso: branch `main` (post push).
 | 36 | `a551618` | fix: rimosse `&` spurie in `ControlClient::send()` in `commands/invite.rs` |
 | 37 | `8954401` | style: cargo fmt — reformatting `invite.rs`, `server.rs`, `commands/invite.rs` |
 | 38 | `068300e` | test: `ENV_LOCK` mutex in test invite — serializzazione test che mutano `HOME`/`XDG_DATA_HOME` |
+| 39 | `487a26d` | feat: **Multi-device identity** — `ExportedIdentity`, `ExportedKeyData`; `Identity::export_to_file` / `import_from_file`; `bp export-identity --out` / `bp import-identity [--force]` |
+| 40 | (in push) | feat: **Web dashboard** — UI HTML/JS embedded in `bp-api`; `GET /` restituisce la dashboard; auto-refresh 5s |
 
 ### Prossimi step consigliati
 | Priorità | Cosa | Dove |
 |----------|------|---------|
 
 
-| 🔵 Bassa | **Web dashboard** — UI HTML/JS servita da `bp-api` Axum | `bp-api/static/` |
+| 🔵 Bassa | **Web dashboard** — UI HTML/JS servita da `bp-api` Axum | `bp-api/static/` | ✅ Done |
 
 ---
 
@@ -149,7 +151,7 @@ Ultimo commit verde atteso: branch `main` (post push).
 | Funzionalità | Stato | Descrizione |
 |---|---|---|
 | Multi-device identity | ✅ Done | `bp export-identity` / `bp import-identity` |
-| Web dashboard | ⏳ Pianificato | UI HTML/JS servita da `bp-api` Axum |
+| Web dashboard | ✅ Done | `GET /` in `bp-api` — SPA HTML/JS embedded, auto-refresh 5s |
 
 ### Futuro 🔮
 
@@ -165,6 +167,9 @@ Ultimo commit verde atteso: branch `main` (post push).
 ---
 
 ## Changelog recente
+
+### v0.2.1 (Marzo 2026)
+- **feat:** Web dashboard — `GET /` in `bp-api` restituisce una SPA HTML/JS embedded via `include_str!`; dark UI; sezioni Status, Peers, Files, Marketplace; auto-refresh 5s; zero dipendenze runtime
 
 ### v0.2.0 (Marzo 2026)
 - **feat:** Multi-device identity — `Identity::export_to_file(dest)` legge l’identità da disco (plaintext o cifrata) e produce un bundle JSON portabile (`ExportedIdentity`); `Identity::import_from_file(src, overwrite)` installa keypair e profilo nel data dir XDG; `ExportedKeyData` enum con variante `Plaintext { key_hex }` e `Encrypted(EncryptedKeyFile)`; `bp export-identity --out <file>` e `bp import-identity <file> [--force]`

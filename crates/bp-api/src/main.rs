@@ -26,7 +26,7 @@
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    response::{IntoResponse, Response},
+    response::{Html, IntoResponse, Response},
     routing::{delete, get, post},
     Json, Router,
 };
@@ -129,7 +129,17 @@ fn api_error(status: StatusCode, message: String) -> Response {
     (status, Json(serde_json::json!({ "error": message }))).into_response()
 }
 
-// ── Handlers ──────────────────────────────────────────────────────────────────
+// ── Dashboard (embedded) ─────────────────────────────────────────────────────
+
+/// The single-page dashboard, embedded at compile time from `static/index.html`.
+const DASHBOARD_HTML: &str = include_str!("../static/index.html");
+
+/// `GET /` — serve the web dashboard.
+async fn dashboard() -> impl IntoResponse {
+    Html(DASHBOARD_HTML)
+}
+
+// ── Liveness ──────────────────────────────────────────────────────────────────
 
 /// `GET /ping` — liveness check.
 #[instrument(skip_all)]
@@ -457,6 +467,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let app = Router::new()
+        .route("/", get(dashboard))
         .route("/ping", get(ping))
         .route("/status", get(status))
         .route("/peers", get(peers))
