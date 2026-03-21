@@ -2,7 +2,7 @@
 
 ## Versione corrente
 
-**v0.1.4** (Alpha) — Marzo 2026
+**v0.1.8** (Alpha) — Marzo 2026
 
 ---
 
@@ -82,12 +82,12 @@
 | ~~Persistenza Kademlia~~           | ✅ Risolto | `kad_peers.json` su disco (commit 26)                                   |
 | ~~CEK encryption mancante~~        | ✅ Risolto | `ChunkCipher::for_user` — CEK derivata da identity + BLAKE3(plaintext) (commit 34) |
 | ~~NetworkMetaKey derivabile~~      | ✅ Risolto | `NetworkMetaKey::generate/load/save` — chiave random in `network_keys.json` (commit 34) |
-| **🟠 Nessun sistema di inviti**   | Alto    | Chiunque conosce il `network_id` può unirsi. L'accesso deve essere su invito firmato e cifrato. |
+| ~~Nessun sistema di inviti~~       | ✅ Risolto | `bp invite create / join` — token firmato+cifrato con password (commit 35) |
 | **Nessun multi-device**           | Basso   | Manca `bp export-identity` / `bp import-identity` per spostare il keypair su un'altra macchina. |
 
 ---
 
-## Stato sessione di sviluppo (aggiornato 20 Marzo 2026)
+## Stato sessione di sviluppo (aggiornato 21 Marzo 2026)
 
 Ultimo commit verde atteso: branch `main` (post push).
 
@@ -128,11 +128,12 @@ Ultimo commit verde atteso: branch `main` (post push).
 | 32 | `f4045c5` `871bfc2` `5f35f4c` `214a1fd` | feat: **Passphrase identità** + fix CI (fmt, clap env, rlnc flaky tests) |
 | 33 | `b0ada4a` `9366e30` | feat: **Encryption at rest** — ChaCha20-Poly1305 prima di RLNC; fix rustfmt |
 | 34 | `23780cb` | feat: **CEK per-utente** + **NetworkMetaKey segreta** — `ChunkCipher::for_user` (CEK da identity + BLAKE3 plaintext); `NetworkMetaKey::generate/load/save` (random, non derivabile dal nome); `chunk_cek_hints` in `DaemonState`; `Identity::secret_material()` |
+| 35 | `6be3981` | feat: **Sistema di inviti** — `invite.rs` (`create_invite`, `redeem_invite`, `save_invite_key`); token firmato Ed25519 + cifrato Argon2id+ChaCha20-Poly1305; `bp invite create / join`; Join auto-genera `NetworkMetaKey` per reti nuove; 5 unit test |
 
 ### Prossimi step consigliati
 | Priorità | Cosa | Dove |
 |----------|------|---------|
-| � Alta | **Sistema di inviti** — `bp invite create --for <fingerprint> [--network] [--ttl]` genera un token firmato (Ed25519) e cifrato (ECIES) che include `network_id` + `NetworkMetaKey` + scadenza + fingerprint destinatario; `bp join --invite <blob>` decifra e salva la chiave | nuovo `commands/invite.rs` + `control/protocol.rs` |
+
 | 🔵 Bassa | **Multi-device** — `bp export-identity` / `bp import-identity` | `commands/auth.rs` |
 | 🔵 Bassa | **Web dashboard** — UI HTML/JS servita da `bp-api` Axum | `bp-api/static/` |
 
@@ -144,7 +145,6 @@ Ultimo commit verde atteso: branch `main` (post push).
 
 | Funzionalità | Stato | Descrizione |
 |---|---|---|
-| Sistema di inviti | ⏳ Prossimo | Token firmato+cifrato per accesso controllato; veicola NetworkMetaKey al nuovo membro |
 | Multi-device identity | ⏳ Pianificato | `bp export-identity` / `bp import-identity` |
 | Web dashboard | ⏳ Pianificato | UI HTML/JS servita da `bp-api` Axum |
 
@@ -157,11 +157,14 @@ Ultimo commit verde atteso: branch `main` (post push).
 | Encryption at rest        | ✅ Done — ChaCha20-Poly1305 per-chunk; CEK derivata da identity + BLAKE3(plaintext) |
 | NetworkMetaKey segreta    | ✅ Done — chiave random in `network_keys.json`, non derivabile dal nome rete |
 | CEK per-utente            | ✅ Done — `ChunkCipher::for_user`; solo il proprietario decifra; ECIES sharing futuro |
-| Sistema di inviti         | ⏳ Prossimo — accesso a rete su invito firmato+cifrato; unico vettore di distribuzione della NetworkMetaKey |
+| Sistema di inviti         | ✅ Done — `bp invite create / join`; Ed25519 sign + Argon2id+ChaCha20-Poly1305 encrypt; NetworkMetaKey trasportata nel token |
 
 ---
 
 ## Changelog recente
+
+### v0.1.8 (Marzo 2026)
+- **feat:** Sistema di inviti — `crates/bp-core/src/invite.rs`; `InvitePayload` firmato Ed25519 + cifrato Argon2id+ChaCha20-Poly1305; `create_invite()` / `redeem_invite()` / `save_invite_key()`; `ControlRequest::CreateInvite`; `bp invite create [--network] [--for-fingerprint] [--ttl] --invite-password`; `bp invite join <blob> --invite-password`; `Join` ora genera automaticamente una NetworkMetaKey random per reti create ex-novo; `fingerprint_pubkey()` in identity.rs; 5 unit test (roundtrip, wrong password, expired, tampered, persist)
 
 ### v0.1.7 (Marzo 2026)
 - **feat:** CEK per-utente — `Identity::secret_material()` (BLAKE3 del keypair); `ChunkCipher::for_user(secret_material, plaintext_hash)` — CEK = `BLAKE3_keyed(secret, "billpouch/cek/v1" || BLAKE3(chunk))`; `chunk_cek_hints: RwLock<HashMap<chunk_id, [u8;32]>>` in `DaemonState`; PutFile/GetFile aggiornati
