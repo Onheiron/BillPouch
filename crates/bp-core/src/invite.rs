@@ -292,16 +292,17 @@ fn derive_key(password: &str, salt: &[u8]) -> BpResult<[u8; 32]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::identity::{Identity, UserProfile};
+    use crate::storage::manifest::NetworkMetaKey;
 
     fn make_identity_and_key() -> (Identity, NetworkMetaKey) {
-        use crate::storage::manifest::NetworkMetaKey;
         // Use a deterministic test key (not from disk).
         let nmk = NetworkMetaKey([0xABu8; 32]);
         // Build a fresh keypair in memory.
         let keypair = libp2p::identity::Keypair::generate_ed25519();
         let peer_id = libp2p::PeerId::from_public_key(&keypair.public());
         let fp = crate::identity::fingerprint(&keypair);
-        let profile = crate::identity::UserProfile {
+        let profile = UserProfile {
             fingerprint: fp.clone(),
             alias: Some("tester".into()),
             created_at: chrono::Utc::now(),
