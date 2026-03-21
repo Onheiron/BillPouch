@@ -77,12 +77,13 @@
 
 | Limitazione                        | Impatto | Descrizione                                                              |
 |------------------------------------|---------|--------------------------------------------------------------------------|
-| **Kademlia in memoria**            | Medio   | `MemoryStore` si svuota ad ogni riavvio del daemon                       |
-| **Nessuna persistenza gossip**     | Medio   | I peer noti vengono persi al riavvio                                     |
-| **Nessun NAT traversal**           | Medio   | Funziona su LAN/Docker, non testato attraverso NAT                       |
 | ~~Chiave in chiaro su disco~~      | ✅ Risolto | Argon2id + ChaCha20-Poly1305 — `identity.key.enc` con passphrase opzionale  |
-| **Nessun multi-device sync**       | Basso   | Non è possibile usare la stessa identità su più macchine                 |
-| **Nessuna autenticazione rete**    | Basso   | Chiunque conosce il `network_id` può partecipare                         |
+| ~~NAT traversal~~                  | ✅ Risolto | AutoNAT + relay circuit v2 (commit 30)                                  |
+| ~~Persistenza Kademlia~~           | ✅ Risolto | `kad_peers.json` su disco (commit 26)                                   |
+| **🔴 CEK encryption mancante**    | Critico | I chunk sono cifrati con la chiave di rete, non con la chiave dell'utente. Chi è nella rete può leggere i dati altrui. |
+| **🔴 NetworkMetaKey derivabile**  | Critico | La chiave dei metadati è `BLAKE3("billpouch/meta/v1" \|\| network_id)` — derivabile da chiunque conosca il nome della rete. Deve essere una chiave segreta random distribuita tramite invito. |
+| **🟠 Nessun sistema di inviti**   | Alto    | Chiunque conosce il `network_id` può unirsi. L'accesso deve essere su invito firmato e cifrato. |
+| **Nessun multi-device**           | Basso   | Manca `bp export-identity` / `bp import-identity` per spostare il keypair su un'altra macchina. |
 
 ---
 
@@ -129,8 +130,12 @@ Ultimo commit verde atteso: branch `main` (post push).
 
 ### Prossimi step consigliati
 | Priorità | Cosa | Dove |
-|----------|------|------|
-| 🔵 Bassa | **Web dashboard** — Tauri UI desktop | nuovo crate `bp-ui` |
+|----------|------|---------|
+| 🔴 Critica | **CEK per-utente** — ogni file ottiene una Content Encryption Key derivata dalla chiave privata dell'utente; `NetworkMetaKey` cifra solo i manifest, mai i chunk; `FileManifest` include `encrypted_cek` per ogni destinatario autorizzato (ECIES su Ed25519→X25519) | `storage/encryption.rs`, `storage/manifest.rs`, `control/server.rs` |
+| 🔴 Critica | **NetworkMetaKey come segreto di rete** — generata casualmente alla creazione della rete, non derivata dal `network_id`; storata cifrata localmente; distribuita solo via token di invito | `storage/manifest.rs`, `config.rs`, `control/server.rs` |
+| 🟠 Alta | **Sistema di inviti** — `bp invite create --for <fingerprint> [--network] [--ttl]` genera un token firmato (Ed25519) e cifrato (ECIES) che include `network_id` + `NetworkMetaKey` + scadenza + fingerprint destinatario; `bp join --invite <blob>` verifica firma e decifra | nuovo `control/protocol.rs` + `commands/invite.rs` |
+| 🔵 Bassa | **Multi-device** — `bp export-identity` / `bp import-identity` per spostare `identity.key.enc` su un'altra macchina | `commands/auth.rs` |
+| 🔵 Bassa | **Web dashboard** — UI servita da `bp-api` (HTML/JS statici in Axum, nessuna dipendenza Node.js) | `bp-api/static/` |
 
 ---
 
@@ -138,18 +143,13 @@ Ultimo commit verde atteso: branch `main` (post push).
 
 ### Pianificato 📋
 
-| Funzionalità | Descrizione |
-|---|---|
-| FragmentIndex gossip | Indice distribuito `{chunk_id, fragment_id, fragment_hash, pouch_id}` |
-| Raccolta frammenti remoti | `GetFile` interroga Pouch remoti via `FetchFragment` se frammenti locali < k |
-| Distribuzione automatica | `PutFile` + Hatch pushano frammenti ai Pouch della rete |
-| Parametri N/K dinamici | Calcolo ridondanza in base a numero Pouch, stabilità, target durability |
-| Rigenerazione preventiva | Recoding automatico quando un Pouch è `suspected` o `blacklisted` |
-| Network quality monitor | Challenge Ping + PoS, fault score, blacklist gossip |
-| Storage marketplace | Accordi di storage tra utenti |
-| REST API (axum) | Adapter HTTP per integrazioni terze |
-| Persistenza Kademlia | Store su disco (sled/rocksdb) per il DHT |
-| Bootstrap nodes | Nodi noti per la scoperta iniziale oltre mDNS |
+| Funzionalità | Stato | Descrizione |
+|---|---|---|
+| CEK per-utente + ECIES sharing | ⏳ Prossimo | Chunk cifrati con chiave derivata dal keypair utente; condivisione tramite encrypted_cek nel manifest |
+| NetworkMetaKey come segreto di rete | ⏳ Prossimo | Chiave random generata alla creazione rete, non derivabile dal network_id |
+| Sistema di inviti | ⏳ Prossimo | Token firmato+cifrato per accesso controllato; veicola NetworkMetaKey al nuovo membro |
+| Multi-device identity | ⏳ Pianificato | `bp export-identity` / `bp import-identity` |
+| Web dashboard | ⏳ Pianificato | UI HTML/JS servita da `bp-api` Axum |
 
 ### Futuro 🔮
 
@@ -157,15 +157,17 @@ Ultimo commit verde atteso: branch `main` (post push).
 |---------------------------|-----------------------------------------------|
 | NAT traversal             | ✅ Done — AutoNAT + relay circuit v2          |
 | Passphrase identità       | ✅ Done — Argon2id + ChaCha20-Poly1305 su `identity.key.enc` |
-| Encryption at rest        | ✅ Done — ChaCha20-Poly1305 per-chunk, chiave derivata dalla NetworkMetaKey |
-| Web dashboard (Tauri)     | UI desktop cross-platform                     |
+| Encryption at rest (v1)   | ⚠️ Parziale — ChaCha20-Poly1305 per-chunk presente, ma usa NetworkMetaKey invece di CEK utente → da correggere |
+| CEK per-utente            | ⏳ Chunk cifrati con chiave derivata dalla chiave privata dell'utente; ECIES per condivisione file tra più identità |
+| NetworkMetaKey segreta    | ⏳ Chiave di rete random, non derivabile da `network_id`; distribuita via invite token |
+| Sistema di inviti         | ⏳ Accesso a rete su invito firmato+cifrato; unico vettore di distribuzione della NetworkMetaKey |
 
 ---
 
 ## Changelog recente
 
 ### v0.1.6 (Marzo 2026)
-- **feat:** Encryption at rest — `storage/encryption.rs` `ChunkCipher`; chiave per-rete derivata da `NetworkMetaKey` (BLAKE3-keyed); ChaCha20-Poly1305; PutFile cifra prima di RLNC, GetFile decifra dopo decode; 6 unit test
+- **feat:** Encryption at rest (v1) — `storage/encryption.rs` `ChunkCipher`; ChaCha20-Poly1305; PutFile cifra prima di RLNC, GetFile decifra dopo decode; 6 unit test — ⚠️ usa NetworkMetaKey come chiave chunk (da correggere con CEK utente)
 - **fix(rlnc):** encoding sistematico (identity matrix per frammenti 0..k); tutti i test decode deterministici; guardia zero-vector in `recode()`
 
 ### v0.1.5 (Marzo 2026)
