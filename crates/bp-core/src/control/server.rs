@@ -800,9 +800,7 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                     let data = match cipher.decrypt(&encrypted_data) {
                         Ok(d) => d,
                         Err(e) => {
-                            return ControlResponse::err(format!(
-                                "Chunk decryption failed: {e}"
-                            ))
+                            return ControlResponse::err(format!("Chunk decryption failed: {e}"))
                         }
                     };
                     tracing::info!(
