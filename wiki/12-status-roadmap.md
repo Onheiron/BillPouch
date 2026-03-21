@@ -133,7 +133,7 @@ Ultimo commit verde atteso: branch `main` (post push).
 | 37 | `8954401` | style: cargo fmt — reformatting `invite.rs`, `server.rs`, `commands/invite.rs` |
 | 38 | `068300e` | test: `ENV_LOCK` mutex in test invite — serializzazione test che mutano `HOME`/`XDG_DATA_HOME` |
 | 39 | `487a26d` | feat: **Multi-device identity** — `ExportedIdentity`, `ExportedKeyData`; `Identity::export_to_file` / `import_from_file`; `bp export-identity --out` / `bp import-identity [--force]` |
-| 40 | (in push) | feat: **Web dashboard** — UI HTML/JS embedded in `bp-api`; `GET /` restituisce la dashboard; auto-refresh 5s |
+| 40 | `d4cfa3b` | feat: **Web dashboard** — UI HTML/JS embedded in `bp-api`; `GET /` restituisce la dashboard; auto-refresh 5s |
 
 ### Prossimi step consigliati
 | Priorità | Cosa | Dove |
