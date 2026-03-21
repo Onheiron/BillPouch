@@ -294,6 +294,10 @@ mod tests {
     use crate::identity::{Identity, UserProfile};
     use crate::storage::manifest::NetworkMetaKey;
 
+    /// Serialise every test that mutates `HOME`/`XDG_DATA_HOME` so parallel
+    /// test threads don't trample each other's environment.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn make_identity_and_key() -> (Identity, NetworkMetaKey) {
         // Use a deterministic test key (not from disk).
         let nmk = NetworkMetaKey([0xABu8; 32]);
@@ -318,6 +322,7 @@ mod tests {
     /// Write a fake NetworkMetaKey for `network_id` to a temp dir and update
     /// the config base path so `load/save` use it.
     fn with_temp_nmk<F: FnOnce(&Identity, &str)>(f: F) {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir =
             std::env::temp_dir().join(format!("bp_invite_test_{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
