@@ -2341,3 +2341,86 @@ async fn network_loop_accetta_e_processa_comandi() {
         }
     }
 }
+
+// ═════════════════════════════════════════════════════════════════════════════
+// IDENTITY — export/import identità cifrate + error path
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// Export di un'identità con passphrase → il JSON deve contenere la variante
+/// `Encrypted` nei dati della chiave (non un hex plaintext).
+#[test]
+#[cfg(unix)]
+fn identity_export_con_passphrase_produce_variante_encrypted() {
+    with_temp_home(|| {
+        bp_core::identity::Identity::generate(None, Some("myPassphrase42")).unwrap();
+
+        let export_path = std::env::temp_dir().join(format!(
+            "bp_export_enc_{}.json",
+            uuid::Uuid::new_v4().simple()
+        ));
+        bp_core::identity::Identity::export_to_file(&export_path).unwrap();
+
+        let contents = std::fs::read_to_string(&export_path).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&contents).unwrap();
+
+        // Con passphrase deve essere la variante Encrypted (non Plaintext).
+        // Il campo "key" deve avere la chiave "Encrypted" o non avere "key_hex" diretto.
+        assert!(
+            v["key"].get("Encrypted").is_some() || v["key"].get("encrypted").is_some(),
+            "identità con passphrase deve esportare variante Encrypted, trovato: {}",
+            v["key"]
+        );
+
+        let _ = std::fs::remove_file(&export_path);
+    });
+}
+
+/// Importazione di un'identità cifrata: dopo l'import l'identità deve essere
+/// caricabile usando la passphrase originale.
+#[test]
+#[cfg(unix)]
+fn identity_import_encrypted_roundtrip() {
+    with_temp_home(|| {
+        let orig = bp_core::identity::Identity::generate(Some("encrypted-user".into()), Some("s3cret!")).unwrap();
+        let fp = orig.fingerprint.clone();
+
+        let export_path = std::env::temp_dir().join(format!(
+            "bp_export_enc_rt_{}.json",
+            uuid::Uuid::new_v4().simple()
+        ));
+        bp_core::identity::Identity::export_to_file(&export_path).unwrap();
+
+        // Rimuovi e reimporta.
+        bp_core::identity::Identity::remove().unwrap();
+        let profile =
+            bp_core::identity::Identity::import_from_file(&export_path, false).unwrap();
+
+        assert_eq!(profile.fingerprint, fp);
+        assert_eq!(profile.alias, Some("encrypted-user".into()));
+
+        // Deve essere caricabile con la passphrase corretta.
+        let loaded = bp_core::identity::Identity::load(Some("s3cret!")).unwrap();
+        assert_eq!(loaded.fingerprint, fp);
+
+        let _ = std::fs::remove_file(&export_path);
+    });
+}
+
+/// `export_to_file` senza identità su disco deve ritornare `NotAuthenticated`.
+#[test]
+#[cfg(unix)]
+fn identity_export_senza_identita_ritorna_not_authenticated() {
+    with_temp_home(|| {
+        // Nessuna identità generata.
+        let export_path = std::env::temp_dir()
+            .join(format!("bp_export_noauth_{}.json", uuid::Uuid::new_v4().simple()));
+
+        let err = bp_core::identity::Identity::export_to_file(&export_path).unwrap_err();
+        assert!(
+            matches!(err, bp_core::error::BpError::NotAuthenticated)
+                || err.to_string().to_lowercase().contains("login")
+                || err.to_string().to_lowercase().contains("authenticated"),
+            "export senza identità deve ritornare NotAuthenticated: {err}"
+        );
+    });
+}
