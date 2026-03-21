@@ -186,20 +186,25 @@ pub fn recode(fragments: &[EncodedFragment], count: usize) -> BpResult<Vec<Encod
     let mut result = Vec::with_capacity(count);
 
     for _ in 0..count {
-        // Draw random recoding coefficients a[i] for each input fragment
-        let coeffs: Vec<u8> = (0..fragments.len()).map(|_| rng.gen::<u8>()).collect();
+        // Draw random recoding coefficients, retrying if the resulting coding
+        // vector is the zero vector (which would make the fragment useless for
+        // decoding).  P(all-zero coding vector) ≈ (1/256)^m where m = input
+        // count, so at most one retry is ever needed in practice.
+        let (new_data, new_vector) = loop {
+            let coeffs: Vec<u8> = (0..fragments.len()).map(|_| rng.gen::<u8>()).collect();
 
-        // new_data    = Σ a[i] · fragment[i].data
-        let mut new_data = vec![0u8; sym_size];
-        for (frag, &a) in fragments.iter().zip(coeffs.iter()) {
-            gf256::mul_acc(&mut new_data, &frag.data, a);
-        }
+            let mut data = vec![0u8; sym_size];
+            let mut vector = vec![0u8; k];
+            for (frag, &a) in fragments.iter().zip(coeffs.iter()) {
+                gf256::mul_acc(&mut data, &frag.data, a);
+                gf256::mul_acc(&mut vector, &frag.coding_vector, a);
+            }
 
-        // new_vector  = Σ a[i] · fragment[i].coding_vector
-        let mut new_vector = vec![0u8; k];
-        for (frag, &a) in fragments.iter().zip(coeffs.iter()) {
-            gf256::mul_acc(&mut new_vector, &frag.coding_vector, a);
-        }
+            if vector.iter().any(|&b| b != 0) {
+                break (data, vector);
+            }
+            // zero vector — retry with new random coefficients
+        };
 
         result.push(EncodedFragment {
             id: Uuid::new_v4().to_string(),
@@ -398,12 +403,17 @@ mod tests {
     fn recode_produces_valid_fragments() {
         let k = 4;
         let frags = encode(TEST_CHUNK, k, k + 4).unwrap();
-        // Recode 3 new fragments from the first 2 existing ones
+        // Recode 3 new fragments. recode() guarantees the coding vector is never
+        // all-zero (it retries internally), so every output fragment is usable.
         let recoded = recode(&frags[..2], 3).unwrap();
         assert_eq!(recoded.len(), 3);
         for f in &recoded {
             assert_eq!(f.coding_vector.len(), k);
             assert_eq!(f.data.len(), frags[0].data.len());
+            assert!(
+                f.coding_vector.iter().any(|&b| b != 0),
+                "recode must never produce an all-zero coding vector"
+            );
         }
     }
 
