@@ -42,17 +42,18 @@
 //! ## File upload pipeline
 //!
 //! ```text
-//! File (user key)
+//! File (user data)
 //!   │
 //!   ▼ 1. Chunking  (chunk_size bytes each)
 //!   │
-//!   ▼ 2. Encrypt each chunk  (user's symmetric key, AES-256-GCM / ChaCha20)
+//!   ▼ 2. Encrypt each chunk  (ChunkCipher — ChaCha20-Poly1305, network key)
+//!   │      chunk_id = BLAKE3(encrypted_chunk)[0..16]
 //!   │
-//!   ▼ 3. RLNC encode   k → n fragments per chunk
+//!   ▼ 3. RLNC encode   k → n fragments per encrypted chunk
 //!   │      k = compute_coding_params(stabilities, ph, q_target).k
 //!   │
 //!   ▼ 4. Distribute one fragment per Pouch peer
-//!         (no local copy; originating Bill node has no storage)
+//!         (Pouches only hold ciphertext fragments — never plaintext)
 //! ```
 //!
 //! ## File retrieval pipeline
@@ -62,7 +63,7 @@
 //!   │
 //!   ▼  per chunk: collect ≥ k fragments from Pouch peers
 //!   ▼  RLNC decode  → encrypted chunk
-//!   ▼  decrypt with user's key → plaintext chunk
+//!   ▼  ChunkCipher::decrypt (network key) → plaintext chunk
 //!   ▼  reassemble chunks → file
 //! ```
 
@@ -192,7 +193,11 @@ pub struct FragmentLocation {
 /// Manifest entry for a single chunk of a file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChunkManifest {
-    /// BLAKE3 hash prefix (16 hex chars) of the **plaintext** chunk.
+    /// BLAKE3 hash prefix (16 hex chars) of the **encrypted** chunk
+    /// (i.e. the data that was fed into `rlnc::encode`).
+    ///
+    /// Encryption is performed with [`crate::storage::ChunkCipher`] before
+    /// RLNC coding, so Pouch nodes never hold plaintext data.
     pub chunk_id: String,
     /// Zero-based index of this chunk in the file.
     pub chunk_index: usize,
