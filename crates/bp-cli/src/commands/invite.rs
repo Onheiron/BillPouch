@@ -74,14 +74,10 @@ pub async fn join(blob: String, invite_password: String) -> Result<()> {
 
     println!("✅ Invite verified");
     println!("   Network:  {}", payload.network_id);
-    println!(
-        "   Inviter:  {} (fingerprint)",
-        payload.inviter_fingerprint
-    );
+    println!("   Inviter:  {} (fingerprint)", payload.inviter_fingerprint);
 
     // Persist the NetworkMetaKey.
-    bp_core::invite::save_invite_key(&payload)
-        .context("Failed to save network key from invite")?;
+    bp_core::invite::save_invite_key(&payload).context("Failed to save network key from invite")?;
     println!("   NetworkMetaKey saved to local keystore ✓");
 
     // Ask the daemon to join the network (subscribe to gossip topics).

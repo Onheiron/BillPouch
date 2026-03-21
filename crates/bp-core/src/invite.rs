@@ -123,9 +123,8 @@ pub fn create_invite(
     let mut nonce_bytes = [0u8; 16];
     rand::thread_rng().fill_bytes(&mut nonce_bytes);
 
-    let expires_at = (chrono::Utc::now()
-        + chrono::Duration::hours(ttl_hours as i64))
-    .timestamp() as u64;
+    let expires_at =
+        (chrono::Utc::now() + chrono::Duration::hours(ttl_hours as i64)).timestamp() as u64;
 
     let payload = InvitePayload {
         version: 1,
@@ -138,8 +137,7 @@ pub fn create_invite(
         nonce_hex: hex::encode(nonce_bytes),
     };
 
-    let payload_json =
-        serde_json::to_vec(&payload).map_err(BpError::Serde)?;
+    let payload_json = serde_json::to_vec(&payload).map_err(BpError::Serde)?;
 
     // Ed25519 sign the payload.
     let signature = identity
@@ -166,8 +164,7 @@ pub fn create_invite(
         .map_err(|e| BpError::Identity(format!("Invite encryption failed: {e}")))?;
 
     // Assemble blob: salt || enc_nonce || ciphertext.
-    let mut blob_bytes =
-        Vec::with_capacity(ARGON2_SALT_LEN + CHACHA_NONCE_LEN + ciphertext.len());
+    let mut blob_bytes = Vec::with_capacity(ARGON2_SALT_LEN + CHACHA_NONCE_LEN + ciphertext.len());
     blob_bytes.extend_from_slice(&salt);
     blob_bytes.extend_from_slice(&enc_nonce);
     blob_bytes.extend_from_slice(&ciphertext);
@@ -263,7 +260,9 @@ pub fn save_invite_key(payload: &InvitePayload) -> BpResult<()> {
     let key_bytes = hex::decode(&payload.network_meta_key_hex)
         .map_err(|e| BpError::Config(format!("Invalid network key in invite: {e}")))?;
     if key_bytes.len() != 32 {
-        return Err(BpError::Config("Network key in invite has wrong length".into()));
+        return Err(BpError::Config(
+            "Network key in invite has wrong length".into(),
+        ));
     }
     let mut arr = [0u8; 32];
     arr.copy_from_slice(&key_bytes);
@@ -319,10 +318,8 @@ mod tests {
     /// Write a fake NetworkMetaKey for `network_id` to a temp dir and update
     /// the config base path so `load/save` use it.
     fn with_temp_nmk<F: FnOnce(&Identity, &str)>(f: F) {
-        let dir = std::env::temp_dir().join(format!(
-            "bp_invite_test_{}",
-            uuid::Uuid::new_v4().simple()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("bp_invite_test_{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         let orig_home = std::env::var("HOME").ok();
 
@@ -349,8 +346,7 @@ mod tests {
     #[cfg(unix)]
     fn create_and_redeem_roundtrip() {
         with_temp_nmk(|identity, network_id| {
-            let blob =
-                create_invite(identity, network_id, None, 24, "test-password").unwrap();
+            let blob = create_invite(identity, network_id, None, 24, "test-password").unwrap();
             let payload = redeem_invite(&blob, "test-password").unwrap();
             assert_eq!(payload.network_id, network_id);
             assert_eq!(payload.inviter_fingerprint, identity.fingerprint);
@@ -384,8 +380,7 @@ mod tests {
     fn tampered_blob_fails() {
         with_temp_nmk(|identity, network_id| {
             let mut blob_bytes =
-                hex::decode(create_invite(identity, network_id, None, 24, "pw").unwrap())
-                    .unwrap();
+                hex::decode(create_invite(identity, network_id, None, 24, "pw").unwrap()).unwrap();
             // Flip a byte in the ciphertext region.
             let last = blob_bytes.len() - 5;
             blob_bytes[last] ^= 0xFF;
