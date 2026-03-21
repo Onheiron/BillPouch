@@ -65,6 +65,43 @@ pub enum ControlRequest {
         /// `/ip4/1.2.3.4/tcp/4001/p2p/12D3KooW...`
         relay_addr: String,
     },
+    /// Broadcast a storage offer on the network gossip topic for `network_id`.
+    ///
+    /// The offer is persisted locally and flooded to all peers subscribed to
+    /// `billpouch/v1/{network_id}/offers`.
+    ProposeStorage {
+        /// Network to announce the offer on.
+        network_id: String,
+        /// Storage capacity offered in bytes.
+        bytes_offered: u64,
+        /// Duration the offer is valid for (seconds).
+        duration_secs: u64,
+        /// Optional price in protocol tokens (default: 0 = free).
+        #[serde(default)]
+        price_tokens: u64,
+    },
+    /// Accept a received storage offer, creating a local agreement.
+    ///
+    /// Broadcasts an [`AgreementAcceptance`] on the same offers topic so the
+    /// offerer learns about the acceptance.
+    ///
+    /// [`AgreementAcceptance`]: crate::storage::agreement::AgreementAcceptance
+    AcceptStorage {
+        /// ID of the [`StorageOffer`] to accept.
+        ///
+        /// [`StorageOffer`]: crate::storage::agreement::StorageOffer
+        offer_id: String,
+    },
+    /// List all agreements (local + remote) for a network.
+    ListAgreements {
+        /// Network to filter by (empty string = all networks).
+        network_id: String,
+    },
+    /// List storage offers received from remote peers via gossip.
+    ListOffers {
+        /// Network to filter by (empty string = all networks).
+        network_id: String,
+    },
 }
 
 /// Response sent from daemon → CLI.

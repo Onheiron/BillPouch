@@ -13,6 +13,7 @@ use crate::{
         StorageManagerMap,
     },
     service::ServiceRegistry,
+    storage::AgreementStore,
 };
 use std::{
     collections::HashMap,
@@ -46,6 +47,13 @@ pub async fn run_daemon() -> BpResult<()> {
     let outgoing_assignments: OutgoingAssignments = Arc::new(RwLock::new(HashMap::new()));
     let remote_fragment_index = Arc::new(RwLock::new(RemoteFragmentIndex::new()));
 
+    // Load persisted agreements from disk (empty default on first run).
+    let agreements = Arc::new(RwLock::new(
+        config::agreements_path()
+            .map(|p| AgreementStore::load(&p))
+            .unwrap_or_default(),
+    ));
+
     let daemon_state = Arc::new(DaemonState {
         identity: identity.clone(),
         services: RwLock::new(ServiceRegistry::new()),
@@ -56,6 +64,7 @@ pub async fn run_daemon() -> BpResult<()> {
         qos,
         outgoing_assignments: Arc::clone(&outgoing_assignments),
         remote_fragment_index: Arc::clone(&remote_fragment_index),
+        agreements: Arc::clone(&agreements),
     });
 
     // ── Build libp2p swarm ────────────────────────────────────────────────
@@ -71,6 +80,7 @@ pub async fn run_daemon() -> BpResult<()> {
     let net_storage = Arc::clone(&storage_managers);
     let net_outgoing = Arc::clone(&outgoing_assignments);
     let net_fragment_idx = Arc::clone(&remote_fragment_index);
+    let net_agreements = Arc::clone(&agreements);
     tokio::spawn(async move {
         if let Err(e) = network::run_network_loop(
             swarm,
@@ -80,6 +90,7 @@ pub async fn run_daemon() -> BpResult<()> {
             net_storage,
             net_outgoing,
             net_fragment_idx,
+            net_agreements,
         )
         .await
         {

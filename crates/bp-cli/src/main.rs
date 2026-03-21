@@ -12,6 +12,10 @@
 //!    bp bootstrap add <addr>        Add a bootstrap node
 //!    bp bootstrap remove <addr>     Remove a bootstrap node
 //!    bp relay connect <addr>        Dial a relay node for NAT traversal
+//!    bp offer <bytes> [--duration <secs>] [--price <tokens>]  Propose storage
+//!    bp agree <offer_id>            Accept a received storage offer
+//!    bp agreements [--network <id>] List local agreements
+//!    bp offers [--network <id>]     List received storage offers
 //!    bp --daemon                    (internal) run the background daemon
 //! ```
 
@@ -134,6 +138,50 @@ enum Cmd {
     Relay {
         #[command(subcommand)]
         action: RelayAction,
+    },
+
+    /// Broadcast a storage offer on the marketplace gossip topic.
+    ///
+    /// The offer is flooded to all peers on `network_id` via gossipsub.
+    /// Other nodes can accept it with `bp agree <offer_id>`.
+    Offer {
+        /// Storage capacity to offer in bytes (e.g. 1073741824 = 1 GiB).
+        bytes: u64,
+
+        /// How long the offer is valid (default: 86400 = 24 h).
+        #[arg(long, default_value_t = 86_400)]
+        duration: u64,
+
+        /// Optional price in protocol tokens (default: 0 = free).
+        #[arg(long, default_value_t = 0)]
+        price: u64,
+
+        /// Network to broadcast the offer on.
+        #[arg(long, short, default_value = DEFAULT_NETWORK)]
+        network: String,
+    },
+
+    /// Accept a received storage offer.
+    ///
+    /// Creates a local `StorageAgreement` and broadcasts acceptance to the
+    /// offerer via the marketplace gossip topic.
+    Agree {
+        /// The offer ID to accept (from `bp offers`).
+        offer_id: String,
+    },
+
+    /// List local storage agreements (as offerer or requester).
+    Agreements {
+        /// Filter by network (default: "" = all networks).
+        #[arg(long, short, default_value = "")]
+        network: String,
+    },
+
+    /// List storage offers received from remote peers.
+    Offers {
+        /// Filter by network (default: "" = all networks).
+        #[arg(long, short, default_value = "")]
+        network: String,
     },
 }
 
@@ -265,6 +313,27 @@ async fn main() -> anyhow::Result<()> {
                 commands::relay::connect(addr).await?;
             }
         },
+
+        Some(Cmd::Offer {
+            bytes,
+            duration,
+            price,
+            network,
+        }) => {
+            commands::marketplace::propose(network, bytes, duration, price).await?;
+        }
+
+        Some(Cmd::Agree { offer_id }) => {
+            commands::marketplace::accept(offer_id).await?;
+        }
+
+        Some(Cmd::Agreements { network }) => {
+            commands::marketplace::list_agreements(network).await?;
+        }
+
+        Some(Cmd::Offers { network }) => {
+            commands::marketplace::list_offers(network).await?;
+        }
     }
 
     Ok(())

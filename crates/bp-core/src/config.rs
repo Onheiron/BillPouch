@@ -57,6 +57,11 @@ pub fn bootstrap_path() -> BpResult<PathBuf> {
     Ok(base_dir()?.join("bootstrap.json"))
 }
 
+/// Path to the persisted storage agreements and received offers.
+pub fn agreements_path() -> BpResult<PathBuf> {
+    Ok(base_dir()?.join("agreements.json"))
+}
+
 /// Ensure the base directory (and any subdirs) exist.
 pub fn ensure_dirs() -> BpResult<()> {
     std::fs::create_dir_all(base_dir()?).map_err(BpError::Io)
