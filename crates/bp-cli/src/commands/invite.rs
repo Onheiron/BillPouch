@@ -20,7 +20,7 @@ pub async fn create(
         .context("Cannot connect to BillPouch daemon — run `bp hatch post` first")?;
 
     let resp = client
-        .send(&ControlRequest::CreateInvite {
+        .send(ControlRequest::CreateInvite {
             network_id: network_id.clone(),
             invitee_fingerprint: invitee_fingerprint.clone(),
             invite_password,
@@ -90,7 +90,7 @@ pub async fn join(blob: String, invite_password: String) -> Result<()> {
         .context("Cannot connect to BillPouch daemon — run `bp hatch post` first")?;
 
     let resp = client
-        .send(&ControlRequest::Join {
+        .send(ControlRequest::Join {
             network_id: payload.network_id.clone(),
         })
         .await
