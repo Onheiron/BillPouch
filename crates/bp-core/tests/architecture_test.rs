@@ -2363,12 +2363,17 @@ fn identity_export_con_passphrase_produce_variante_encrypted() {
         let contents = std::fs::read_to_string(&export_path).unwrap();
         let v: serde_json::Value = serde_json::from_str(&contents).unwrap();
 
-        // Con passphrase deve essere la variante Encrypted (non Plaintext).
-        // Il campo "key" deve avere la chiave "Encrypted" o non avere "key_hex" diretto.
+        // Con passphrase il campo "key" deve contenere dati cifrati (ciphertext/nonce/salt)
+        // e NON deve contenere key_hex in chiaro.
         assert!(
-            v["key"].get("Encrypted").is_some() || v["key"].get("encrypted").is_some(),
-            "identità con passphrase deve esportare variante Encrypted, trovato: {}",
+            v["key"].get("ciphertext").is_some()
+                || v["key"]["format"].as_str() == Some("encrypted"),
+            "identità con passphrase deve esportare dati cifrati, trovato: {}",
             v["key"]
+        );
+        assert!(
+            v["key"].get("key_hex").is_none(),
+            "export con passphrase NON deve contenere key_hex in chiaro"
         );
 
         let _ = std::fs::remove_file(&export_path);
