@@ -252,7 +252,7 @@ async fn main() -> anyhow::Result<()> {
         }
 
         Some(Cmd::Login { alias, passphrase }) => {
-            commands::auth::login(alias, passphrase.as_deref()).await?;;
+            commands::auth::login(alias, passphrase.as_deref()).await?;
         }
 
         Some(Cmd::Logout) => {
