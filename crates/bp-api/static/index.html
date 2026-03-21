@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>🦤 BillPouch Dashboard</title>
+<style>
+  :root {
+    --bg:   #0f1117;
+    --card: #1a1d27;
+    --border: #2a2d3e;
+    --text: #e2e8f0;
+    --muted: #6b7280;
+    --accent: #7c3aed;
+    --green: #22c55e;
+    --red:   #ef4444;
+    --yellow:#f59e0b;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; font-size: 14px; line-height: 1.6; }
+  header { background: var(--card); border-bottom: 1px solid var(--border); padding: 16px 24px; display: flex; align-items: center; gap: 12px; }
+  header h1 { font-size: 18px; font-weight: 600; }
+  header .badge { font-size: 11px; background: var(--accent); color: #fff; padding: 2px 8px; border-radius: 9999px; }
+  #status-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--red); margin-left: auto; }
+  #status-dot.ok { background: var(--green); }
+  main { padding: 24px; display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 20px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 20px; }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 16px; }
+  .kv { display: flex; justify-content: space-between; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+  .kv:last-child { border-bottom: none; }
+  .kv .k { color: var(--muted); }
+  .kv .v { font-family: monospace; word-break: break-all; text-align: right; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; color: var(--muted); padding: 4px 8px 8px 0; border-bottom: 1px solid var(--border); }
+  td { padding: 6px 8px 6px 0; border-bottom: 1px solid var(--border); word-break: break-all; }
+  tr:last-child td { border-bottom: none; }
+  .chip { display: inline-block; padding: 1px 8px; border-radius: 9999px; font-size: 11px; font-weight: 500; }
+  .chip.pouch { background: #1e3a5f; color: #60a5fa; }
+  .chip.bill  { background: #1e3a2f; color: #4ade80; }
+  .chip.post  { background: #3b2f1e; color: #fb923c; }
+  .chip.ok    { background: #14532d; color: #4ade80; }
+  .chip.err   { background: #450a0a; color: #f87171; }
+  .empty { color: var(--muted); font-style: italic; padding: 8px 0; }
+  footer { text-align: center; padding: 24px; color: var(--muted); font-size: 12px; }
+  #refresh-ts { font-size: 12px; color: var(--muted); margin-left: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <span>🦤</span>
+  <h1>BillPouch</h1>
+  <span class="badge">Alpha</span>
+  <span id="refresh-ts"></span>
+  <span id="status-dot" title="Daemon connectivity"></span>
+</header>
+<main id="main">
+  <div class="card" id="card-identity"><h2>Identity</h2><div class="empty">Loading…</div></div>
+  <div class="card" id="card-services"><h2>Services</h2><div class="empty">Loading…</div></div>
+  <div class="card" id="card-peers"><h2>Peers</h2><div class="empty">Loading…</div></div>
+  <div class="card" id="card-offers"><h2>Marketplace — Offers</h2><div class="empty">Loading…</div></div>
+  <div class="card" id="card-agreements"><h2>Marketplace — Agreements</h2><div class="empty">Loading…</div></div>
+</main>
+<footer>Auto-refresh every 5 s &nbsp;·&nbsp; BillPouch v0.2.1</footer>
+
+<script>
+const base = window.location.origin;
+
+async function api(path) {
+  const r = await fetch(base + path);
+  if (!r.ok) throw new Error(r.status + ' ' + r.statusText);
+  return r.json();
+}
+
+function kv(k, v) {
+  return `<div class="kv"><span class="k">${k}</span><span class="v">${v ?? '—'}</span></div>`;
+}
+
+function chip(type) {
+  const t = (type ?? '').toLowerCase();
+  return `<span class="chip ${t}">${t}</span>`;
+}
+
+function empty(msg) { return `<div class="empty">${msg}</div>`; }
+
+async function refresh() {
+  const dot = document.getElementById('status-dot');
+  const ts  = document.getElementById('refresh-ts');
+
+  // ── Status + Identity ────────────────────────────────────────────────────
+  try {
+    const s = await api('/status');
+    dot.className = 'ok';
+
+    const id = s.identity ?? {};
+    document.getElementById('card-identity').innerHTML =
+      '<h2>Identity</h2>' +
+      kv('Fingerprint', `<code>${id.fingerprint ?? '—'}</code>`) +
+      kv('Alias',       id.alias ?? '<em>none</em>') +
+      kv('PeerId',      `<code style="font-size:11px">${(id.peer_id ?? '').slice(0,32)}…</code>`) +
+      kv('Networks',    (s.networks ?? []).join(', ') || '<em>none</em>');
+
+    const svcs = s.services ?? [];
+    let svcHtml = '<h2>Services</h2>';
+    if (!svcs.length) {
+      svcHtml += empty('No active services');
+    } else {
+      svcHtml += '<table><tr><th>ID</th><th>Type</th><th>Network</th></tr>';
+      for (const sv of svcs) {
+        svcHtml += `<tr><td><code>${(sv.service_id ?? '').slice(0,8)}…</code></td>` +
+                   `<td>${chip(sv.service_type)}</td>` +
+                   `<td>${sv.network_id ?? '—'}</td></tr>`;
+      }
+      svcHtml += '</table>';
+    }
+    document.getElementById('card-services').innerHTML = svcHtml;
+
+  } catch (e) {
+    dot.className = '';
+    const err = `<div class="chip err">Daemon unavailable</div>`;
+    document.getElementById('card-identity').innerHTML  = '<h2>Identity</h2>'  + err;
+    document.getElementById('card-services').innerHTML  = '<h2>Services</h2>'  + err;
+  }
+
+  // ── Peers ────────────────────────────────────────────────────────────────
+  try {
+    const p = await api('/peers');
+    const peers = p.peers ?? (Array.isArray(p) ? p : []);
+    let html = '<h2>Peers (' + peers.length + ')</h2>';
+    if (!peers.length) {
+      html += empty('No peers discovered yet');
+    } else {
+      html += '<table><tr><th>Fingerprint</th><th>Alias</th><th>Type</th><th>Network</th></tr>';
+      for (const peer of peers.slice(0, 20)) {
+        html += `<tr><td><code>${peer.user_fingerprint ?? '—'}</code></td>` +
+                `<td>${peer.user_alias ?? '—'}</td>` +
+                `<td>${chip(peer.service_type)}</td>` +
+                `<td>${peer.network_id ?? '—'}</td></tr>`;
+      }
+      if (peers.length > 20) html += `<tr><td colspan="4" class="empty">…and ${peers.length - 20} more</td></tr>`;
+      html += '</table>';
+    }
+    document.getElementById('card-peers').innerHTML = html;
+  } catch {
+    document.getElementById('card-peers').innerHTML = '<h2>Peers</h2>' + empty('Unavailable');
+  }
+
+  // ── Marketplace offers ───────────────────────────────────────────────────
+  try {
+    const d = await api('/marketplace/offers');
+    const offers = d.offers ?? (Array.isArray(d) ? d : []);
+    let html = '<h2>Marketplace — Offers (' + offers.length + ')</h2>';
+    if (!offers.length) {
+      html += empty('No offers received');
+    } else {
+      html += '<table><tr><th>ID</th><th>Bytes</th><th>Price</th><th>Network</th></tr>';
+      for (const o of offers.slice(0, 10)) {
+        const gb = o.bytes_offered ? (o.bytes_offered / 1_073_741_824).toFixed(2) + ' GiB' : '—';
+        html += `<tr><td><code>${(o.offer_id ?? '').slice(0,8)}…</code></td>` +
+                `<td>${gb}</td>` +
+                `<td>${o.price_tokens ?? 0} tok</td>` +
+                `<td>${o.network_id ?? '—'}</td></tr>`;
+      }
+      html += '</table>';
+    }
+    document.getElementById('card-offers').innerHTML = html;
+  } catch {
+    document.getElementById('card-offers').innerHTML = '<h2>Marketplace — Offers</h2>' + empty('Unavailable');
+  }
+
+  // ── Marketplace agreements ───────────────────────────────────────────────
+  try {
+    const d = await api('/marketplace/agreements');
+    const agrs = d.agreements ?? (Array.isArray(d) ? d : []);
+    let html = '<h2>Marketplace — Agreements (' + agrs.length + ')</h2>';
+    if (!agrs.length) {
+      html += empty('No agreements yet');
+    } else {
+      html += '<table><tr><th>ID</th><th>Bytes</th><th>Network</th><th>Status</th></tr>';
+      for (const a of agrs.slice(0, 10)) {
+        const gb = a.bytes_offered ? (a.bytes_offered / 1_073_741_824).toFixed(2) + ' GiB' : '—';
+        const st = a.active ? '<span class="chip ok">active</span>' : '<span class="chip err">inactive</span>';
+        html += `<tr><td><code>${(a.agreement_id ?? '').slice(0,8)}…</code></td>` +
+                `<td>${gb}</td>` +
+                `<td>${a.network_id ?? '—'}</td>` +
+                `<td>${st}</td></tr>`;
+      }
+      html += '</table>';
+    }
+    document.getElementById('card-agreements').innerHTML = html;
+  } catch {
+    document.getElementById('card-agreements').innerHTML = '<h2>Marketplace — Agreements</h2>' + empty('Unavailable');
+  }
+
+  ts.textContent = 'Updated ' + new Date().toLocaleTimeString();
+}
+
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>
