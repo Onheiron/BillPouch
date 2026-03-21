@@ -80,7 +80,7 @@
 | **Kademlia in memoria**            | Medio   | `MemoryStore` si svuota ad ogni riavvio del daemon                       |
 | **Nessuna persistenza gossip**     | Medio   | I peer noti vengono persi al riavvio                                     |
 | **Nessun NAT traversal**           | Medio   | Funziona su LAN/Docker, non testato attraverso NAT                       |
-| **Chiave in chiaro su disco**      | Medio   | Nessuna passphrase/cifratura del file identità                           |
+| ~~Chiave in chiaro su disco~~      | ✅ Risolto | Argon2id + ChaCha20-Poly1305 — `identity.key.enc` con passphrase opzionale  |
 | **Nessun multi-device sync**       | Basso   | Non è possibile usare la stessa identità su più macchine                 |
 | **Nessuna autenticazione rete**    | Basso   | Chiunque conosce il `network_id` può partecipare                         |
 
@@ -123,12 +123,14 @@ Ultimo commit verde atteso: branch `main` (post push).
 | 28 | `d709864` `28bcfb1` | feat: `bp bootstrap list/add/remove` — CLI per gestire bootstrap.json |
 | 29 | `6e5ca17` `1a258b8` `678007e` | feat: `bp-api` — REST API Axum (GET /status, /peers, /files; POST /hatch, /files; DELETE /services) |
 | 30 | `90cec5e` `1ae4a44` `744f421` `2439865` `1d23d51` `1b02520` | feat: **NAT traversal** — AutoNAT + relay client (`network/behaviour.rs`, `network/mod.rs`) |
-| 31 | *(pending)* | feat: **Storage marketplace** — accordi di storage gossipati tra utenti |
+| 31 | `b9fd5a7` `7f8ded7` `2d5b3ee` `f5b85cf` `78eaaa2` | feat: **Storage marketplace** — accordi di storage gossipati tra utenti |
+| 32 | *(pending)* | feat: **Passphrase identità** — Argon2id KDF + AES-256-GCM, `--passphrase` flag |
 
 ### Prossimi step consigliati
 | Priorità | Cosa | Dove |
 |----------|------|------|
-| 🟢 Media | **Storage marketplace** — *(in corso)* accordi storage tra utenti | nuovo `storage/agreement.rs` |
+| 🟡 Alta | **Passphrase identità** — *(in corso)* cifratura `identity.key.enc` | `identity.rs`, `config.rs`, `daemon.rs`, CLI |
+| 🔵 Bassa | **Encryption at rest** — cifratura chunk prima RLNC | `control/server.rs` PutFile/GetFile |
 | 🔵 Bassa | **Web dashboard** — Tauri UI desktop | nuovo crate `bp-ui` |
 
 ---
@@ -154,16 +156,23 @@ Ultimo commit verde atteso: branch `main` (post push).
 
 | Funzionalità              | Descrizione                                   |
 |---------------------------|-----------------------------------------------|
-| NAT traversal             | AutoNAT + relay circuit v2                    |
+| NAT traversal             | ✅ Done — AutoNAT + relay circuit v2          |
+| Passphrase identità       | ✅ Done — Argon2id + ChaCha20-Poly1305 su `identity.key.enc` |
 | Web dashboard (Tauri)     | UI desktop cross-platform                     |
 | Encryption at rest        | Cifratura file prima del upload               |
-| Passphrase identità       | Cifratura del file `identity.key`             |
 
 ---
 
 ## Changelog recente
 
+### v0.1.5 (Marzo 2026)
+- **feat:** Passphrase identità — `EncryptedKeyFile` (Argon2id + ChaCha20-Poly1305), cifratura opzionale in `identity.rs`; `--passphrase` flag globale in CLI; daemon legge passphrase da `--passphrase` o `BP_PASSPHRASE`
+
 ### v0.1.4 (Marzo 2026)
+- **feat:** Storage marketplace — `StorageOffer`, `AgreementStore`, `AcceptStorage`, CLI `bp offer/agree/agreements/offers`, API marketplace endpoints
+- **feat:** NAT traversal — AutoNAT + relay client; `bp relay connect`
+- **feat:** Bootstrap nodes — `bp bootstrap list/add/remove`
+- **feat:** REST API Axum `bp-api` — 14 endpoint HTTP
 - **feat:** `network/fragment_gossip.rs` — `FragmentIndexAnnouncement`, `RemoteFragmentIndex`; `NetworkCommand::AnnounceIndex`; PutFile pubblica indice, GetFile fetch mirato
 - **feat:** `network/qos.rs` — `PeerQos` + `QosRegistry` + `fault_score` con soglie degraded/suspected/blacklisted
 - **feat:** `coding/params.rs` — `compute_coding_params()`, `effective_recovery_probability()`

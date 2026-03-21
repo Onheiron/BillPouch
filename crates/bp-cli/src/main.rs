@@ -2,7 +2,7 @@
 //!
 //! ```text
 //!  Usage:
-//!    bp login  [--alias <name>]     Create / display your identity
+//!    bp login  [--alias <name>] [--passphrase <p>]  Create / display your identity
 //!    bp logout                      Remove your identity from this machine
 //!    bp hatch  <type> [--network <id>]  Start a service (bill|pouch|post)
 //!    bp flock                       Show peers and network summary
@@ -16,7 +16,7 @@
 //!    bp agree <offer_id>            Accept a received storage offer
 //!    bp agreements [--network <id>] List local agreements
 //!    bp offers [--network <id>]     List received storage offers
-//!    bp --daemon                    (internal) run the background daemon
+//!    bp --daemon [--passphrase <p>] (internal) run the background daemon
 //! ```
 
 mod client;
@@ -39,6 +39,11 @@ struct Cli {
     #[arg(long, hide = true)]
     daemon: bool,
 
+    /// Passphrase to unlock a passphrase-protected identity.
+    /// Can also be set via the `BP_PASSPHRASE` environment variable.
+    #[arg(long, global = true, env = "BP_PASSPHRASE")]
+    passphrase: Option<String>,
+
     #[command(subcommand)]
     command: Option<Cmd>,
 }
@@ -50,6 +55,10 @@ enum Cmd {
         /// Optional human-readable alias for this identity.
         #[arg(long, short)]
         alias: Option<String>,
+        /// Encrypt the identity key with a passphrase (Argon2id + AES-256-GCM).
+        /// Leave empty for a plaintext key (backwards-compatible).
+        #[arg(long)]
+        passphrase: Option<String>,
     },
 
     /// Remove your identity from this machine.
@@ -231,7 +240,7 @@ async fn main() -> anyhow::Result<()> {
 
     // ── Daemon mode ───────────────────────────────────────────────────────
     if cli.daemon {
-        bp_core::daemon::run_daemon().await?;
+        bp_core::daemon::run_daemon(cli.passphrase).await?;
         return Ok(());
     }
 
@@ -242,8 +251,8 @@ async fn main() -> anyhow::Result<()> {
             println!("   Run `bp --help` for usage.");
         }
 
-        Some(Cmd::Login { alias }) => {
-            commands::auth::login(alias).await?;
+        Some(Cmd::Login { alias, passphrase }) => {
+            commands::auth::login(alias, passphrase.as_deref()).await?;;
         }
 
         Some(Cmd::Logout) => {
@@ -264,7 +273,7 @@ async fn main() -> anyhow::Result<()> {
             if let Some(path) = mount {
                 metadata.insert("mount_path".into(), serde_json::Value::from(path));
             }
-            commands::hatch::hatch(svc_type, network, metadata).await?;
+            commands::hatch::hatch(svc_type, network, metadata, cli.passphrase.clone()).await?;
         }
 
         Some(Cmd::Flock) => {

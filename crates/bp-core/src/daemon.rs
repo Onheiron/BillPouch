@@ -22,11 +22,21 @@ use std::{
 use tokio::sync::mpsc;
 
 /// Start the daemon process.  This function blocks until the daemon is killed.
-pub async fn run_daemon() -> BpResult<()> {
+///
+/// `passphrase` is forwarded to [`Identity::load`].  Pass `None` for
+/// plaintext identities; pass `Some(p)` when the identity was created with
+/// `--passphrase`.  As a convenience the daemon also checks the
+/// `BP_PASSPHRASE` environment variable when `passphrase` is `None`.
+pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
     config::ensure_dirs()?;
 
+    // Resolve passphrase: explicit arg → BP_PASSPHRASE env var → None.
+    let resolved_pass = passphrase
+        .or_else(|| std::env::var("BP_PASSPHRASE").ok())
+        .filter(|s| !s.is_empty());
+
     // ── Load identity ─────────────────────────────────────────────────────
-    let identity = Identity::load()?;
+    let identity = Identity::load(resolved_pass.as_deref())?;
     tracing::info!(
         peer_id = %identity.peer_id,
         fingerprint = %identity.fingerprint,

@@ -9,9 +9,17 @@ pub fn base_dir() -> BpResult<PathBuf> {
         .ok_or_else(|| BpError::Config("Cannot determine home directory".into()))
 }
 
-/// Path to the stored keypair (identity).
+/// Path to the stored keypair (identity) — plaintext.
 pub fn identity_path() -> BpResult<PathBuf> {
     Ok(base_dir()?.join("identity.key"))
+}
+
+/// Path to the passphrase-encrypted keypair (Argon2id + AES-256-GCM).
+///
+/// Present only when the user creates the identity with `--passphrase`.
+/// Takes precedence over [`identity_path`] when both files are checked.
+pub fn encrypted_identity_path() -> BpResult<PathBuf> {
+    Ok(base_dir()?.join("identity.key.enc"))
 }
 
 /// Path to the user profile JSON (display name, etc.).

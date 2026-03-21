@@ -14,10 +14,13 @@ use crate::client::ControlClient;
 /// Hatch a new service.
 ///
 /// If the daemon is not yet running, it is started in the background first.
+/// `passphrase` is forwarded to the daemon subprocess if the identity is
+/// passphrase-protected.
 pub async fn hatch(
     service_type: ServiceType,
     network_id: String,
     metadata: HashMap<String, serde_json::Value>,
+    passphrase: Option<String>,
 ) -> anyhow::Result<()> {
     // Ensure identity exists
     if !Identity::exists()? {
@@ -26,7 +29,7 @@ pub async fn hatch(
 
     // Start daemon in background if not running
     if !daemon::is_running() {
-        start_daemon_background().await?;
+        start_daemon_background(passphrase).await?;
         // Give it a moment to bind the socket
         tokio::time::sleep(std::time::Duration::from_millis(600)).await;
     }
@@ -51,11 +54,17 @@ pub async fn hatch(
 }
 
 /// Spawn `bp --daemon` as a background child process.
-async fn start_daemon_background() -> anyhow::Result<()> {
+///
+/// If `passphrase` is set, it is forwarded via `--passphrase` so the daemon
+/// can unlock a passphrase-protected identity.
+async fn start_daemon_background(passphrase: Option<String>) -> anyhow::Result<()> {
     let exe = std::env::current_exe()?;
-    Command::new(exe)
-        .arg("--daemon")
-        .stdin(std::process::Stdio::null())
+    let mut cmd = Command::new(exe);
+    cmd.arg("--daemon");
+    if let Some(pass) = passphrase {
+        cmd.arg("--passphrase").arg(pass);
+    }
+    cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()

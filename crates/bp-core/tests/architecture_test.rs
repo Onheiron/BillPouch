@@ -1223,7 +1223,7 @@ fn identity_exists_false_prima_del_login() {
 #[cfg(unix)]
 fn identity_load_senza_file_ritorna_not_authenticated() {
     with_temp_home(|| {
-        let err = bp_core::identity::Identity::load().map(|_| ()).unwrap_err();
+        let err = bp_core::identity::Identity::load(None).map(|_| ()).unwrap_err();
         assert!(
             matches!(err, bp_core::error::BpError::NotAuthenticated),
             "load() senza file deve ritornare NotAuthenticated"
@@ -1235,7 +1235,7 @@ fn identity_load_senza_file_ritorna_not_authenticated() {
 #[cfg(unix)]
 fn identity_generate_crea_keypair_e_profilo() {
     with_temp_home(|| {
-        let identity = bp_core::identity::Identity::generate(Some("test-user".into()))
+        let identity = bp_core::identity::Identity::generate(Some("test-user".into()), None)
             .expect("generate() deve riuscire");
 
         assert_eq!(
@@ -1263,7 +1263,7 @@ fn identity_generate_crea_keypair_e_profilo() {
 #[cfg(unix)]
 fn identity_generate_senza_alias() {
     with_temp_home(|| {
-        let identity = bp_core::identity::Identity::generate(None)
+        let identity = bp_core::identity::Identity::generate(None, None)
             .expect("generate() senza alias deve riuscire");
         assert_eq!(
             identity.profile.alias, None,
@@ -1276,8 +1276,8 @@ fn identity_generate_senza_alias() {
 #[cfg(unix)]
 fn identity_load_restituisce_stessa_identita() {
     with_temp_home(|| {
-        let original = bp_core::identity::Identity::generate(Some("carlo".into())).unwrap();
-        let loaded = bp_core::identity::Identity::load().unwrap();
+        let original = bp_core::identity::Identity::generate(Some("carlo".into()), None).unwrap();
+        let loaded = bp_core::identity::Identity::load(None).unwrap();
 
         assert_eq!(
             loaded.fingerprint, original.fingerprint,
@@ -1299,7 +1299,7 @@ fn identity_load_restituisce_stessa_identita() {
 #[cfg(unix)]
 fn identity_remove_cancella_i_file() {
     with_temp_home(|| {
-        bp_core::identity::Identity::generate(Some("to-delete".into())).unwrap();
+        bp_core::identity::Identity::generate(Some("to-delete".into()), None).unwrap();
         assert!(bp_core::identity::Identity::exists().unwrap());
 
         bp_core::identity::Identity::remove().unwrap();
@@ -1309,7 +1309,7 @@ fn identity_remove_cancella_i_file() {
         );
 
         // load dopo remove → NotAuthenticated
-        let err = bp_core::identity::Identity::load().map(|_| ()).unwrap_err();
+        let err = bp_core::identity::Identity::load(None).map(|_| ()).unwrap_err();
         assert!(matches!(err, bp_core::error::BpError::NotAuthenticated));
     });
 }
@@ -1322,6 +1322,84 @@ fn identity_remove_idempotente_se_non_esiste() {
         bp_core::identity::Identity::remove().unwrap();
     });
 }
+
+#[test]
+#[cfg(unix)]
+fn identity_passphrase_genera_file_cifrato() {
+    with_temp_home(|| {
+        let id =
+            bp_core::identity::Identity::generate(Some("sicuro".into()), Some("s3cr3t")).unwrap();
+        assert_eq!(id.profile.alias, Some("sicuro".into()));
+
+        // Il file cifrato deve esistere; il file plaintext NO.
+        let enc_path = bp_core::config::encrypted_identity_path().unwrap();
+        let plain_path = bp_core::config::identity_path().unwrap();
+        assert!(enc_path.exists(), "identity.key.enc deve esistere");
+        assert!(!plain_path.exists(), "identity.key NON deve esistere con passphrase");
+        assert!(bp_core::identity::Identity::exists().unwrap());
+    });
+}
+
+#[test]
+#[cfg(unix)]
+fn identity_passphrase_load_corretto() {
+    with_temp_home(|| {
+        let orig =
+            bp_core::identity::Identity::generate(None, Some("correcthorsebatterystaple")).unwrap();
+        let loaded =
+            bp_core::identity::Identity::load(Some("correcthorsebatterystaple")).unwrap();
+        assert_eq!(
+            loaded.fingerprint, orig.fingerprint,
+            "Fingerprint deve sopravvivere al ciclo cifra/decifra"
+        );
+        assert_eq!(loaded.peer_id, orig.peer_id);
+    });
+}
+
+#[test]
+#[cfg(unix)]
+fn identity_passphrase_sbagliata_ritorna_errore() {
+    with_temp_home(|| {
+        bp_core::identity::Identity::generate(None, Some("right-pass")).unwrap();
+        let err = bp_core::identity::Identity::load(Some("wrong-pass"))
+            .map(|_| ())
+            .unwrap_err();
+        assert!(
+            matches!(err, bp_core::error::BpError::Identity(_)),
+            "Passphrase sbagliata deve ritornare BpError::Identity: {err:?}"
+        );
+    });
+}
+
+#[test]
+#[cfg(unix)]
+fn identity_passphrase_assente_su_file_cifrato_ritorna_errore() {
+    with_temp_home(|| {
+        bp_core::identity::Identity::generate(None, Some("mypass")).unwrap();
+        let err = bp_core::identity::Identity::load(None)
+            .map(|_| ())
+            .unwrap_err();
+        assert!(
+            matches!(err, bp_core::error::BpError::Identity(_)),
+            "Nessuna passphrase su file cifrato deve ritornare BpError::Identity: {err:?}"
+        );
+    });
+}
+
+#[test]
+#[cfg(unix)]
+fn identity_remove_rimuove_anche_file_cifrato() {
+    with_temp_home(|| {
+        bp_core::identity::Identity::generate(None, Some("pass123")).unwrap();
+        assert!(bp_core::identity::Identity::exists().unwrap());
+
+        bp_core::identity::Identity::remove().unwrap();
+        assert!(!bp_core::identity::Identity::exists().unwrap());
+        let enc_path = bp_core::config::encrypted_identity_path().unwrap();
+        assert!(!enc_path.exists(), "identity.key.enc deve essere rimosso da remove()");
+    });
+}
+
 
 #[test]
 #[cfg(unix)]
