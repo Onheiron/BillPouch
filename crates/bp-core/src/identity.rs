@@ -14,7 +14,10 @@ use crate::{
     config,
     error::{BpError, BpResult},
 };
-use chacha20poly1305::{aead::{Aead, KeyInit}, ChaCha20Poly1305, Key, Nonce};
+use chacha20poly1305::{
+    aead::{Aead, KeyInit},
+    ChaCha20Poly1305, Key, Nonce,
+};
 use argon2::Argon2;
 use libp2p::identity::Keypair;
 use rand::RngCore;
