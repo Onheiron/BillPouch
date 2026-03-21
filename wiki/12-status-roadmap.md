@@ -124,12 +124,12 @@ Ultimo commit verde atteso: branch `main` (post push).
 | 29 | `6e5ca17` `1a258b8` `678007e` | feat: `bp-api` — REST API Axum (GET /status, /peers, /files; POST /hatch, /files; DELETE /services) |
 | 30 | `90cec5e` `1ae4a44` `744f421` `2439865` `1d23d51` `1b02520` | feat: **NAT traversal** — AutoNAT + relay client (`network/behaviour.rs`, `network/mod.rs`) |
 | 31 | `b9fd5a7` `7f8ded7` `2d5b3ee` `f5b85cf` `78eaaa2` | feat: **Storage marketplace** — accordi di storage gossipati tra utenti |
-| 32 | `f4045c5` | feat: **Passphrase identità** — Argon2id KDF + ChaCha20-Poly1305, `--passphrase` flag |
+| 32 | `f4045c5` `871bfc2` `5f35f4c` `214a1fd` | feat: **Passphrase identità** + fix CI (fmt, clap env, rlnc flaky tests) |
+| 33 | *(pending)* | feat: **Encryption at rest** — ChaCha20-Poly1305 prima di RLNC |
 
 ### Prossimi step consigliati
 | Priorità | Cosa | Dove |
 |----------|------|------|
-| 🟡 Media | **Encryption at rest** — cifratura chunk prima RLNC | `control/server.rs` PutFile/GetFile |
 | 🔵 Bassa | **Web dashboard** — Tauri UI desktop | nuovo crate `bp-ui` |
 
 ---
@@ -157,12 +157,16 @@ Ultimo commit verde atteso: branch `main` (post push).
 |---------------------------|-----------------------------------------------|
 | NAT traversal             | ✅ Done — AutoNAT + relay circuit v2          |
 | Passphrase identità       | ✅ Done — Argon2id + ChaCha20-Poly1305 su `identity.key.enc` |
+| Encryption at rest        | ✅ Done — ChaCha20-Poly1305 per-chunk, chiave derivata dalla NetworkMetaKey |
 | Web dashboard (Tauri)     | UI desktop cross-platform                     |
-| Encryption at rest        | Cifratura file prima del upload               |
 
 ---
 
 ## Changelog recente
+
+### v0.1.6 (Marzo 2026)
+- **feat:** Encryption at rest — `storage/encryption.rs` `ChunkCipher`; chiave per-rete derivata da `NetworkMetaKey` (BLAKE3-keyed); ChaCha20-Poly1305; PutFile cifra prima di RLNC, GetFile decifra dopo decode; 6 unit test
+- **fix(rlnc):** encoding sistematico (identity matrix per frammenti 0..k); tutti i test decode deterministici; guardia zero-vector in `recode()`
 
 ### v0.1.5 (Marzo 2026)
 - **feat:** Passphrase identità — `EncryptedKeyFile` (Argon2id + ChaCha20-Poly1305), cifratura opzionale in `identity.rs`; `--passphrase` flag globale in CLI; daemon legge passphrase da `--passphrase` o `BP_PASSPHRASE`

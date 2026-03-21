@@ -15,7 +15,7 @@ use crate::{
         FragmentResponse, NetworkCommand, OutgoingAssignments, QosRegistry, StorageManagerMap,
     },
     service::{ServiceInfo, ServiceRegistry, ServiceStatus, ServiceType},
-    storage::{AgreementStore, StorageAgreement, StorageManager, StorageOffer},
+    storage::{AgreementStore, ChunkCipher, StorageAgreement, StorageManager, StorageOffer},
 };
 use libp2p::{Multiaddr, PeerId};
 use std::{
@@ -530,7 +530,15 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             );
 
             // Encode the chunk.
-            let fragments = match rlnc::encode(&chunk_data, k, n) {
+            // Before RLNC encoding, encrypt the chunk with the network-scoped
+            // ChaCha20-Poly1305 key so Pouch nodes never see plaintext data.
+            let cipher = ChunkCipher::for_network(&network_id);
+            let encrypted_chunk = match cipher.encrypt(&chunk_data) {
+                Ok(b) => b,
+                Err(e) => return ControlResponse::err(format!("Chunk encryption error: {e}")),
+            };
+
+            let fragments = match rlnc::encode(&encrypted_chunk, k, n) {
                 Ok(f) => f,
                 Err(e) => return ControlResponse::err(format!("Encode error: {e}")),
             };
@@ -785,11 +793,22 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
 
             let fragments_used = all_fragments.len();
             match rlnc::decode(&all_fragments) {
-                Ok(data) => {
+                Ok(encrypted_data) => {
+                    // Decrypt the recovered chunk — reverses the encryption performed
+                    // in PutFile before RLNC encoding.
+                    let cipher = ChunkCipher::for_network(&network_id);
+                    let data = match cipher.decrypt(&encrypted_data) {
+                        Ok(d) => d,
+                        Err(e) => {
+                            return ControlResponse::err(format!(
+                                "Chunk decryption failed: {e}"
+                            ))
+                        }
+                    };
                     tracing::info!(
                         chunk_id=%chunk_id, local=%local_count,
                         remote=%fragments_remote, total=%fragments_used,
-                        "GetFile decoded"
+                        "GetFile decoded + decrypted"
                     );
                     ControlResponse::ok(GetFileData {
                         chunk_id,
