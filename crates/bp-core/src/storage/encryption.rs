@@ -104,9 +104,7 @@ impl ChunkCipher {
         let nonce = Nonce::from_slice(&blob[..NONCE_LEN]);
         let ciphertext = &blob[NONCE_LEN..];
         self.cipher.decrypt(nonce, ciphertext).map_err(|_| {
-            BpError::Storage(
-                "Chunk decryption failed — wrong network key or corrupted data".into(),
-            )
+            BpError::Storage("Chunk decryption failed — wrong network key or corrupted data".into())
         })
     }
 }
@@ -160,7 +158,10 @@ mod tests {
         let mut blob = c.encrypt(b"original data").unwrap();
         // Flip a byte inside the ciphertext (after the 12-byte nonce).
         blob[NONCE_LEN + 3] ^= 0xAA;
-        assert!(c.decrypt(&blob).is_err(), "Tampered ciphertext must fail auth");
+        assert!(
+            c.decrypt(&blob).is_err(),
+            "Tampered ciphertext must fail auth"
+        );
     }
 
     #[test]
