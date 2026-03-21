@@ -1640,6 +1640,7 @@ fn make_in_memory_state() -> std::sync::Arc<bp_core::control::server::DaemonStat
         agreements: std::sync::Arc::new(std::sync::RwLock::new(
             bp_core::storage::AgreementStore::default(),
         )),
+        chunk_cek_hints: std::sync::RwLock::new(std::collections::HashMap::new()),
     })
 }
 

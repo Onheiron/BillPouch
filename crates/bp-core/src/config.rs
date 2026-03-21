@@ -70,6 +70,16 @@ pub fn agreements_path() -> BpResult<PathBuf> {
     Ok(base_dir()?.join("agreements.json"))
 }
 
+/// Path to the per-network secret keys store.
+///
+/// JSON map: `{ "<network_id>": "<hex-encoded 32-byte key>" }`.
+/// Each entry is a randomly generated secret — **not** derived from the
+/// network name.  This file must never leave the local machine; keys are
+/// distributed to new members exclusively via signed+encrypted invite tokens.
+pub fn network_keys_path() -> BpResult<PathBuf> {
+    Ok(base_dir()?.join("network_keys.json"))
+}
+
 /// Ensure the base directory (and any subdirs) exist.
 pub fn ensure_dirs() -> BpResult<()> {
     std::fs::create_dir_all(base_dir()?).map_err(BpError::Io)
