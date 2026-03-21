@@ -279,4 +279,139 @@ impl Identity {
             .finalize()
             .as_bytes()
     }
+
+    /// Export this identity to a portable JSON file at `dest`.
+    ///
+    /// The on-disk key files are copied verbatim: passphrase-protected
+    /// identities export the encrypted form (no passphrase needed here);
+    /// plaintext identities hex-encode the raw protobuf bytes.
+    /// The output file is safe to transfer to another machine; use
+    /// [`Identity::import_from_file`] on the receiving end.
+    pub fn export_to_file(dest: &std::path::Path) -> BpResult<()> {
+        let enc_path = config::encrypted_identity_path()?;
+        let plain_path = config::identity_path()?;
+
+        let key = if enc_path.exists() {
+            let json = std::fs::read_to_string(&enc_path).map_err(BpError::Io)?;
+            let enc: EncryptedKeyFile = serde_json::from_str(&json)?;
+            ExportedKeyData::Encrypted(enc)
+        } else if plain_path.exists() {
+            let bytes = std::fs::read(&plain_path).map_err(BpError::Io)?;
+            ExportedKeyData::Plaintext {
+                key_hex: hex::encode(bytes),
+            }
+        } else {
+            return Err(BpError::NotAuthenticated);
+        };
+
+        let profile_path = config::profile_path()?;
+        let profile: UserProfile = if profile_path.exists() {
+            let json = std::fs::read_to_string(&profile_path).map_err(BpError::Io)?;
+            serde_json::from_str(&json)?
+        } else {
+            return Err(BpError::Config(
+                "Profile not found — run `bp login` first".into(),
+            ));
+        };
+
+        let export = ExportedIdentity {
+            version: 1,
+            key,
+            profile,
+            exported_at: chrono::Utc::now(),
+        };
+
+        let json = serde_json::to_string_pretty(&export)?;
+        std::fs::write(dest, json).map_err(BpError::Io)?;
+        Ok(())
+    }
+
+    /// Import an identity from a portable export file created by
+    /// [`Identity::export_to_file`].
+    ///
+    /// Installs the keypair and profile to the XDG data directory.
+    /// Returns the imported [`UserProfile`] on success.
+    ///
+    /// If an identity already exists and `overwrite` is `false`, returns
+    /// [`BpError::Config`] with a message asking the user to `bp logout` first.
+    pub fn import_from_file(src: &std::path::Path, overwrite: bool) -> BpResult<UserProfile> {
+        if !overwrite && Identity::exists()? {
+            return Err(BpError::Config(
+                "An identity already exists on this machine. \
+                 Run `bp logout` first, or use --force to overwrite."
+                    .into(),
+            ));
+        }
+
+        config::ensure_dirs()?;
+
+        let json = std::fs::read_to_string(src).map_err(BpError::Io)?;
+        let export: ExportedIdentity = serde_json::from_str(&json)
+            .map_err(|e| BpError::Config(format!("Invalid identity export file: {e}")))?;
+
+        if export.version != 1 {
+            return Err(BpError::Config(format!(
+                "Unsupported identity export version: {}",
+                export.version
+            )));
+        }
+
+        // Remove existing files before overwriting.
+        if overwrite {
+            let _ = Identity::remove();
+        }
+
+        match export.key {
+            ExportedKeyData::Encrypted(enc) => {
+                let json = serde_json::to_string_pretty(&enc)?;
+                std::fs::write(config::encrypted_identity_path()?, json).map_err(BpError::Io)?;
+            }
+            ExportedKeyData::Plaintext { key_hex } => {
+                let bytes = hex::decode(&key_hex)
+                    .map_err(|e| BpError::Config(format!("Invalid key hex: {e}")))?;
+                std::fs::write(config::identity_path()?, bytes).map_err(BpError::Io)?;
+            }
+        }
+
+        let profile_json = serde_json::to_string_pretty(&export.profile)?;
+        std::fs::write(config::profile_path()?, profile_json).map_err(BpError::Io)?;
+
+        tracing::info!(
+            fingerprint = %export.profile.fingerprint,
+            "Identity imported from {}",
+            src.display()
+        );
+
+        Ok(export.profile)
+    }
+}
+
+// ── Portable identity export ──────────────────────────────────────────────────
+
+/// Key data carried inside an [`ExportedIdentity`].
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "format", rename_all = "lowercase")]
+pub enum ExportedKeyData {
+    /// Raw protobuf-encoded keypair, hex-encoded (no passphrase).
+    Plaintext { key_hex: String },
+    /// Argon2id + ChaCha20-Poly1305 encrypted keypair (passphrase still needed to use).
+    Encrypted(EncryptedKeyFile),
+}
+
+/// Portable JSON bundle that carries a complete BillPouch identity.
+///
+/// Produced by [`Identity::export_to_file`]; consumed by
+/// [`Identity::import_from_file`].  Safe to store on USB, email, etc. —
+/// the encrypted variant requires the original passphrase to use, and the
+/// plaintext variant should be treated like a private key file.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ExportedIdentity {
+    /// Format version — currently `1`.
+    pub version: u8,
+    /// The keypair (plaintext or encrypted).
+    pub key: ExportedKeyData,
+    /// User profile (alias, fingerprint, creation timestamp).
+    pub profile: UserProfile,
+    /// UTC timestamp when this bundle was created.
+    pub exported_at: chrono::DateTime<chrono::Utc>,
 }

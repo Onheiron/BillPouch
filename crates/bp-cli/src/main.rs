@@ -4,6 +4,8 @@
 //!  Usage:
 //!    bp login  [--alias <name>] [--passphrase <p>]  Create / display your identity
 //!    bp logout                      Remove your identity from this machine
+//!    bp export-identity --out <path>   Export identity to a portable file
+//!    bp import-identity <path> [--force]  Import identity from a portable file
 //!    bp hatch  <type> [--network <id>]  Start a service (bill|pouch|post)
 //!    bp flock                       Show peers and network summary
 //!    bp farewell <service_id>       Stop a running service
@@ -65,6 +67,29 @@ enum Cmd {
 
     /// Remove your identity from this machine.
     Logout,
+
+    /// Export your identity (keypair + profile) to a portable JSON file.
+    ///
+    /// Use this to move your identity to another machine.  On the target
+    /// machine run `bp import-identity <file>`.
+    ExportIdentity {
+        /// File path to write the exported identity to.
+        #[arg(long, short)]
+        out: String,
+    },
+
+    /// Import an identity previously exported with `bp export-identity`.
+    ///
+    /// Installs the keypair and profile into the local XDG data directory.
+    /// Fails if an identity already exists unless `--force` is specified.
+    ImportIdentity {
+        /// Path to the identity export file.
+        path: String,
+
+        /// Overwrite any existing identity without prompting.
+        #[arg(long)]
+        force: bool,
+    },
 
     /// Hatch (start) a new service: bill | pouch | post.
     Hatch {
@@ -303,6 +328,14 @@ async fn main() -> anyhow::Result<()> {
 
         Some(Cmd::Logout) => {
             commands::auth::logout().await?;
+        }
+
+        Some(Cmd::ExportIdentity { out }) => {
+            commands::auth::export_identity(&out).await?;
+        }
+
+        Some(Cmd::ImportIdentity { path, force }) => {
+            commands::auth::import_identity(&path, force).await?;
         }
 
         Some(Cmd::Hatch {

@@ -1,4 +1,4 @@
-//! `bp login` / `bp logout`
+//! `bp login` / `bp logout` / `bp export-identity` / `bp import-identity`
 
 use bp_core::identity::Identity;
 
@@ -62,5 +62,42 @@ pub async fn logout() -> anyhow::Result<()> {
     Identity::remove()?;
     println!("👋 Logged out (fingerprint: {})", fp);
     println!("   Your identity key has been removed from this machine.");
+    Ok(())
+}
+
+/// Export the current identity to a portable JSON file.
+///
+/// The exported file carries the keypair (plaintext or encrypted) and the
+/// user profile.  Transfer it to another machine and use `bp import-identity`
+/// to install it there.
+///
+/// ⚠️  A **plaintext** key export contains raw private-key material.
+///     Keep the file confidential.  A passphrase-protected identity exports
+///     the encrypted ciphertext — the original passphrase is still required
+///     to use the key on the new machine.
+pub async fn export_identity(out: &str) -> anyhow::Result<()> {
+    let dest = std::path::Path::new(out);
+    Identity::export_to_file(dest)?;
+    println!("✅ Identity exported to: {out}");
+    println!("   Transfer this file to the target machine and run:");
+    println!("   bp import-identity {out}");
+    Ok(())
+}
+
+/// Import an identity exported with `bp export-identity`.
+///
+/// Installs the keypair and profile from `path` into the local XDG data
+/// directory.  If `force` is `true`, any existing identity is overwritten
+/// without prompting.
+pub async fn import_identity(path: &str, force: bool) -> anyhow::Result<()> {
+    let src = std::path::Path::new(path);
+    let profile = Identity::import_from_file(src, force)?;
+    let display = profile.alias.as_deref().unwrap_or("<no alias>");
+    println!("✅ Identity imported");
+    println!("   Fingerprint : {}", profile.fingerprint);
+    println!("   Alias       : {display}");
+    println!("   Created     : {}", profile.created_at);
+    println!();
+    println!("You can now start the daemon:  bp hatch post");
     Ok(())
 }
