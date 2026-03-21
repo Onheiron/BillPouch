@@ -2,7 +2,7 @@
 
 ## Versione corrente
 
-**v0.1.8** (Alpha) — Marzo 2026
+**v0.2.0** (Alpha) — Marzo 2026
 
 ---
 
@@ -83,7 +83,7 @@
 | ~~CEK encryption mancante~~        | ✅ Risolto | `ChunkCipher::for_user` — CEK derivata da identity + BLAKE3(plaintext) (commit 34) |
 | ~~NetworkMetaKey derivabile~~      | ✅ Risolto | `NetworkMetaKey::generate/load/save` — chiave random in `network_keys.json` (commit 34) |
 | ~~Nessun sistema di inviti~~       | ✅ Risolto | `bp invite create / join` — token firmato+cifrato con password (commit 35) |
-| **Nessun multi-device**           | Basso   | Manca `bp export-identity` / `bp import-identity` per spostare il keypair su un'altra macchina. |
+| **Multi-device identity**         | ✅ Done | `bp export-identity` / `bp import-identity` — portabilità del keypair tra macchine |
 
 ---
 
@@ -129,12 +129,15 @@ Ultimo commit verde atteso: branch `main` (post push).
 | 33 | `b0ada4a` `9366e30` | feat: **Encryption at rest** — ChaCha20-Poly1305 prima di RLNC; fix rustfmt |
 | 34 | `23780cb` | feat: **CEK per-utente** + **NetworkMetaKey segreta** — `ChunkCipher::for_user` (CEK da identity + BLAKE3 plaintext); `NetworkMetaKey::generate/load/save` (random, non derivabile dal nome); `chunk_cek_hints` in `DaemonState`; `Identity::secret_material()` |
 | 35 | `6be3981` | feat: **Sistema di inviti** — `invite.rs` (`create_invite`, `redeem_invite`, `save_invite_key`); token firmato Ed25519 + cifrato Argon2id+ChaCha20-Poly1305; `bp invite create / join`; Join auto-genera `NetworkMetaKey` per reti nuove; 5 unit test |
+| 36 | `a551618` | fix: rimosse `&` spurie in `ControlClient::send()` in `commands/invite.rs` |
+| 37 | `8954401` | style: cargo fmt — reformatting `invite.rs`, `server.rs`, `commands/invite.rs` |
+| 38 | `068300e` | test: `ENV_LOCK` mutex in test invite — serializzazione test che mutano `HOME`/`XDG_DATA_HOME` |
 
 ### Prossimi step consigliati
 | Priorità | Cosa | Dove |
 |----------|------|---------|
 
-| 🔵 Bassa | **Multi-device** — `bp export-identity` / `bp import-identity` | `commands/auth.rs` |
+
 | 🔵 Bassa | **Web dashboard** — UI HTML/JS servita da `bp-api` Axum | `bp-api/static/` |
 
 ---
@@ -145,7 +148,7 @@ Ultimo commit verde atteso: branch `main` (post push).
 
 | Funzionalità | Stato | Descrizione |
 |---|---|---|
-| Multi-device identity | ⏳ Pianificato | `bp export-identity` / `bp import-identity` |
+| Multi-device identity | ✅ Done | `bp export-identity` / `bp import-identity` |
 | Web dashboard | ⏳ Pianificato | UI HTML/JS servita da `bp-api` Axum |
 
 ### Futuro 🔮
@@ -162,6 +165,14 @@ Ultimo commit verde atteso: branch `main` (post push).
 ---
 
 ## Changelog recente
+
+### v0.2.0 (Marzo 2026)
+- **feat:** Multi-device identity — `Identity::export_to_file(dest)` legge l’identità da disco (plaintext o cifrata) e produce un bundle JSON portabile (`ExportedIdentity`); `Identity::import_from_file(src, overwrite)` installa keypair e profilo nel data dir XDG; `ExportedKeyData` enum con variante `Plaintext { key_hex }` e `Encrypted(EncryptedKeyFile)`; `bp export-identity --out <file>` e `bp import-identity <file> [--force]`
+
+### v0.1.9 (Marzo 2026)
+- **fix:** `ControlClient::send()` non richiedeva `&ControlRequest` — rimosso `&` spurio in `commands/invite.rs`
+- **style:** `cargo fmt` su `invite.rs`, `server.rs`, `commands/invite.rs`
+- **test:** `ENV_LOCK` mutex nei test `invite` per evitare race condition su `HOME`/`XDG_DATA_HOME` in esecuzione parallela
 
 ### v0.1.8 (Marzo 2026)
 - **feat:** Sistema di inviti — `crates/bp-core/src/invite.rs`; `InvitePayload` firmato Ed25519 + cifrato Argon2id+ChaCha20-Poly1305; `create_invite()` / `redeem_invite()` / `save_invite_key()`; `ControlRequest::CreateInvite`; `bp invite create [--network] [--for-fingerprint] [--ttl] --invite-password`; `bp invite join <blob> --invite-password`; `Join` ora genera automaticamente una NetworkMetaKey random per reti create ex-novo; `fingerprint_pubkey()` in identity.rs; 5 unit test (roundtrip, wrong password, expired, tampered, persist)
