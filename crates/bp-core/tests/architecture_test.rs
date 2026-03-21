@@ -1223,7 +1223,9 @@ fn identity_exists_false_prima_del_login() {
 #[cfg(unix)]
 fn identity_load_senza_file_ritorna_not_authenticated() {
     with_temp_home(|| {
-        let err = bp_core::identity::Identity::load(None).map(|_| ()).unwrap_err();
+        let err = bp_core::identity::Identity::load(None)
+            .map(|_| ())
+            .unwrap_err();
         assert!(
             matches!(err, bp_core::error::BpError::NotAuthenticated),
             "load() senza file deve ritornare NotAuthenticated"
@@ -1309,7 +1311,9 @@ fn identity_remove_cancella_i_file() {
         );
 
         // load dopo remove → NotAuthenticated
-        let err = bp_core::identity::Identity::load(None).map(|_| ()).unwrap_err();
+        let err = bp_core::identity::Identity::load(None)
+            .map(|_| ())
+            .unwrap_err();
         assert!(matches!(err, bp_core::error::BpError::NotAuthenticated));
     });
 }
@@ -1335,7 +1339,10 @@ fn identity_passphrase_genera_file_cifrato() {
         let enc_path = bp_core::config::encrypted_identity_path().unwrap();
         let plain_path = bp_core::config::identity_path().unwrap();
         assert!(enc_path.exists(), "identity.key.enc deve esistere");
-        assert!(!plain_path.exists(), "identity.key NON deve esistere con passphrase");
+        assert!(
+            !plain_path.exists(),
+            "identity.key NON deve esistere con passphrase"
+        );
         assert!(bp_core::identity::Identity::exists().unwrap());
     });
 }
@@ -1346,8 +1353,7 @@ fn identity_passphrase_load_corretto() {
     with_temp_home(|| {
         let orig =
             bp_core::identity::Identity::generate(None, Some("correcthorsebatterystaple")).unwrap();
-        let loaded =
-            bp_core::identity::Identity::load(Some("correcthorsebatterystaple")).unwrap();
+        let loaded = bp_core::identity::Identity::load(Some("correcthorsebatterystaple")).unwrap();
         assert_eq!(
             loaded.fingerprint, orig.fingerprint,
             "Fingerprint deve sopravvivere al ciclo cifra/decifra"
@@ -1396,10 +1402,12 @@ fn identity_remove_rimuove_anche_file_cifrato() {
         bp_core::identity::Identity::remove().unwrap();
         assert!(!bp_core::identity::Identity::exists().unwrap());
         let enc_path = bp_core::config::encrypted_identity_path().unwrap();
-        assert!(!enc_path.exists(), "identity.key.enc deve essere rimosso da remove()");
+        assert!(
+            !enc_path.exists(),
+            "identity.key.enc deve essere rimosso da remove()"
+        );
     });
 }
-
 
 #[test]
 #[cfg(unix)]
