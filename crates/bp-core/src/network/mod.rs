@@ -201,6 +201,7 @@ pub fn build_swarm(
 /// - `listen_addr` — multiaddr to bind the TCP listener on.
 ///
 /// [`run_daemon`]: crate::daemon::run_daemon
+#[allow(clippy::too_many_arguments)]
 pub async fn run_network_loop(
     mut swarm: Swarm<BillPouchBehaviour>,
     mut cmd_rx: mpsc::Receiver<NetworkCommand>,
