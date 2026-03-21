@@ -99,7 +99,14 @@ fn decrypt_keypair_bytes(enc: &EncryptedKeyFile, passphrase: &str) -> BpResult<V
 
 /// Human-readable fingerprint of a public key (hex-encoded SHA-256, first 16 bytes).
 pub fn fingerprint(keypair: &Keypair) -> String {
-    let pub_bytes = keypair.public().encode_protobuf();
+    fingerprint_pubkey(&keypair.public())
+}
+
+/// Fingerprint of a public key (hex-encoded SHA-256[0..8]).
+///
+/// Used to verify invite token signatures without a pre-existing trust anchor.
+pub fn fingerprint_pubkey(pubkey: &libp2p::identity::PublicKey) -> String {
+    let pub_bytes = pubkey.encode_protobuf();
     let hash = Sha256::digest(&pub_bytes);
     hex::encode(&hash[..8])
 }

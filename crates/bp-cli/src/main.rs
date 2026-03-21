@@ -8,6 +8,8 @@
 //!    bp flock                       Show peers and network summary
 //!    bp farewell <service_id>       Stop a running service
 //!    bp join <network_id>           Join a BillPouch network
+//!    bp invite create --network <id> --invite-password <pw>  Create invite token
+//!    bp invite join <blob> --invite-password <pw>            Redeem invite token
 //!    bp bootstrap list              Show configured WAN bootstrap nodes
 //!    bp bootstrap add <addr>        Add a bootstrap node
 //!    bp bootstrap remove <addr>     Remove a bootstrap node
@@ -192,6 +194,15 @@ enum Cmd {
         #[arg(long, short, default_value = "")]
         network: String,
     },
+
+    /// Manage network invite tokens.
+    ///
+    /// Networks are private by default.  Use `bp invite create` to generate
+    /// a token for someone and `bp invite join` to accept one.
+    Invite {
+        #[command(subcommand)]
+        action: InviteAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -222,6 +233,41 @@ enum RelayAction {
         /// Full multiaddr of the relay node including its PeerId, e.g.
         /// `/ip4/1.2.3.4/tcp/4001/p2p/12D3KooW...`
         addr: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum InviteAction {
+    /// Create a signed+encrypted invite token for a network.
+    ///
+    /// The token contains the network's secret key — share the blob AND
+    /// the invite-password with the invitee out-of-band (Signal, phone, etc.).
+    Create {
+        /// Network to invite the recipient into.
+        #[arg(long, short, default_value = DEFAULT_NETWORK)]
+        network: String,
+
+        /// Optional: fingerprint of the specific invitee. Omit for an open invite.
+        #[arg(long)]
+        for_fingerprint: Option<String>,
+
+        /// Token validity in hours (default: 24).
+        #[arg(long, default_value_t = 24)]
+        ttl: u64,
+
+        /// Password used to encrypt the token (share out-of-band).
+        #[arg(long)]
+        invite_password: String,
+    },
+
+    /// Redeem an invite token: decrypt, verify, save the network key and join.
+    Join {
+        /// The hex blob produced by `bp invite create`.
+        blob: String,
+
+        /// Password used to decrypt the token.
+        #[arg(long)]
+        invite_password: String,
     },
 }
 
@@ -343,6 +389,23 @@ async fn main() -> anyhow::Result<()> {
         Some(Cmd::Offers { network }) => {
             commands::marketplace::list_offers(network).await?;
         }
+
+        Some(Cmd::Invite { action }) => match action {
+            InviteAction::Create {
+                network,
+                for_fingerprint,
+                ttl,
+                invite_password,
+            } => {
+                commands::invite::create(network, for_fingerprint, ttl, invite_password).await?;
+            }
+            InviteAction::Join {
+                blob,
+                invite_password,
+            } => {
+                commands::invite::join(blob, invite_password).await?;
+            }
+        },
     }
 
     Ok(())

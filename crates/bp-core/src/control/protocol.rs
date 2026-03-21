@@ -102,6 +102,21 @@ pub enum ControlRequest {
         /// Network to filter by (empty string = all networks).
         network_id: String,
     },
+    /// Generate a signed + password-encrypted invite token for `network_id`.
+    ///
+    /// The token contains the `NetworkMetaKey` for the network, signed with
+    /// the daemon's Ed25519 key and encrypted with `invite_password`.  Share
+    /// the blob and the password with the invitee out-of-band.
+    CreateInvite {
+        /// Network to invite the recipient into.
+        network_id: String,
+        /// Optional: fingerprint of the specific invitee.  `None` = open invite.
+        invitee_fingerprint: Option<String>,
+        /// Password used to encrypt the token — shared out-of-band.
+        invite_password: String,
+        /// Token validity in hours (default: 24).
+        ttl_hours: Option<u64>,
+    },
 }
 
 /// Response sent from daemon → CLI.
@@ -197,4 +212,17 @@ pub struct GetFileData {
     pub fragments_used: usize,
     /// How many of those fragments came from remote Pouches.
     pub fragments_remote: usize,
+}
+
+/// Returned by [`ControlRequest::CreateInvite`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InviteData {
+    /// Hex-encoded invite blob to share with the invitee.
+    pub blob: String,
+    /// Network this invite grants access to.
+    pub network_id: String,
+    /// Unix timestamp when the token expires.
+    pub expires_at: u64,
+    /// Fingerprint of the inviter (for display).
+    pub inviter_fingerprint: String,
 }
