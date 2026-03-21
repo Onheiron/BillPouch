@@ -5,7 +5,7 @@
 //! 1. A Pouch owner calls `bp offer <bytes> --duration <secs>` (or the REST
 //!    endpoint) to broadcast a [`StorageOffer`] on the gossip topic
 //!    `billpouch/v1/{network_id}/offers`.
-//! 2. Other nodes receive the offer and store it in [`ReceivedOffers`].
+//! 2. Other nodes receive the offer and store it in [`AgreementStore`].
 //! 3. A Bill user calls `bp agree <offer_id>` to accept an offer.
 //!    This creates a local [`StorageAgreement`] and broadcasts an
 //!    acceptance back on the same gossip topic.
