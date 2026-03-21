@@ -435,3 +435,68 @@ async fn get_file_unknown_chunk_returns_error() {
     server_handle.abort();
     let _ = std::fs::remove_file(&socket_path);
 }
+
+/// Error case: GetFile after daemon "restart" (CEK hint cleared) returns a
+/// meaningful error about the missing hint.
+#[tokio::test]
+async fn get_file_missing_cek_hint_returns_error() {
+    let socket_path = temp_socket_path();
+    let (state, mut _net_rx) = make_daemon_state();
+
+    let server_state = Arc::clone(&state);
+    let server_path = socket_path.clone();
+    let server_handle = tokio::spawn(async move {
+        let _ = run_control_server(&server_path, server_state).await;
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Hatch a Pouch.
+    send_request(
+        &socket_path,
+        &ControlRequest::Hatch {
+            service_type: bp_core::service::ServiceType::Pouch,
+            network_id: "test-net".to_string(),
+            metadata: {
+                let mut m = HashMap::new();
+                m.insert("storage_bytes".to_string(), serde_json::json!(1_048_576u64));
+                m
+            },
+        },
+    )
+    .await;
+
+    // PutFile — stores fragments and inserts CEK hint.
+    let put_resp = send_request(
+        &socket_path,
+        &ControlRequest::PutFile {
+            chunk_data: b"CEK hint test payload".to_vec(),
+            ph: Some(0.99),
+            q_target: Some(1.0),
+            network_id: "test-net".to_string(),
+        },
+    )
+    .await;
+    let put_data: PutFileData =
+        serde_json::from_value(unwrap_ok(put_resp)).expect("PutFile must succeed");
+
+    // Simulate daemon restart: clear the in-memory CEK hints.
+    state.chunk_cek_hints.write().unwrap().clear();
+
+    // GetFile must now fail with a meaningful error about the missing hint.
+    let get_resp = send_request(
+        &socket_path,
+        &ControlRequest::GetFile {
+            chunk_id: put_data.chunk_id.clone(),
+            network_id: "test-net".to_string(),
+        },
+    )
+    .await;
+    let err_msg = unwrap_err(get_resp);
+    assert!(
+        err_msg.to_lowercase().contains("cek") || err_msg.to_lowercase().contains("daemon"),
+        "error must mention CEK/daemon restart: {err_msg}"
+    );
+
+    server_handle.abort();
+    let _ = std::fs::remove_file(&socket_path);
+}
