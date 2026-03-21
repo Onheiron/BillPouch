@@ -267,9 +267,7 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             // Ensure a NetworkMetaKey exists for this network.
             // If none was installed via an invite token, we generate a fresh
             // random one (this node is creating the network).
-            if let Err(e) =
-                crate::storage::manifest::NetworkMetaKey::load_or_create(&network_id)
-            {
+            if let Err(e) = crate::storage::manifest::NetworkMetaKey::load_or_create(&network_id) {
                 tracing::warn!(network = %network_id, "Failed to ensure NetworkMetaKey: {e}");
             }
             let _ = state
@@ -468,9 +466,8 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             ttl_hours,
         } => {
             let ttl = ttl_hours.unwrap_or(24);
-            let expires_at = (chrono::Utc::now()
-                + chrono::Duration::hours(ttl as i64))
-            .timestamp() as u64;
+            let expires_at =
+                (chrono::Utc::now() + chrono::Duration::hours(ttl as i64)).timestamp() as u64;
             match crate::invite::create_invite(
                 &state.identity,
                 &network_id,
