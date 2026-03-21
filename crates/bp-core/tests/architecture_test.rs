@@ -1551,6 +1551,9 @@ fn make_in_memory_state() -> std::sync::Arc<bp_core::control::server::DaemonStat
         remote_fragment_index: std::sync::Arc::new(std::sync::RwLock::new(
             bp_core::network::RemoteFragmentIndex::new(),
         )),
+        agreements: std::sync::Arc::new(std::sync::RwLock::new(
+            bp_core::storage::AgreementStore::default(),
+        )),
     })
 }
 
