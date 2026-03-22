@@ -26,6 +26,13 @@ for i in $(seq 1 30); do
     sleep 0.2
 done
 
+# ── Join network BEFORE mDNS connections expire ─────────────────────────────
+# Subscribes to the gossipsub topic so peer connections stay alive long
+# enough for the mesh to form.  bp hatch joins too, but too late if the
+# daemon was started >few seconds before it is called.
+bp join "${NETWORK}"
+echo "[${NODE_NAME}] Joined network '${NETWORK}' (gossipsub topic subscribed)."
+
 # ── Keep container alive ─────────────────────────────────────────────────────
 echo "[${NODE_NAME}] Node is live. Waiting for peers..."
 wait "${DAEMON_PID}"

@@ -15,6 +15,7 @@ pub mod flock;
 pub mod get;
 pub mod hatch;
 pub mod invite;
+pub mod join;
 
 pub mod put;
 pub mod relay;
