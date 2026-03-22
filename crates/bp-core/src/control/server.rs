@@ -180,13 +180,10 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             // Enforce one-Pouch-per-network: two correlated Pouches on the
             // same node defeat distributed redundancy.
             if service_type == ServiceType::Pouch {
-                let already_exists = state
-                    .services
-                    .read()
-                    .unwrap()
-                    .all()
-                    .iter()
-                    .any(|s| s.service_type == ServiceType::Pouch && s.network_id == network_id);
+                let already_exists =
+                    state.services.read().unwrap().all().iter().any(|s| {
+                        s.service_type == ServiceType::Pouch && s.network_id == network_id
+                    });
                 if already_exists {
                     return ControlResponse::err(format!(
                         "a Pouch for network '{}' already exists on this node; \
