@@ -23,11 +23,13 @@ pub mod encryption;
 pub mod fragment;
 pub mod manifest;
 pub mod meta;
+pub mod tier;
 
 pub use encryption::ChunkCipher;
 pub use fragment::{FragmentIndex, FragmentMeta};
 pub use manifest::{ChunkManifest, FileManifest, FragmentLocation, NetworkMetaKey};
 pub use meta::PouchMeta;
+pub use tier::StorageTier;
 
 use crate::{
     coding::rlnc::{self, EncodedFragment},

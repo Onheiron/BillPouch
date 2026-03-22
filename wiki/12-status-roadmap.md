@@ -2,7 +2,8 @@
 
 ## Versione corrente
 
-**v0.2.1** (Alpha) — Marzo 2026
+**v0.2.1** (Alpha) — Marzo 2026  
+**v0.3.0-dev** — implementazione in corso
 
 ---
 
@@ -143,14 +144,13 @@ Le decisioni riportate qui sono **design finalized** — implementazione da iniz
 
 ### 🔴 Breaking changes: rimozioni
 
-| Componente | Azione | Motivazione |
+| Componente | Azione | Stato |
 |---|---|---|
-| `bp join <network>` | **Eliminare** dal CLI pubblico | L'accesso a un network avviene solo via invite. `join` rimane operazione interna chiamata da `RedeemInvite` |
-| `bp leave <network>` | **Ridisegnare completamente** (vedi §Leave) | La semplice unsubscribe lascia dati orfani e rompe l'economia del network |
-| `bp propose-storage` | **Eliminare** | Non esiste un mercato: il Pouch contribuisce e basta |
-| `bp accept-storage` | **Eliminare** | Stessa ragione |
-| `StorageOffer` / `Agreement` | **Eliminare** da `storage/agreement.rs` | Sostituito dal sistema di tier e quota implicita |
-| `ControlRequest::ProposeStorage` / `AcceptStorage` | **Eliminare** | Sostituiti da `HatchPouch` con tier auto-detection |
+| `bp join <network>` (CLI pubblico) | Rimosso — rimane interno hidden | ✅ Done |
+| `bp leave <network>` | Ridisegnare completamente (vedi §Leave) | 🔲 Todo |
+| `bp propose-storage` / `bp accept-storage` | Eliminati | ✅ Done |
+| `StorageOffer` / `Agreement` | Eliminati | ✅ Done |
+| `ControlRequest::ProposeStorage` / `AcceptStorage` / `ListAgreements` / `ListOffers` | Eliminati | ✅ Done |
 
 ### 🟡 Modifiche a comandi esistenti
 
@@ -282,6 +282,12 @@ Error: a Pouch for network X already exists on this node.
 ---
 
 ## Changelog recente
+
+### v0.3.0-dev (Marzo 2026) — in corso
+- **refactor:** Rimosso intero storage marketplace — `StorageOffer`, `StorageAgreement`, `AgreementStore`, `ControlRequest::{ProposeStorage,AcceptStorage,ListAgreements,ListOffers}`, `NetworkCommand::AnnounceOffer`, `/marketplace/*` REST endpoints, CLI `bp offer/agree/agreements/offers`
+- **refactor:** `bp join` rimosso dal CLI pubblico — resta come comando nascosto usato dagli script (gossipsub topic subscription); accesso alle reti solo via `bp invite join`
+- **feat:** `storage/tier.rs` — `StorageTier` enum (T1–T5 = 10GB/100GB/500GB/1TB/5TB), `quota_bytes()`, `participating_tiers()`, `for_file_size()`, `parse()`, serde, 7 unit test
+- **feat:** `BpError::InvalidInput` — nuova variante per input non validi (es. tier sconosciuto)
 
 ### v0.2.1 (Marzo 2026)
 - **feat:** Web dashboard — `GET /` in `bp-api` restituisce una SPA HTML/JS embedded via `include_str!`; dark UI; sezioni Status, Peers, Files, Marketplace; auto-refresh 5s; zero dipendenze runtime
