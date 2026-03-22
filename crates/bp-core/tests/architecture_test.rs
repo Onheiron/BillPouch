@@ -1637,9 +1637,6 @@ fn make_in_memory_state() -> std::sync::Arc<bp_core::control::server::DaemonStat
         remote_fragment_index: std::sync::Arc::new(std::sync::RwLock::new(
             bp_core::network::RemoteFragmentIndex::new(),
         )),
-        agreements: std::sync::Arc::new(std::sync::RwLock::new(
-            bp_core::storage::AgreementStore::default(),
-        )),
         chunk_cek_hints: std::sync::RwLock::new(std::collections::HashMap::new()),
     })
 }
@@ -1951,138 +1948,7 @@ async fn dispatch_connect_relay_addr_valida() {
     }
 }
 
-#[tokio::test]
-#[cfg(unix)]
-async fn dispatch_propose_storage_ritorna_offer_id() {
-    let (sp, _s) = start_test_server().await;
-    let resp = send_cmd(
-        &sp,
-        &ControlRequest::ProposeStorage {
-            network_id: "amici".into(),
-            bytes_offered: 1_073_741_824,
-            duration_secs: 86_400,
-            price_tokens: 0,
-        },
-    )
-    .await;
-    match resp {
-        ControlResponse::Ok { data: Some(v) } => {
-            assert!(v["offer_id"].is_string(), "deve avere offer_id");
-            assert!(!v["offer_id"].as_str().unwrap().is_empty());
-        }
-        _ => panic!("Expected Ok con data"),
-    }
-}
 
-#[tokio::test]
-#[cfg(unix)]
-async fn dispatch_list_offers_vuota() {
-    let (sp, _s) = start_test_server().await;
-    let resp = send_cmd(
-        &sp,
-        &ControlRequest::ListOffers {
-            network_id: "".into(),
-        },
-    )
-    .await;
-    match resp {
-        ControlResponse::Ok { data: Some(v) } => {
-            assert!(v["offers"].is_array(), "deve contenere array offers");
-        }
-        _ => panic!("Expected Ok"),
-    }
-}
-
-#[tokio::test]
-#[cfg(unix)]
-async fn dispatch_list_offers_filtrata_per_rete() {
-    let (sp, _s) = start_test_server().await;
-    let resp = send_cmd(
-        &sp,
-        &ControlRequest::ListOffers {
-            network_id: "specifica-rete".into(),
-        },
-    )
-    .await;
-    assert!(matches!(resp, ControlResponse::Ok { .. }));
-}
-
-#[tokio::test]
-#[cfg(unix)]
-async fn dispatch_list_agreements_vuota() {
-    let (sp, _s) = start_test_server().await;
-    let resp = send_cmd(
-        &sp,
-        &ControlRequest::ListAgreements {
-            network_id: "".into(),
-        },
-    )
-    .await;
-    match resp {
-        ControlResponse::Ok { data: Some(v) } => {
-            assert!(
-                v["agreements"].is_array(),
-                "deve contenere array agreements"
-            );
-        }
-        _ => panic!("Expected Ok"),
-    }
-}
-
-#[tokio::test]
-#[cfg(unix)]
-async fn dispatch_accept_storage_offer_non_trovato() {
-    let (sp, _s) = start_test_server().await;
-    let resp = send_cmd(
-        &sp,
-        &ControlRequest::AcceptStorage {
-            offer_id: "offer-non-esistente-uuid".into(),
-        },
-    )
-    .await;
-    assert!(
-        matches!(resp, ControlResponse::Error { .. }),
-        "offer non trovato deve tornare errore"
-    );
-}
-
-#[tokio::test]
-#[cfg(unix)]
-async fn dispatch_accept_storage_offer_trovato() {
-    let (sp, state) = start_test_server().await;
-
-    // Inietta manualmente un'offer nello stato condiviso.
-    let offer_id = {
-        let offer = bp_core::storage::StorageOffer {
-            id: uuid::Uuid::new_v4().to_string(),
-            offerer_fingerprint: "deadbeef12345678".to_string(),
-            offerer_alias: "test-offerer".to_string(),
-            network_id: "test-net".to_string(),
-            bytes_offered: 1_073_741_824,
-            duration_secs: 86_400,
-            price_tokens: 0,
-            announced_at: 0,
-        };
-        let id = offer.id.clone();
-        state.agreements.write().unwrap().upsert_offer(offer);
-        id
-    };
-
-    let resp = send_cmd(
-        &sp,
-        &ControlRequest::AcceptStorage {
-            offer_id: offer_id.clone(),
-        },
-    )
-    .await;
-    match resp {
-        ControlResponse::Ok { data: Some(v) } => {
-            assert!(v["agreement_id"].is_string(), "deve avere agreement_id");
-            assert_eq!(v["offer_id"].as_str().unwrap(), offer_id);
-        }
-        _ => panic!("Expected Ok con data"),
-    }
-}
 
 // ═════════════════════════════════════════════════════════════════════════════
 // IDENTITY — export / import (multi-device)
@@ -2231,9 +2097,6 @@ async fn network_loop_accetta_e_processa_comandi() {
     let outgoing: bp_core::network::OutgoingAssignments =
         std::sync::Arc::new(std::sync::RwLock::new(HashMap::new()));
     let frag_idx = std::sync::Arc::new(std::sync::RwLock::new(RemoteFragmentIndex::new()));
-    let agreements = std::sync::Arc::new(std::sync::RwLock::new(
-        bp_core::storage::AgreementStore::default(),
-    ));
 
     let handle = tokio::spawn(run_network_loop(
         swarm,
@@ -2243,7 +2106,6 @@ async fn network_loop_accetta_e_processa_comandi() {
         storage_managers,
         outgoing,
         frag_idx,
-        agreements,
     ));
 
     // Lascia al loop il tempo di avviarsi e fare il listen.
@@ -2297,19 +2159,6 @@ async fn network_loop_accetta_e_processa_comandi() {
             })
             .await;
     }
-
-    // ── AnnounceOffer ──────────────────────────────────────────────────────
-    let offer_payload = serde_json::to_vec(&serde_json::json!({
-        "id": "test-offer-id",
-        "kind": "offer"
-    }))
-    .unwrap();
-    let _ = cmd_tx
-        .send(NetworkCommand::AnnounceOffer {
-            network_id: "test-net".into(),
-            payload: offer_payload,
-        })
-        .await;
 
     // ── LeaveNetwork ───────────────────────────────────────────────────────
     let _ = cmd_tx
