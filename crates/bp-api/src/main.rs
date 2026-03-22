@@ -478,10 +478,6 @@ async fn main() -> anyhow::Result<()> {
         .route("/files", post(put_file))
         .route("/files/:chunk_id", get(get_file))
         .route("/relay/connect", post(relay_connect))
-        .route("/marketplace/offers", post(marketplace_propose))
-        .route("/marketplace/offers", get(marketplace_list_offers))
-        .route("/marketplace/accept", post(marketplace_accept))
-        .route("/marketplace/agreements", get(marketplace_list_agreements))
         .with_state(state);
 
     let addr: SocketAddr = format!("{}:{}", args.host, args.port)

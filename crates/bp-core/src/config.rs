@@ -65,11 +65,6 @@ pub fn bootstrap_path() -> BpResult<PathBuf> {
     Ok(base_dir()?.join("bootstrap.json"))
 }
 
-/// Path to the persisted storage agreements and received offers.
-pub fn agreements_path() -> BpResult<PathBuf> {
-    Ok(base_dir()?.join("agreements.json"))
-}
-
 /// Path to the per-network secret keys store.
 ///
 /// JSON map: `{ "<network_id>": "<hex-encoded 32-byte key>" }`.
