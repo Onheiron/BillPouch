@@ -90,17 +90,6 @@ pub enum NetworkCommand {
         /// Serialised [`FragmentIndexAnnouncement`] bytes.
         payload: Vec<u8>,
     },
-    /// Publish a serialised [`StorageOffer`] or [`AgreementAcceptance`] on the
-    /// marketplace gossip topic (`billpouch/v1/{network_id}/offers`).
-    ///
-    /// [`StorageOffer`]: crate::storage::StorageOffer
-    /// [`AgreementAcceptance`]: crate::storage::AgreementAcceptance
-    AnnounceOffer {
-        /// Network whose offers topic to publish on.
-        network_id: String,
-        /// Serialised payload bytes.
-        payload: Vec<u8>,
-    },
     /// Dial a remote peer at a known [`Multiaddr`].
     Dial { addr: Multiaddr },
     /// Push a fragment to a remote Pouch peer for storage.
