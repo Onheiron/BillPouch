@@ -187,10 +187,7 @@ mod tests {
         assert_eq!(StorageTier::T2.quota_bytes(), 100 * 1024 * 1024 * 1024);
         assert_eq!(StorageTier::T3.quota_bytes(), 500 * 1024 * 1024 * 1024);
         assert_eq!(StorageTier::T4.quota_bytes(), 1024 * 1024 * 1024 * 1024);
-        assert_eq!(
-            StorageTier::T5.quota_bytes(),
-            5 * 1024 * 1024 * 1024 * 1024
-        );
+        assert_eq!(StorageTier::T5.quota_bytes(), 5 * 1024 * 1024 * 1024 * 1024);
     }
 
     #[test]
@@ -222,10 +219,7 @@ mod tests {
 
     #[test]
     fn for_file_size() {
-        assert_eq!(
-            StorageTier::for_file_size(1024),
-            Some(StorageTier::T1)
-        );
+        assert_eq!(StorageTier::for_file_size(1024), Some(StorageTier::T1));
         assert_eq!(
             StorageTier::for_file_size(TIER_T1_BYTES),
             Some(StorageTier::T1)
@@ -238,10 +232,7 @@ mod tests {
             StorageTier::for_file_size(TIER_T5_BYTES),
             Some(StorageTier::T5)
         );
-        assert_eq!(
-            StorageTier::for_file_size(TIER_T5_BYTES + 1),
-            None
-        );
+        assert_eq!(StorageTier::for_file_size(TIER_T5_BYTES + 1), None);
     }
 
     #[test]
