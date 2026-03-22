@@ -128,7 +128,8 @@ docker compose -f docker-compose.smoke.yml up --build -d
 
 ## Stato del progetto
 
-**v0.1.3 Alpha** — il layer di trasferimento file (chunking, cifratura, erasure coding)
-non è ancora implementato. I servizi si annunciano via gossip ma non trasferiscono dati reali.
+**v0.2.1 Alpha** — file transfer implementato: `bp put` / `bp get` (RLNC encode/decode,
+cifrazione CEK, distribuzione frammenti ai Pouch remoti, QoS adattivo k/n, Proof-of-Storage,
+FragmentIndex gossip). I servizi si annunciano via gossip E trasferiscono dati reali.
 
 Per dettagli completi vedi `wiki/12-status-roadmap.md`.
