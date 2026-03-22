@@ -63,10 +63,12 @@ pub struct DaemonState {
     ///
     /// Populated by `PutFile`; persisted only for the daemon’s lifetime
     /// (lost on restart — full persistence comes with the manifest system).
-    pub chunk_cek_hints: RwLock<HashMap<String, [u8; 32]>>,    /// Per-peer reputation state (tier R0–R4, score, uptime, PoS pass rate).
+    pub chunk_cek_hints: RwLock<HashMap<String, [u8; 32]>>,
+    /// Per-peer reputation state (tier R0–R4, score, uptime, PoS pass rate).
     ///
     /// Updated by the quality monitor and by eviction events.
-    pub reputation: RwLock<ReputationStore>,}
+    pub reputation: RwLock<ReputationStore>,
+}
 
 /// Accept connections on the Unix socket and dispatch requests.
 pub async fn run_control_server(
