@@ -10,7 +10,7 @@ use crate::{
     identity::Identity,
     network::{
         self, run_quality_monitor, NetworkState, OutgoingAssignments, RemoteFragmentIndex,
-        StorageManagerMap,
+        ReputationStore, StorageManagerMap,
     },
     service::ServiceRegistry,
 };
@@ -67,6 +67,7 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
         outgoing_assignments: Arc::clone(&outgoing_assignments),
         remote_fragment_index: Arc::clone(&remote_fragment_index),
         chunk_cek_hints: RwLock::new(HashMap::new()),
+        reputation: RwLock::new(ReputationStore::new()),
     });
 
     // ── Build libp2p swarm ────────────────────────────────────────────────

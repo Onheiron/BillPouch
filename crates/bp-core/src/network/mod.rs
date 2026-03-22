@@ -18,6 +18,7 @@ pub mod fragment_gossip;
 pub mod kad_store;
 pub mod qos;
 pub mod quality_monitor;
+pub mod reputation;
 pub mod state;
 
 pub use behaviour::{BillPouchBehaviour, FragmentRequest, FragmentResponse};
@@ -26,6 +27,7 @@ pub use fragment_gossip::{FragmentIndexAnnouncement, FragmentPointer, RemoteFrag
 pub use kad_store::KadPeers;
 pub use qos::{PeerQos, QosRegistry, FAULT_BLACKLISTED, FAULT_DEGRADED, FAULT_SUSPECTED};
 pub use quality_monitor::run_quality_monitor;
+pub use reputation::{ReputationRecord, ReputationStore, ReputationTier};
 pub use state::{NetworkState, NodeInfo};
 
 use crate::{

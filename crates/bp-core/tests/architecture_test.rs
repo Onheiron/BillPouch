@@ -1638,6 +1638,7 @@ fn make_in_memory_state() -> std::sync::Arc<bp_core::control::server::DaemonStat
             bp_core::network::RemoteFragmentIndex::new(),
         )),
         chunk_cek_hints: std::sync::RwLock::new(std::collections::HashMap::new()),
+        reputation: std::sync::RwLock::new(bp_core::network::ReputationStore::new()),
     })
 }
 
