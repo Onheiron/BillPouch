@@ -273,10 +273,7 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 match reg.get_mut(&service_id) {
                     Some(info) => {
                         if info.status == crate::service::ServiceStatus::Stopped
-                            || matches!(
-                                info.status,
-                                crate::service::ServiceStatus::Stopping
-                            )
+                            || matches!(info.status, crate::service::ServiceStatus::Stopping)
                         {
                             return ControlResponse::err(format!(
                                 "Service '{}' is not running",
@@ -287,14 +284,10 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                             eta_minutes,
                             paused_at: now_secs,
                         };
-                        info.metadata.insert(
-                            "maintenance".into(),
-                            serde_json::Value::Bool(true),
-                        );
-                        info.metadata.insert(
-                            "eta_minutes".into(),
-                            serde_json::Value::from(eta_minutes),
-                        );
+                        info.metadata
+                            .insert("maintenance".into(), serde_json::Value::Bool(true));
+                        info.metadata
+                            .insert("eta_minutes".into(), serde_json::Value::from(eta_minutes));
                         (info.network_id.clone(), info.service_type)
                     }
                     None => {
@@ -325,10 +318,7 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 let mut reg = state.services.write().unwrap();
                 match reg.get_mut(&service_id) {
                     Some(info) => {
-                        if !matches!(
-                            info.status,
-                            crate::service::ServiceStatus::Paused { .. }
-                        ) {
+                        if !matches!(info.status, crate::service::ServiceStatus::Paused { .. }) {
                             return ControlResponse::err(format!(
                                 "Service '{}' is not paused",
                                 service_id
