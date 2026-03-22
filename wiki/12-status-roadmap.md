@@ -288,6 +288,8 @@ Error: a Pouch for network X already exists on this node.
 - **refactor:** `bp join` rimosso dal CLI pubblico — resta come comando nascosto usato dagli script (gossipsub topic subscription); accesso alle reti solo via `bp invite join`
 - **feat:** `storage/tier.rs` — `StorageTier` enum (T1–T5 = 10GB/100GB/500GB/1TB/5TB), `quota_bytes()`, `participating_tiers()`, `for_file_size()`, `parse()`, serde, 7 unit test
 - **feat:** `BpError::InvalidInput` — nuova variante per input non validi (es. tier sconosciuto)
+- **feat:** `bp hatch pouch --tier T2` — sostituisce `--storage-bytes`; one-Pouch-per-network enforced in server
+- **feat:** `network/reputation.rs` — `ReputationTier` (R0–R4), `ReputationRecord`, `ReputationStore`; integrato in `DaemonState`
 
 ### v0.2.1 (Marzo 2026)
 - **feat:** Web dashboard — `GET /` in `bp-api` restituisce una SPA HTML/JS embedded via `include_str!`; dark UI; sezioni Status, Peers, Files, Marketplace; auto-refresh 5s; zero dipendenze runtime

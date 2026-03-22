@@ -13,7 +13,8 @@ use crate::{
     network::{
         fragment_gossip::{FragmentIndexAnnouncement, FragmentPointer, RemoteFragmentIndex},
         state::NodeInfo,
-        FragmentResponse, NetworkCommand, OutgoingAssignments, QosRegistry, StorageManagerMap,
+        FragmentResponse, NetworkCommand, OutgoingAssignments, QosRegistry, ReputationStore,
+        StorageManagerMap,
     },
     service::{ServiceInfo, ServiceRegistry, ServiceStatus, ServiceType},
     storage::{ChunkCipher, StorageManager},
@@ -62,8 +63,10 @@ pub struct DaemonState {
     ///
     /// Populated by `PutFile`; persisted only for the daemon’s lifetime
     /// (lost on restart — full persistence comes with the manifest system).
-    pub chunk_cek_hints: RwLock<HashMap<String, [u8; 32]>>,
-}
+    pub chunk_cek_hints: RwLock<HashMap<String, [u8; 32]>>,    /// Per-peer reputation state (tier R0–R4, score, uptime, PoS pass rate).
+    ///
+    /// Updated by the quality monitor and by eviction events.
+    pub reputation: RwLock<ReputationStore>,}
 
 /// Accept connections on the Unix socket and dispatch requests.
 pub async fn run_control_server(
