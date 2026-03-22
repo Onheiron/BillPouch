@@ -135,34 +135,137 @@ Ultimo commit verde atteso: branch `main` (post push).
 | 39 | `487a26d` | feat: **Multi-device identity** — `ExportedIdentity`, `ExportedKeyData`; `Identity::export_to_file` / `import_from_file`; `bp export-identity --out` / `bp import-identity [--force]` |
 | 40 | `d4cfa3b` | feat: **Web dashboard** — UI HTML/JS embedded in `bp-api`; `GET /` restituisce la dashboard; auto-refresh 5s |
 
-### Prossimi step consigliati
-| Priorità | Cosa | Dove |
-|----------|------|---------|
+---
 
+## Roadmap v0.3 — Design finalizzato (Marzo 2026)
 
-| 🔵 Bassa | **Web dashboard** — UI HTML/JS servita da `bp-api` Axum | `bp-api/static/` | ✅ Done |
+Le decisioni riportate qui sono **design finalized** — implementazione da iniziare.
+
+### 🔴 Breaking changes: rimozioni
+
+| Componente | Azione | Motivazione |
+|---|---|---|
+| `bp join <network>` | **Eliminare** dal CLI pubblico | L'accesso a un network avviene solo via invite. `join` rimane operazione interna chiamata da `RedeemInvite` |
+| `bp leave <network>` | **Ridisegnare completamente** (vedi §Leave) | La semplice unsubscribe lascia dati orfani e rompe l'economia del network |
+| `bp propose-storage` | **Eliminare** | Non esiste un mercato: il Pouch contribuisce e basta |
+| `bp accept-storage` | **Eliminare** | Stessa ragione |
+| `StorageOffer` / `Agreement` | **Eliminare** da `storage/agreement.rs` | Sostituito dal sistema di tier e quota implicita |
+| `ControlRequest::ProposeStorage` / `AcceptStorage` | **Eliminare** | Sostituiti da `HatchPouch` con tier auto-detection |
+
+### 🟡 Modifiche a comandi esistenti
+
+#### `bp hatch pouch` — Storage tier invece di quota libera
+
+Attualmente accetta `--storage-bytes N` (valore libero). Questo viene sostituito da:
+
+```
+bp hatch pouch --tier <T1|T2|T3|T4|T5> [--network <id>]
+bp hatch pouch --quota <bytes>  # auto-detection del tier più vicino per difetto
+```
+
+I tier di storage sono:
+
+| Tier | Soglia | Nome |
+|---|---|---|
+| T1 | 10 GB | Pebble |
+| T2 | 100 GB | Stone |
+| T3 | 500 GB | Boulder |
+| T4 | 1 TB | Rock |
+| T5 | 5 TB | Monolith |
+
+Un Pouch appartiene al suo tier **e a tutti i tier inferiori**. Un Pouch T3 da 500 GB partecipa ai calcoli N/k/q di T1, T2 e T3.
+
+#### `bp hatch` senza `--network` — modalità locale
+
+Se `--network` non viene specificato, il servizio gira in **modalità locale**: nessun gossip, nessun peer, storage e accesso solo da parte dell'identità locale (comportamento analogo a GlusterFS). Utile per test, staging, o uso single-device.
+
+### 🟢 Nuovi comandi
+
+#### `bp leave <network>` — procedura di abbandono asincrona
+
+Abbandono di un network è una procedura multi-step **non interrompibile** una volta avviata:
+
+1. **Precondition:** Blocca se l'utente ha servizi attivi su quel network (mostra lista)
+2. Per ogni Pouch attivo su quel network → avvia **procedura di eviction Pouch** (vedi sotto)
+3. Per ogni chunk del quale l'utente è owner (Bill fragments su peer remoti):
+   - Fetch di tutti i fragment raggiungibili
+   - Ricostruisce il file localmente
+   - Presenta lista: "Questi file non saranno più recuperabili dopo l'abbandono. Vuoi scaricarli? [lista con size]"
+   - L'utente confirma o rinuncia a ciascuno
+4. Quando eviction completa e file materializzati → unsubscribe gossip + rimozione da `active_networks`
+5. Progress disponibile via `bp leave-status <network>`
+
+#### `bp pause <service_id> --eta <minutes>` — manutenzione temporanea
+
+Per spegnimento pianificato con garanzia di ritorno:
+
+1. Annuncia via gossip: "manutenzione, torno entro T minuti"
+2. Gli altri peer marcano i suoi fragment come `temporarily_unavailable` (non `lost`)
+3. Se non torna entro T → `fault_score++` automatico per ogni PoS challenge mancato
+4. Al ritorno → PoS challenge immediato; se passa → nessuna penalità reputazione
+
+#### `bp farewell <service_id> --evict` — rimozione permanente con eviction
+
+Procedura asincrona per rimozione definitiva di un Pouch:
+
+1. Annuncia network: "offline definitivo"
+2. Per ogni chunk ospitato: propaga i fragment ai peer disponibili (re-distribute fino a raggiungere di nuovo N fragment totali)
+3. Presenta all'utente: "Con questo Pouch stai rimuovendo X GB. Questi file dipendono dalla tua quota locale. Quali vuoi materializzare localmente? [lista]"
+4. L'utente sceglie. I file non scelti rimangono nel network (finché ci sono ≥k fragment raggiungibili)
+5. Solo dopo eviction confermata → Pouch rimosso da `ServiceRegistry`
+
+### 🔵 Nuovo sottosistema: Network Tiering
+
+#### Storage tier — `storage/tier.rs` (nuovo)
+
+Calcola N, k, q **per tier** basandosi sullo stato corrente del network:
+
+- **T1 file** (< 10 GB): N = tutti i Pouch (T1+T2+T3+T4+T5), k e q calcolati su tutti
+- **T2 file** (10–100 GB): N = Pouch T2+, k e q solo su quelli
+- **T3 file** (100–500 GB): N = Pouch T3+
+- **T4 file** (500 GB–1 TB): N = Pouch T4+
+- **T5 file** (> 1 TB): N = Pouch T5 only
+
+Lo storage netto disponibile per un utente con Pouch tier T è:
+
+$$\text{storage\_netto}(T) = \sum_{\text{tiers} \leq T} \frac{\text{quota\_tier}}{q_{\text{tier}}}$$
+
+dove $q_{\text{tier}}$ è l'overhead RLNC calcolato live dai QoS scores dei Pouch di quel tier.
+
+#### Reputation tier — `network/reputation.rs` (nuovo)
+
+| Tier | Nome | Criteri di ingresso |
+|---|---|---|
+| R0 | Quarantine | `fault_score > threshold_blacklist`; eviction forzata; dati persi senza notifica |
+| R1 | Fledgling | Nodo nuovo (< 7 giorni nel network) |
+| R2 | Reliable | Uptime ≥ 95% su 30 giorni; PoS pass rate ≥ 98% |
+| R3 | Trusted | Uptime ≥ 99% su 90 giorni; PoS pass rate ≥ 99.5% |
+| R4 | Pillar | Uptime ≥ 99.9% su 365 giorni; contributo ≥ T3 |
+
+**Regola di placement:** i fragment di file appartenenti a utenti con reputation ≥ R2 vengono preferenzialmente piazzati su Pouch con reputation ≥ R2. I Pouch R0 ricevono solo fragment di utenti R0 — la quarantine è **isolata**.
+
+**Progressione reputazione:**
+- Ogni PoS challenge passato → `reputation_score += PASS_INC`
+- Ogni PoS challenge fallito → `reputation_score -= FAIL_DEC`
+- Ogni 24h di uptime verificato → `reputation_score += UPTIME_INC`
+- Pausa con `--eta` rispettata → nessuna penalità
+- Pausa con `--eta` sforata → `reputation_score -= LATE_PENALTY`
+- Eviction forzata (sparito senza preavviso) → `reputation_score = 0`, tier forzato R0 per 30 giorni
 
 ---
 
-## Roadmap
+## Roadmap — backlog futuro 🔮
 
-### Pianificato 📋
-
-| Funzionalità | Stato | Descrizione |
+| Funzionalità | Priorità | Descrizione |
 |---|---|---|
-| Multi-device identity | ✅ Done | `bp export-identity` / `bp import-identity` |
-| Web dashboard | ✅ Done | `GET /` in `bp-api` — SPA HTML/JS embedded, auto-refresh 5s |
-
-### Futuro 🔮
-
-| Funzionalità              | Descrizione                                   |
-|---------------------------|-----------------------------------------------|
-| NAT traversal             | ✅ Done — AutoNAT + relay circuit v2          |
-| Passphrase identità       | ✅ Done — Argon2id + ChaCha20-Poly1305 su `identity.key.enc` |
-| Encryption at rest        | ✅ Done — ChaCha20-Poly1305 per-chunk; CEK derivata da identity + BLAKE3(plaintext) |
-| NetworkMetaKey segreta    | ✅ Done — chiave random in `network_keys.json`, non derivabile dal nome rete |
-| CEK per-utente            | ✅ Done — `ChunkCipher::for_user`; solo il proprietario decifra; ECIES sharing futuro |
-| Sistema di inviti         | ✅ Done — `bp invite create / join`; Ed25519 sign + Argon2id+ChaCha20-Poly1305 encrypt; NetworkMetaKey trasportata nel token |
+| FUSE mount | Alta | `bp mount <network> <mountpoint>` — filesystem nativo |
+| CEK persistence | Alta | Cifrare e persistere `chunk_cek_hints` su disco — sopravvive al riavvio del daemon |
+| Bootstrap pubblici | Alta | 3+ nodi pubblici always-on per cold-start del network |
+| gRPC API | Media | Alternativa programmatica alla socket Unix control |
+| Mobile client | Media | iOS/Android via UniFFI bindings a `bp-core` |
+| Content deduplication | Media | Content-addressed storage per file identici dallo stesso utente |
+| Resumable uploads | Bassa | Checkpoint state per file grandi |
+| Personal AI data vault | Bassa | Strutturazione dei dati per fine-tuning AI locale |
 
 ---
 
