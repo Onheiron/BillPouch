@@ -30,7 +30,7 @@ pub use state::{NetworkState, NodeInfo};
 
 use crate::{
     error::{BpError, BpResult},
-    storage::{StorageManager},
+    storage::StorageManager,
 };
 use futures::StreamExt;
 use libp2p::{gossipsub, request_response, swarm::SwarmEvent, Multiaddr, PeerId, Swarm};
