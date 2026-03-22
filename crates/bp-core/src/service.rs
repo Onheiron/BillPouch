@@ -60,6 +60,11 @@ pub enum ServiceStatus {
     Starting,
     /// Service is fully operational and announcing itself to the network.
     Running,
+    /// Service is temporarily paused for maintenance.
+    ///
+    /// The service will resume within `eta_minutes`.
+    /// `paused_at` is a Unix timestamp (seconds).
+    Paused { eta_minutes: u64, paused_at: u64 },
     /// Graceful shutdown has been requested but not yet completed.
     Stopping,
     /// Service has shut down cleanly.
@@ -73,6 +78,9 @@ impl std::fmt::Display for ServiceStatus {
         match self {
             ServiceStatus::Starting => write!(f, "starting"),
             ServiceStatus::Running => write!(f, "running"),
+            ServiceStatus::Paused { eta_minutes, .. } => {
+                write!(f, "paused (ETA {} min)", eta_minutes)
+            }
             ServiceStatus::Stopping => write!(f, "stopping"),
             ServiceStatus::Stopped => write!(f, "stopped"),
             ServiceStatus::Error(msg) => write!(f, "error: {}", msg),

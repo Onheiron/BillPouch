@@ -24,6 +24,24 @@ pub enum ControlRequest {
     Flock,
     /// Kill a running service by ID.
     Farewell { service_id: String },
+    /// Pause a running Pouch service for planned maintenance.
+    ///
+    /// Announces via gossip that peers should mark this node's fragments as
+    /// `temporarily_unavailable`.  If the service does not resume within
+    /// `eta_minutes`, the quality monitor will apply fault-score increments.
+    Pause {
+        /// Service ID to pause (UUID returned by `bp hatch`).
+        service_id: String,
+        /// Estimated downtime in minutes.
+        eta_minutes: u64,
+    },
+    /// Resume a previously paused service.
+    ///
+    /// Triggers an immediate gossip announcement and clears the Paused status.
+    Resume {
+        /// Service ID to resume.
+        service_id: String,
+    },
     /// Join an existing network (subscribe to gossip topics).
     Join { network_id: String },
     /// Leave a network.
