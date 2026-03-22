@@ -177,6 +177,25 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 state.networks.write().unwrap().push(network_id.clone());
             }
 
+            // Enforce one-Pouch-per-network: two correlated Pouches on the
+            // same node defeat distributed redundancy.
+            if service_type == ServiceType::Pouch {
+                let already_exists = state
+                    .services
+                    .read()
+                    .unwrap()
+                    .all()
+                    .iter()
+                    .any(|s| s.service_type == ServiceType::Pouch && s.network_id == network_id);
+                if already_exists {
+                    return ControlResponse::err(format!(
+                        "a Pouch for network '{}' already exists on this node; \
+                         two correlated Pouches defeat distributed redundancy",
+                        network_id
+                    ));
+                }
+            }
+
             let info = ServiceInfo::new(service_type, network_id.clone(), metadata.clone());
             let service_id = info.id.clone();
 

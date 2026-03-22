@@ -6,7 +6,7 @@
 //!    bp logout                      Remove your identity from this machine
 //!    bp export-identity --out <path>   Export identity to a portable file
 //!    bp import-identity <path> [--force]  Import identity from a portable file
-//!    bp hatch  <type> [--network <id>]  Start a service (bill|pouch|post)
+//!    bp hatch  <type> [--network <id>] [--tier T2]  Start a service (bill|pouch|post)
 //!    bp flock                       Show peers and network summary
 //!    bp farewell <service_id>       Stop a running service
 //!    bp invite create --network <id> --invite-password <pw>  Create invite token
@@ -95,9 +95,10 @@ enum Cmd {
         #[arg(long, short, default_value = DEFAULT_NETWORK)]
         network: String,
 
-        /// For pouch: how many bytes to bid (e.g. 10737418240 for 10 GiB).
+        /// For pouch: storage tier to contribute
+        /// (T1=10 GiB, T2=100 GiB, T3=500 GiB, T4=1 TiB, T5=5 TiB).
         #[arg(long)]
-        storage_bytes: Option<u64>,
+        tier: Option<String>,
 
         /// For bill: local mount path for personal files.
         #[arg(long)]
@@ -293,13 +294,19 @@ async fn main() -> anyhow::Result<()> {
         Some(Cmd::Hatch {
             service_type,
             network,
-            storage_bytes,
+            tier,
             mount,
         }) => {
             let svc_type: bp_core::service::ServiceType = service_type.parse()?;
             let mut metadata: HashMap<String, serde_json::Value> = HashMap::new();
-            if let Some(bytes) = storage_bytes {
-                metadata.insert("storage_bytes".into(), serde_json::Value::from(bytes));
+            if let Some(tier_str) = tier {
+                let storage_tier = bp_core::storage::StorageTier::parse(&tier_str)
+                    .map_err(|e| anyhow::anyhow!("{}", e))?;
+                metadata.insert("tier".into(), serde_json::Value::from(tier_str));
+                metadata.insert(
+                    "storage_bytes".into(),
+                    serde_json::Value::from(storage_tier.quota_bytes()),
+                );
             }
             if let Some(path) = mount {
                 metadata.insert("mount_path".into(), serde_json::Value::from(path));
