@@ -6,7 +6,7 @@
 # via mDNS on a Docker bridge network and exchange NodeInfo via gossipsub.
 #
 # Strategy:
-#   Entrypoint already: login → start daemon → bp join (gossipsub topic)
+#   Entrypoint already: login → start daemon (gossipsub topic joined at hatch)
 #   This script:
 #   1. Wait for all daemons to be ready + joined
 #   2. Wait for mDNS mesh formation (peers stay connected via shared topic)
