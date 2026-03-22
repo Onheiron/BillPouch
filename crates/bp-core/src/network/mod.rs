@@ -30,7 +30,7 @@ pub use state::{NetworkState, NodeInfo};
 
 use crate::{
     error::{BpError, BpResult},
-    storage::{AgreementAcceptance, AgreementStore, StorageManager, StorageOffer},
+    storage::{StorageManager},
 };
 use futures::StreamExt;
 use libp2p::{gossipsub, request_response, swarm::SwarmEvent, Multiaddr, PeerId, Swarm};
@@ -210,7 +210,6 @@ pub async fn run_network_loop(
     storage_managers: StorageManagerMap,
     outgoing_assignments: OutgoingAssignments,
     remote_fragment_index: Arc<RwLock<fragment_gossip::RemoteFragmentIndex>>,
-    agreements: Arc<RwLock<AgreementStore>>,
 ) -> BpResult<()> {
     swarm
         .listen_on(listen_addr.clone())
@@ -275,7 +274,7 @@ pub async fn run_network_loop(
         tokio::select! {
             // ── Incoming swarm event ──────────────────────────────────────────
             event = swarm.select_next_some() => {
-                handle_swarm_event(event, &mut swarm, &state, &mut subscribed_networks, &storage_managers, &mut pending_fetches, &mut pending_pings, &mut pending_pos, &remote_fragment_index, &mut local_kad_peers, &agreements).await;
+                handle_swarm_event(event, &mut swarm, &state, &mut subscribed_networks, &storage_managers, &mut pending_fetches, &mut pending_pings, &mut pending_pos, &remote_fragment_index, &mut local_kad_peers).await;
             }
             // ── Command from daemon ───────────────────────────────────────────
             cmd = cmd_rx.recv() => {
@@ -306,13 +305,6 @@ pub async fn run_network_loop(
                             if let Err(e) = swarm.behaviour_mut().gossipsub.subscribe(&idx_topic) {
                                 tracing::warn!("Failed to subscribe to index topic {}: {}", network_id, e);
                             }
-                            // Also subscribe to the marketplace offers topic.
-                            let offers_topic = gossipsub::IdentTopic::new(
-                                crate::storage::StorageOffer::topic_name(&network_id),
-                            );
-                            if let Err(e) = swarm.behaviour_mut().gossipsub.subscribe(&offers_topic) {
-                                tracing::warn!("Failed to subscribe to offers topic {}: {}", network_id, e);
-                            }
                         }
                     }
                     Some(NetworkCommand::LeaveNetwork { network_id }) => {
@@ -322,24 +314,13 @@ pub async fn run_network_loop(
                             fragment_gossip::FragmentIndexAnnouncement::topic_name(&network_id),
                         );
                         let _ = swarm.behaviour_mut().gossipsub.unsubscribe(&idx_topic);
-                        let offers_topic = gossipsub::IdentTopic::new(
-                            crate::storage::StorageOffer::topic_name(&network_id),
-                        );
-                        let _ = swarm.behaviour_mut().gossipsub.unsubscribe(&offers_topic);
+
                         subscribed_networks.remove(&network_id);
                     }
                     Some(NetworkCommand::Announce { network_id, payload }) => {
                         let topic = gossipsub::IdentTopic::new(NodeInfo::topic_name(&network_id));
                         if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic, payload) {
                             tracing::warn!("Gossip publish failed: {}", e);
-                        }
-                    }
-                    Some(NetworkCommand::AnnounceOffer { network_id, payload }) => {
-                        let topic = gossipsub::IdentTopic::new(
-                            crate::storage::StorageOffer::topic_name(&network_id),
-                        );
-                        if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic, payload) {
-                            tracing::warn!("StorageOffer gossip publish failed: {}", e);
                         }
                     }
                     Some(NetworkCommand::AnnounceIndex { network_id, payload }) => {
@@ -484,7 +465,6 @@ async fn handle_swarm_event(
     >,
     remote_fragment_index: &Arc<RwLock<fragment_gossip::RemoteFragmentIndex>>,
     known_peers: &mut kad_store::KadPeers,
-    agreements: &Arc<RwLock<AgreementStore>>,
 ) {
     match event {
         // ── Gossipsub: incoming NodeInfo announcement ─────────────────────
@@ -523,38 +503,7 @@ async fn handle_swarm_event(
                         }
                     }
                     Err(e) => {
-                        // Try as StorageOffer (marketplace gossip).
-                        if let Ok(offer) = serde_json::from_slice::<StorageOffer>(&message.data) {
-                            tracing::debug!(
-                                peer = %propagation_source,
-                                offer = %offer.id,
-                                bytes = offer.bytes_offered,
-                                "Gossip StorageOffer received"
-                            );
-                            if let Ok(mut store) = agreements.write() {
-                                store.upsert_offer(offer);
-                                if let Ok(path) = crate::config::agreements_path() {
-                                    store.save(&path).ok();
-                                }
-                            }
-                        } else if let Ok(acceptance) =
-                            serde_json::from_slice::<AgreementAcceptance>(&message.data)
-                        {
-                            tracing::debug!(
-                                peer = %propagation_source,
-                                agreement = %acceptance.agreement_id,
-                                "Gossip AgreementAcceptance received"
-                            );
-                            // Activate the agreement locally if we are the offerer.
-                            if let Ok(mut store) = agreements.write() {
-                                store.activate(&acceptance.agreement_id);
-                                if let Ok(path) = crate::config::agreements_path() {
-                                    store.save(&path).ok();
-                                }
-                            }
-                        } else {
-                            tracing::warn!("Failed to deserialize gossip message: {}", e);
-                        }
+                        tracing::warn!("Failed to deserialize gossip message: {}", e);
                     }
                 }
             }

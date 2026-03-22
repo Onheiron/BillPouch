@@ -16,7 +16,7 @@ use crate::{
         FragmentResponse, NetworkCommand, OutgoingAssignments, QosRegistry, StorageManagerMap,
     },
     service::{ServiceInfo, ServiceRegistry, ServiceStatus, ServiceType},
-    storage::{AgreementStore, ChunkCipher, StorageAgreement, StorageManager, StorageOffer},
+    storage::{ChunkCipher, StorageManager},
 };
 use libp2p::{Multiaddr, PeerId};
 use std::{
@@ -57,9 +57,6 @@ pub struct DaemonState {
     /// targeted `FetchChunkFragments` requests instead of broadcasting to all
     /// known Pouches.
     pub remote_fragment_index: Arc<RwLock<RemoteFragmentIndex>>,
-    /// Storage marketplace: local agreements (as offerer or requester) and
-    /// offers received from remote peers via gossip.
-    pub agreements: Arc<RwLock<AgreementStore>>,
     /// Maps `chunk_id → BLAKE3(plaintext_chunk)` so that `GetFile` can
     /// re-derive the per-user CEK for decryption after RLNC decode.
     ///
@@ -314,149 +311,6 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 "relay_addr": relay_addr,
                 "message": format!("Dialing relay '{}'", relay_addr),
             }))
-        }
-        // ── ProposeStorage ──────────────────────────────────────────────
-        ControlRequest::ProposeStorage {
-            network_id,
-            bytes_offered,
-            duration_secs,
-            price_tokens,
-        } => {
-            let offer = StorageOffer {
-                id: uuid::Uuid::new_v4().to_string(),
-                offerer_fingerprint: state.identity.fingerprint.clone(),
-                offerer_alias: state
-                    .identity
-                    .profile
-                    .alias
-                    .clone()
-                    .unwrap_or_else(|| "anonymous".to_string()),
-                network_id: network_id.clone(),
-                bytes_offered,
-                duration_secs,
-                price_tokens,
-                announced_at: chrono::Utc::now().timestamp() as u64,
-            };
-
-            // Publish on gossip topic.
-            if let Ok(payload) = serde_json::to_vec(&offer) {
-                let _ = state
-                    .net_tx
-                    .send(NetworkCommand::AnnounceOffer {
-                        network_id: network_id.clone(),
-                        payload,
-                    })
-                    .await;
-            }
-
-            // Persist locally.
-            if let Ok(mut store) = state.agreements.write() {
-                store.upsert_offer(offer.clone());
-                if let Ok(path) = crate::config::agreements_path() {
-                    store.save(&path).ok();
-                }
-            }
-
-            ControlResponse::ok(serde_json::json!({
-                "offer_id": offer.id,
-                "message": format!("Storage offer '{}' broadcast on network '{}'", offer.id, network_id),
-            }))
-        }
-
-        // ── AcceptStorage ───────────────────────────────────────────────
-        ControlRequest::AcceptStorage { offer_id } => {
-            // Find the offer in the received_offers list.
-            let offer_snap = {
-                let store = state.agreements.read().unwrap();
-                store
-                    .received_offers
-                    .iter()
-                    .find(|o| o.id == offer_id)
-                    .cloned()
-            };
-
-            match offer_snap {
-                None => ControlResponse::err(format!("Offer '{}' not found", offer_id)),
-                Some(offer) => {
-                    let agreement_id = uuid::Uuid::new_v4().to_string();
-                    let agreement = StorageAgreement {
-                        id: agreement_id.clone(),
-                        offer_id: offer.id.clone(),
-                        offerer_fingerprint: offer.offerer_fingerprint.clone(),
-                        requester_fingerprint: state.identity.fingerprint.clone(),
-                        network_id: offer.network_id.clone(),
-                        bytes_agreed: offer.bytes_offered,
-                        duration_secs: offer.duration_secs,
-                        price_tokens: offer.price_tokens,
-                        status: crate::storage::AgreementStatus::Pending,
-                        created_at: chrono::Utc::now().timestamp() as u64,
-                        completed_at: None,
-                    };
-
-                    // Broadcast acceptance.
-                    let acceptance = crate::storage::AgreementAcceptance {
-                        kind: "acceptance".to_string(),
-                        agreement_id: agreement_id.clone(),
-                        offer_id: offer.id.clone(),
-                        requester_fingerprint: state.identity.fingerprint.clone(),
-                        network_id: offer.network_id.clone(),
-                        accepted_at: chrono::Utc::now().timestamp() as u64,
-                    };
-                    if let Ok(payload) = serde_json::to_vec(&acceptance) {
-                        let _ = state
-                            .net_tx
-                            .send(NetworkCommand::AnnounceOffer {
-                                network_id: offer.network_id.clone(),
-                                payload,
-                            })
-                            .await;
-                    }
-
-                    // Persist locally.
-                    if let Ok(mut store) = state.agreements.write() {
-                        store.add_agreement(agreement);
-                        if let Ok(path) = crate::config::agreements_path() {
-                            store.save(&path).ok();
-                        }
-                    }
-
-                    ControlResponse::ok(serde_json::json!({
-                        "agreement_id": agreement_id,
-                        "offer_id": offer.id,
-                        "message": format!("Accepted offer '{}', agreement '{}' created", offer.id, agreement_id),
-                    }))
-                }
-            }
-        }
-
-        // ── ListAgreements ─────────────────────────────────────────────
-        ControlRequest::ListAgreements { network_id } => {
-            let store = state.agreements.read().unwrap();
-            let agreements: Vec<_> = if network_id.is_empty() {
-                store.agreements.clone()
-            } else {
-                store
-                    .agreements_for_network(&network_id)
-                    .into_iter()
-                    .cloned()
-                    .collect()
-            };
-            ControlResponse::ok(serde_json::json!({ "agreements": agreements }))
-        }
-
-        // ── ListOffers ───────────────────────────────────────────────────
-        ControlRequest::ListOffers { network_id } => {
-            let store = state.agreements.read().unwrap();
-            let offers: Vec<_> = if network_id.is_empty() {
-                store.received_offers.clone()
-            } else {
-                store
-                    .offers_for_network(&network_id)
-                    .into_iter()
-                    .cloned()
-                    .collect()
-            };
-            ControlResponse::ok(serde_json::json!({ "offers": offers }))
         }
         // ── CreateInvite ──────────────────────────────────────────────────
         ControlRequest::CreateInvite {

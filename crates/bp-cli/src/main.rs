@@ -9,17 +9,12 @@
 //!    bp hatch  <type> [--network <id>]  Start a service (bill|pouch|post)
 //!    bp flock                       Show peers and network summary
 //!    bp farewell <service_id>       Stop a running service
-//!    bp join <network_id>           Join a BillPouch network
 //!    bp invite create --network <id> --invite-password <pw>  Create invite token
 //!    bp invite join <blob> --invite-password <pw>            Redeem invite token
 //!    bp bootstrap list              Show configured WAN bootstrap nodes
 //!    bp bootstrap add <addr>        Add a bootstrap node
 //!    bp bootstrap remove <addr>     Remove a bootstrap node
 //!    bp relay connect <addr>        Dial a relay node for NAT traversal
-//!    bp offer <bytes> [--duration <secs>] [--price <tokens>]  Propose storage
-//!    bp agree <offer_id>            Accept a received storage offer
-//!    bp agreements [--network <id>] List local agreements
-//!    bp offers [--network <id>]     List received storage offers
 //!    bp --daemon [--passphrase <p>] (internal) run the background daemon
 //! ```
 
@@ -118,12 +113,6 @@ enum Cmd {
         service_id: String,
     },
 
-    /// Join an existing BillPouch network.
-    Join {
-        /// The network identifier (e.g. "my-team-net").
-        network_id: String,
-    },
-
     /// Store a local file in the active Pouch (RLNC erasure-coded).
     Put {
         /// Path to the file to store.
@@ -174,50 +163,6 @@ enum Cmd {
     Relay {
         #[command(subcommand)]
         action: RelayAction,
-    },
-
-    /// Broadcast a storage offer on the marketplace gossip topic.
-    ///
-    /// The offer is flooded to all peers on `network_id` via gossipsub.
-    /// Other nodes can accept it with `bp agree <offer_id>`.
-    Offer {
-        /// Storage capacity to offer in bytes (e.g. 1073741824 = 1 GiB).
-        bytes: u64,
-
-        /// How long the offer is valid (default: 86400 = 24 h).
-        #[arg(long, default_value_t = 86_400)]
-        duration: u64,
-
-        /// Optional price in protocol tokens (default: 0 = free).
-        #[arg(long, default_value_t = 0)]
-        price: u64,
-
-        /// Network to broadcast the offer on.
-        #[arg(long, short, default_value = DEFAULT_NETWORK)]
-        network: String,
-    },
-
-    /// Accept a received storage offer.
-    ///
-    /// Creates a local `StorageAgreement` and broadcasts acceptance to the
-    /// offerer via the marketplace gossip topic.
-    Agree {
-        /// The offer ID to accept (from `bp offers`).
-        offer_id: String,
-    },
-
-    /// List local storage agreements (as offerer or requester).
-    Agreements {
-        /// Filter by network (default: "" = all networks).
-        #[arg(long, short, default_value = "")]
-        network: String,
-    },
-
-    /// List storage offers received from remote peers.
-    Offers {
-        /// Filter by network (default: "" = all networks).
-        #[arg(long, short, default_value = "")]
-        network: String,
     },
 
     /// Manage network invite tokens.
@@ -363,10 +308,6 @@ async fn main() -> anyhow::Result<()> {
             commands::farewell::farewell(service_id).await?;
         }
 
-        Some(Cmd::Join { network_id }) => {
-            commands::join::join(network_id).await?;
-        }
-
         Some(Cmd::Put {
             file,
             network,
@@ -401,27 +342,6 @@ async fn main() -> anyhow::Result<()> {
                 commands::relay::connect(addr).await?;
             }
         },
-
-        Some(Cmd::Offer {
-            bytes,
-            duration,
-            price,
-            network,
-        }) => {
-            commands::marketplace::propose(network, bytes, duration, price).await?;
-        }
-
-        Some(Cmd::Agree { offer_id }) => {
-            commands::marketplace::accept(offer_id).await?;
-        }
-
-        Some(Cmd::Agreements { network }) => {
-            commands::marketplace::list_agreements(network).await?;
-        }
-
-        Some(Cmd::Offers { network }) => {
-            commands::marketplace::list_offers(network).await?;
-        }
 
         Some(Cmd::Invite { action }) => match action {
             InviteAction::Create {
