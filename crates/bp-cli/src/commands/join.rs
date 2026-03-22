@@ -12,7 +12,7 @@ use bp_core::control::protocol::ControlRequest;
 pub async fn join(network_id: String) -> Result<()> {
     let mut client = ControlClient::connect().await?;
     let resp = client
-        .send(&ControlRequest::Join {
+        .send(ControlRequest::Join {
             network_id: network_id.clone(),
         })
         .await?;
