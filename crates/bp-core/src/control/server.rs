@@ -24,6 +24,7 @@ use std::{
     collections::HashMap,
     path::Path,
     sync::{Arc, RwLock},
+    time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
@@ -255,6 +256,105 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 })),
                 None => ControlResponse::err(format!("No service with id '{}'", service_id)),
             }
+        }
+
+        // ── Pause ─────────────────────────────────────────────────────────
+        ControlRequest::Pause {
+            service_id,
+            eta_minutes,
+        } => {
+            let now_secs = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+
+            let (network_id, service_type) = {
+                let mut reg = state.services.write().unwrap();
+                match reg.get_mut(&service_id) {
+                    Some(info) => {
+                        if info.status == crate::service::ServiceStatus::Stopped
+                            || matches!(
+                                info.status,
+                                crate::service::ServiceStatus::Stopping
+                            )
+                        {
+                            return ControlResponse::err(format!(
+                                "Service '{}' is not running",
+                                service_id
+                            ));
+                        }
+                        info.status = crate::service::ServiceStatus::Paused {
+                            eta_minutes,
+                            paused_at: now_secs,
+                        };
+                        info.metadata.insert(
+                            "maintenance".into(),
+                            serde_json::Value::Bool(true),
+                        );
+                        info.metadata.insert(
+                            "eta_minutes".into(),
+                            serde_json::Value::from(eta_minutes),
+                        );
+                        (info.network_id.clone(), info.service_type)
+                    }
+                    None => {
+                        return ControlResponse::err(format!(
+                            "No service with id '{}'",
+                            service_id
+                        ));
+                    }
+                }
+            };
+
+            announce_self(state, &service_id, service_type, &network_id).await;
+
+            ControlResponse::ok(serde_json::json!({
+                "service_id": service_id,
+                "status": "paused",
+                "eta_minutes": eta_minutes,
+                "message": format!(
+                    "Service {} paused — announcing maintenance (ETA {} min)",
+                    service_id, eta_minutes
+                ),
+            }))
+        }
+
+        // ── Resume ────────────────────────────────────────────────────────
+        ControlRequest::Resume { service_id } => {
+            let (network_id, service_type) = {
+                let mut reg = state.services.write().unwrap();
+                match reg.get_mut(&service_id) {
+                    Some(info) => {
+                        if !matches!(
+                            info.status,
+                            crate::service::ServiceStatus::Paused { .. }
+                        ) {
+                            return ControlResponse::err(format!(
+                                "Service '{}' is not paused",
+                                service_id
+                            ));
+                        }
+                        info.status = crate::service::ServiceStatus::Running;
+                        info.metadata.remove("maintenance");
+                        info.metadata.remove("eta_minutes");
+                        (info.network_id.clone(), info.service_type)
+                    }
+                    None => {
+                        return ControlResponse::err(format!(
+                            "No service with id '{}'",
+                            service_id
+                        ));
+                    }
+                }
+            };
+
+            announce_self(state, &service_id, service_type, &network_id).await;
+
+            ControlResponse::ok(serde_json::json!({
+                "service_id": service_id,
+                "status": "running",
+                "message": format!("Service {} resumed", service_id),
+            }))
         }
 
         // ── Flock ─────────────────────────────────────────────────────────

@@ -9,6 +9,8 @@
 //!    bp hatch  <type> [--network <id>] [--tier T2]  Start a service (bill|pouch|post)
 //!    bp flock                       Show peers and network summary
 //!    bp farewell <service_id>       Stop a running service
+//!    bp pause <service_id> --eta <m> Pause for maintenance (ETA in minutes)
+//!    bp resume <service_id>         Resume a paused service
 //!    bp invite create --network <id> --invite-password <pw>  Create invite token
 //!    bp invite join <blob> --invite-password <pw>            Redeem invite token
 //!    bp bootstrap list              Show configured WAN bootstrap nodes
@@ -111,6 +113,28 @@ enum Cmd {
     /// Kill a running service by its service ID.
     Farewell {
         /// The service ID returned by `bp hatch`.
+        service_id: String,
+    },
+
+    /// Pause a running service for planned maintenance.
+    ///
+    /// Announces to the network that this node will be temporarily offline.
+    /// If the service does not resume before the ETA expires, fault-score
+    /// increments will be applied by the quality monitor.
+    Pause {
+        /// The service ID to pause.
+        service_id: String,
+        /// Estimated downtime in minutes.
+        #[arg(long, short)]
+        eta: u64,
+    },
+
+    /// Resume a previously paused service.
+    ///
+    /// Re-announces the node as available and triggers an immediate
+    /// Proof-of-Storage challenge to clear any pending fault-score penalties.
+    Resume {
+        /// The service ID to resume.
         service_id: String,
     },
 
@@ -320,6 +344,14 @@ async fn main() -> anyhow::Result<()> {
 
         Some(Cmd::Farewell { service_id }) => {
             commands::farewell::farewell(service_id).await?;
+        }
+
+        Some(Cmd::Pause { service_id, eta }) => {
+            commands::pause::pause(service_id, eta).await?;
+        }
+
+        Some(Cmd::Resume { service_id }) => {
+            commands::pause::resume(service_id).await?;
         }
 
         Some(Cmd::Join { network_id }) => {

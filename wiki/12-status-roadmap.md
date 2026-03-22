@@ -154,7 +154,7 @@ Le decisioni riportate qui sono **design finalized** — implementazione da iniz
 
 ### 🟡 Modifiche a comandi esistenti
 
-#### `bp hatch pouch` — Storage tier invece di quota libera
+#### `bp hatch pouch` — Storage tier invece di quota libera — ✅ Done
 
 Attualmente accetta `--storage-bytes N` (valore libero). Questo viene sostituito da tier discreti:
 
@@ -184,7 +184,7 @@ Se `--network` non viene specificato, il servizio gira in **modalità locale**: 
 
 ### 🟢 Nuovi comandi
 
-#### `bp leave <network>` — procedura di abbandono asincrona
+#### `bp leave <network>` — procedura di abbandono asincrona — 🔲 Todo
 
 Abbandono di un network è una procedura multi-step **non interrompibile** una volta avviata:
 
@@ -198,7 +198,7 @@ Abbandono di un network è una procedura multi-step **non interrompibile** una v
 4. Quando eviction completa e file materializzati → unsubscribe gossip + rimozione da `active_networks`
 5. Progress disponibile via `bp leave-status <network>`
 
-#### `bp pause <service_id> --eta <minutes>` — manutenzione temporanea
+#### `bp pause <service_id> --eta <minutes>` — manutenzione temporanea — ✅ Done
 
 Per spegnimento pianificato con garanzia di ritorno:
 
@@ -207,7 +207,7 @@ Per spegnimento pianificato con garanzia di ritorno:
 3. Se non torna entro T → `fault_score++` automatico per ogni PoS challenge mancato
 4. Al ritorno → PoS challenge immediato; se passa → nessuna penalità reputazione
 
-#### `bp farewell <service_id> --evict` — rimozione permanente con eviction
+#### `bp farewell <service_id> --evict` — rimozione permanente con eviction — 🔲 Todo
 
 Procedura asincrona per rimozione definitiva di un Pouch:
 
@@ -219,7 +219,7 @@ Procedura asincrona per rimozione definitiva di un Pouch:
 
 ### 🔵 Nuovo sottosistema: Network Tiering
 
-#### Storage tier — `storage/tier.rs` (nuovo)
+#### Storage tier — `storage/tier.rs` — ✅ Done
 
 I tier definiscono sia la **dimensione del Pouch** sia la **dimensione dei file** che possono essere distribuiti su quel tier. Un fragment di un file T2 (10–100 GB) non può fisicamente stare su un Pouch T1 (10 GB totali), quindi i calcoli N/k/q sono naturalmente separati per tier.
 
@@ -244,7 +244,7 @@ Error: a Pouch for network X already exists on this node.
        Use `bp farewell --evict <service_id>` to remove the existing one first.
 ```
 
-#### Reputation tier — `network/reputation.rs` (nuovo)
+#### Reputation tier — `network/reputation.rs` — ✅ Done
 
 | Tier | Nome | Criteri di ingresso |
 |---|---|---|
@@ -290,6 +290,7 @@ Error: a Pouch for network X already exists on this node.
 - **feat:** `BpError::InvalidInput` — nuova variante per input non validi (es. tier sconosciuto)
 - **feat:** `bp hatch pouch --tier T2` — sostituisce `--storage-bytes`; one-Pouch-per-network enforced in server
 - **feat:** `network/reputation.rs` — `ReputationTier` (R0–R4), `ReputationRecord`, `ReputationStore`; integrato in `DaemonState`
+- **feat:** `bp pause <service_id> --eta <minutes>` / `bp resume <service_id>` — manutenzione temporanea; gossip maintenance announcement; `ServiceStatus::Paused`; `ControlRequest::{Pause,Resume}`
 
 ### v0.2.1 (Marzo 2026)
 - **feat:** Web dashboard — `GET /` in `bp-api` restituisce una SPA HTML/JS embedded via `include_str!`; dark UI; sezioni Status, Peers, Files, Marketplace; auto-refresh 5s; zero dipendenze runtime
