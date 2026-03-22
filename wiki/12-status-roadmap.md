@@ -156,16 +156,17 @@ Le decisioni riportate qui sono **design finalized** — implementazione da iniz
 
 #### `bp hatch pouch` — Storage tier invece di quota libera
 
-Attualmente accetta `--storage-bytes N` (valore libero). Questo viene sostituito da:
+Attualmente accetta `--storage-bytes N` (valore libero). Questo viene sostituito da tier discreti:
 
 ```
 bp hatch pouch --tier <T1|T2|T3|T4|T5> [--network <id>]
-bp hatch pouch --quota <bytes>  # auto-detection del tier più vicino per difetto
 ```
+
+**Non è accettato un valore arbitrario di byte.** L'utente sceglie esattamente uno dei tier predefiniti — questo è il solo valore valido che il Pouch dichiara al network.
 
 I tier di storage sono:
 
-| Tier | Soglia | Nome |
+| Tier | Dimensione esatta | Nome |
 |---|---|---|
 | T1 | 10 GB | Pebble |
 | T2 | 100 GB | Stone |
@@ -173,7 +174,9 @@ I tier di storage sono:
 | T4 | 1 TB | Rock |
 | T5 | 5 TB | Monolith |
 
-Un Pouch appartiene al suo tier **e a tutti i tier inferiori**. Un Pouch T3 da 500 GB partecipa ai calcoli N/k/q di T1, T2 e T3.
+Un Pouch appartiene al suo tier **e a tutti i tier inferiori**. Un Pouch T3 partecipa ai calcoli N/k/q di T1, T2 e T3.
+
+**Un solo Pouch per macchina per network.** Avere due Pouch sulla stessa macchina nello stesso network crea correlazione della QoS (se la macchina va offline, entrambi i Pouch spariscono insieme), il che vanifica il vantaggio dello storage distribuito. Il daemon deve rifiutare il secondo `hatch pouch --network X` sulla stessa identità se esiste già un Pouch attivo su X — con errore esplicito: `"a Pouch for network X already exists on this node; two correlated Pouches defeat distributed redundancy"`.
 
 #### `bp hatch` senza `--network` — modalità locale
 
@@ -218,6 +221,8 @@ Procedura asincrona per rimozione definitiva di un Pouch:
 
 #### Storage tier — `storage/tier.rs` (nuovo)
 
+I tier definiscono sia la **dimensione del Pouch** sia la **dimensione dei file** che possono essere distribuiti su quel tier. Un fragment di un file T2 (10–100 GB) non può fisicamente stare su un Pouch T1 (10 GB totali), quindi i calcoli N/k/q sono naturalmente separati per tier.
+
 Calcola N, k, q **per tier** basandosi sullo stato corrente del network:
 
 - **T1 file** (< 10 GB): N = tutti i Pouch (T1+T2+T3+T4+T5), k e q calcolati su tutti
@@ -226,11 +231,18 @@ Calcola N, k, q **per tier** basandosi sullo stato corrente del network:
 - **T4 file** (500 GB–1 TB): N = Pouch T4+
 - **T5 file** (> 1 TB): N = Pouch T5 only
 
-Lo storage netto disponibile per un utente con Pouch tier T è:
+Lo **storage netto** disponibile per un utente con Pouch tier T è la somma dei contributi per ogni tier in cui quel Pouch partecipa, al netto dell'overhead RLNC calcolato live:
 
-$$\text{storage\_netto}(T) = \sum_{\text{tiers} \leq T} \frac{\text{quota\_tier}}{q_{\text{tier}}}$$
+$$\text{storage\_netto}(T) = \sum_{i=1}^{T} \frac{S_{\text{tier}_i}}{q_{\text{tier}_i}}$$
 
-dove $q_{\text{tier}}$ è l'overhead RLNC calcolato live dai QoS scores dei Pouch di quel tier.
+dove $S_{\text{tier}_i}$ è la quota fissa del tier $i$ (10 GB, 100 GB, ecc.) e $q_{\text{tier}_i}$ è il coefficiente RLNC calcolato live dai QoS score dei Pouch di quel tier.
+
+**Vincolo di unicità:** il daemon rifiuta un secondo `hatch pouch --network X` se esiste già un Pouch attivo per quel network su questa identità:
+```
+Error: a Pouch for network X already exists on this node.
+       Two correlated Pouches on the same machine defeat distributed redundancy.
+       Use `bp farewell --evict <service_id>` to remove the existing one first.
+```
 
 #### Reputation tier — `network/reputation.rs` (nuovo)
 
