@@ -113,6 +113,13 @@ enum Cmd {
         service_id: String,
     },
 
+    /// Subscribe to a network's gossip topic (used by scripts/automation).
+    #[clap(hide = true)]
+    Join {
+        /// The network identifier to subscribe to.
+        network_id: String,
+    },
+
     /// Store a local file in the active Pouch (RLNC erasure-coded).
     Put {
         /// Path to the file to store.
@@ -306,6 +313,10 @@ async fn main() -> anyhow::Result<()> {
 
         Some(Cmd::Farewell { service_id }) => {
             commands::farewell::farewell(service_id).await?;
+        }
+
+        Some(Cmd::Join { network_id }) => {
+            commands::join::join(network_id).await?;
         }
 
         Some(Cmd::Put {

@@ -56,6 +56,10 @@ for i in $(seq 1 30); do
     sleep 0.2
 done
 
+# Join network first (gossipsub topic subscription keeps connections alive)
+bp join "${NETWORK}" 2>/dev/null || true
+echo "[${NODE_NAME}] Joined network '${NETWORK}'."
+
 # Wait for mesh to form before hatching
 sleep 5
 
