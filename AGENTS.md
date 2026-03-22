@@ -126,5 +126,5 @@ cargo fmt --all
 
 ## Stato
 
-**v0.1.3 Alpha.** Il layer di trasferimento file non è implementato.
+**v0.2.1 Alpha.** File transfer implementato: `bp put` / `bp get` (RLNC encode/decode, distribuzione frammenti ai Pouch remoti, QoS adattivo, CEK encryption, Proof-of-Storage).
 Vedi `wiki/12-status-roadmap.md` per dettagli.
