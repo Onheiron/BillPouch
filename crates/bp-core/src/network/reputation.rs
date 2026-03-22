@@ -242,14 +242,10 @@ impl ReputationRecord {
             && pos_rate >= R4_POS_RATE
         {
             ReputationTier::R4
-        } else if age_days >= R3_WINDOW_DAYS
-            && uptime_ratio >= R3_UPTIME
-            && pos_rate >= R3_POS_RATE
+        } else if age_days >= R3_WINDOW_DAYS && uptime_ratio >= R3_UPTIME && pos_rate >= R3_POS_RATE
         {
             ReputationTier::R3
-        } else if age_days >= R2_WINDOW_DAYS
-            && uptime_ratio >= R2_UPTIME
-            && pos_rate >= R2_POS_RATE
+        } else if age_days >= R2_WINDOW_DAYS && uptime_ratio >= R2_UPTIME && pos_rate >= R2_POS_RATE
         {
             ReputationTier::R2
         } else if age_days < FLEDGLING_DAYS {
