@@ -270,7 +270,7 @@ impl ReputationRecord {
 
 /// In-memory registry of per-peer [`ReputationRecord`]s.
 ///
-/// Stored in [`DaemonState`] behind an `RwLock`.
+/// Stored in `DaemonState` behind an `RwLock`.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ReputationStore {
     records: HashMap<String, ReputationRecord>,
