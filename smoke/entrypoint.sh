@@ -26,12 +26,6 @@ for i in $(seq 1 30); do
     sleep 0.2
 done
 
-# ── Join network IMMEDIATELY ─────────────────────────────────────────────────
-# This subscribes to the gossipsub topic BEFORE mDNS discovers peers,
-# so that when connections are established they stay alive (shared topic).
-bp join "${NETWORK}"
-echo "[${NODE_NAME}] Joined network '${NETWORK}' (gossipsub topic subscribed)."
-
 # ── Keep container alive ─────────────────────────────────────────────────────
 echo "[${NODE_NAME}] Node is live. Waiting for peers..."
 wait "${DAEMON_PID}"
