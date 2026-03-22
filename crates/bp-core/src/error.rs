@@ -65,6 +65,10 @@ pub enum BpError {
     /// A network ID was referenced that this daemon has not joined.
     #[error("Unknown network: {0}")]
     UnknownNetwork(String),
+
+    /// An argument or parameter value is invalid (e.g. unknown tier name).
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
 }
 
 /// Convenience alias — all bp-core functions return this.
