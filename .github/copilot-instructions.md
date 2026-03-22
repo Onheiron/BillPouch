@@ -1,107 +1,164 @@
 # BillPouch — GitHub Copilot Instructions
 
-## Progetto
+## Project
 
-BillPouch è un **filesystem distribuito P2P sociale** scritto in Rust (edition 2021).
-È un Cargo workspace con due crate:
+BillPouch is a **P2P social distributed filesystem** written in Rust (edition 2021).
+It is a Cargo workspace with three crates:
 
-- **`bp-core`** — libreria pura (no I/O diretto, no stdout, no `process::exit`)
-- **`bp-cli`** — binario `bp`, thin client CLI che parla col daemon via Unix socket
+- **`bp-core`** — pure library (no direct I/O, no stdout, no `process::exit`)
+- **`bp-cli`** — `bp` binary, thin CLI client that talks to the daemon via Unix socket
+- **`bp-api`** — REST API server (axum) with embedded web dashboard
 
-Documentazione completa nella cartella `wiki/`.
+Full documentation in the `wiki/` folder.
 
 ---
 
-## Struttura
+## Workspace structure
 
 ```
 crates/
   bp-core/src/
-    identity.rs       # Ed25519 keypair, fingerprint = hex(SHA256(pubkey))[0..8]
-    service.rs        # ServiceType (Pouch|Bill|Post), ServiceInfo, ServiceRegistry
-    config.rs         # Percorsi XDG con crate `directories`
-    error.rs          # BpError (thiserror) + BpResult
-    daemon.rs         # run_daemon(), is_running(), PID file
+    identity.rs           # Ed25519 keypair, export/import, fingerprint = hex(SHA256(pubkey))[0..8]
+    service.rs            # ServiceType (Pouch|Bill|Post), ServiceInfo, ServiceRegistry
+    config.rs             # XDG paths via `directories` crate
+    error.rs              # BpError (thiserror) + BpResult
+    daemon.rs             # run_daemon(), is_running(), PID file
+    invite.rs             # Invite token create/redeem (signed + password-encrypted)
+    coding/
+      gf256.rs            # GF(2⁸) arithmetic (AES polynomial)
+      rlnc.rs             # RLNC encode / recode / decode (Gaussian elimination)
+      params.rs           # Adaptive k/n from peer QoS + target recovery probability Ph
+    storage/
+      mod.rs              # StorageManager — quota, disk layout, FragmentIndex
+      fragment.rs         # In-memory per-chunk fragment index
+      manifest.rs         # FileManifest + NetworkMetaKey (BLAKE3)
+      meta.rs             # PouchMeta — capacity, available_bytes, has_capacity
+      encryption.rs       # ChunkCipher — per-user CEK (ChaCha20-Poly1305)
+      agreement.rs        # StorageOffer + Agreement store
     network/
-      behaviour.rs    # BillPouchBehaviour: gossipsub+kad+identify+mdns
-      mod.rs          # NetworkCommand, build_swarm(), run_network_loop()
-      state.rs        # NetworkState: upsert/evict_stale/in_network
+      behaviour.rs        # BillPouchBehaviour: gossipsub+kad+identify+mdns
+      mod.rs              # NetworkCommand, build_swarm(), run_network_loop()
+      state.rs            # NetworkState: upsert/evict_stale/in_network
+      qos.rs              # PeerQos — RTT EWMA + fault score
+      quality_monitor.rs  # Ping loop (60 s) + Proof-of-Storage loop (300 s)
+      fragment_gossip.rs  # RemoteFragmentIndex + AnnounceIndex gossip
+      bootstrap.rs        # Persistent Kademlia peer cache (kad_peers.json)
+      kad_store.rs        # Kademlia record persistence
     control/
-      protocol.rs     # ControlRequest / ControlResponse (JSON newline-delimited)
-      server.rs       # DaemonState (Arc), dispatch(), run_control_server()
+      protocol.rs         # ControlRequest / ControlResponse (JSON newline-delimited)
+      server.rs           # DaemonState (Arc), dispatch(), run_control_server()
   bp-cli/src/
-    main.rs           # clap derive CLI
-    client.rs         # ControlClient — Unix socket JSON client
-    commands/         # auth.rs, hatch.rs, flock.rs, farewell.rs, join.rs
+    main.rs               # clap derive CLI
+    client.rs             # ControlClient — Unix socket JSON client
+    commands/
+      auth.rs             # login / logout / export-identity / import-identity
+      hatch.rs            # hatch
+      flock.rs            # flock
+      farewell.rs         # farewell
+      join.rs             # join / leave
+      put.rs              # put (RLNC encode + CEK encrypt + distribute)
+      get.rs              # get (fetch fragments + RLNC decode + CEK decrypt)
+      invite.rs           # invite create / invite join
+  bp-api/src/
+    main.rs               # axum HTTP server, embedded SPA dashboard at GET /
 ```
 
 ---
 
-## Regole fondamentali
+## Core rules
 
-### bp-core
-- **Mai** `println!`, `eprintln!`, `std::process::exit` o I/O diretto
-- Error handling con **`thiserror`** → `BpError` + `BpResult`
-- Tutto lo stato condiviso è `Arc<DaemonState>` con `RwLock` interni
-- Async con **Tokio** (`features = ["full"]`)
+### bp-core — pure library
+- **Forbidden:** `println!`, `eprintln!`, `std::process::exit`, any direct I/O
+- Error handling with `thiserror` → `BpError` + `BpResult<T>`
+- Shared state: `Arc<DaemonState>` with `RwLock<T>` per mutable field
+- Async with Tokio (`features = ["full"]`)
 
 ### bp-cli
-- Error handling con **`anyhow`**
-- La CLI non tocca mai il swarm libp2p direttamente
-- Comunica col daemon tramite `ControlClient` su Unix socket
-- `bp hatch` auto-avvia il daemon se non in esecuzione
+- Error handling with `anyhow`
+- Never imports libp2p directly
+- All daemon communication via `ControlClient` on Unix socket
+- `bp hatch` auto-starts the daemon if not running
 
-### Generale
-- Usa **`tracing`** per il logging (mai `println!` per debug)
-- I servizi: **Pouch** (storage), **Bill** (file I/O), **Post** (relay puro)
-- Il `service_id` è sempre un UUID v4
-- Il `user_fingerprint` è immutabile: `hex(SHA-256(pubkey))[0..8]`
-- Topic gossipsub: `billpouch/v1/{network_id}/nodes`
-- Socket path: `~/.local/share/billpouch/control.sock`
+### General
+- Logging with `tracing` macros only — never `println!` for debug
+- All code comments and doc-comments must be **in English**
+- Services: **Pouch** (storage), **Bill** (file I/O), **Post** (pure relay)
+- `service_id` → UUID v4 string
+- `user_fingerprint` → immutable `hex(SHA-256(pubkey_bytes))[0..8]` (16 hex chars)
+- Gossipsub topic → `billpouch/v1/{network_id}/nodes`
+- Control socket → `~/.local/share/billpouch/control.sock`
+- Default network → `"public"`
 
 ---
 
-## Protocollo di controllo
+## Control protocol
 
-Trasporto: Unix domain socket, JSON newline-delimited, UTF-8.
+Transport: Unix domain socket, JSON newline-delimited, UTF-8.
 
 ```rust
-// Request
-ControlRequest::Ping
-ControlRequest::Status
-ControlRequest::Hatch { service_type, network_id, metadata }
-ControlRequest::Flock
-ControlRequest::Farewell { service_id }
-ControlRequest::Join { network_id }
+pub enum ControlRequest {
+    Ping,
+    Status,
+    Hatch           { service_type, network_id, metadata },
+    Flock,
+    Farewell        { service_id },
+    Join            { network_id },
+    Leave           { network_id },
+    ConnectRelay    { relay_addr },
+    PutFile         { chunk_data, ph, q_target, network_id },
+    GetFile         { chunk_id, network_id },
+    ProposeStorage  { network_id, bytes_offered, duration_secs, price_tokens },
+    AcceptStorage   { offer_id },
+    ListOffers      { network_id },
+    ListAgreements  { network_id },
+    CreateInvite    { network_id, password },
+    RedeemInvite    { token, password },
+}
 
-// Response
-ControlResponse { status: "ok"|"error", data: Option<Value>, message: Option<String> }
+// Responses
+ControlResponse::Ok    { data: Option<Value> }
+ControlResponse::Error { message: String }
 ```
 
 ---
 
 ## Testing
 
-- Test di architettura: `crates/bp-core/tests/architecture_test.rs`
-- Integration test: `crates/bp-core/tests/integration_test.rs`
-- Smoke test Docker: `smoke/smoke-test.sh` con `docker-compose.smoke.yml`
-- Playground interattivo: `./playground.sh up && ./playground.sh enter`
+- Architecture tests: `crates/bp-core/tests/architecture_test.rs`
+- Integration tests: `crates/bp-core/tests/integration_test.rs`
+- Docker smoke test: `smoke/smoke-test.sh` with `docker-compose.smoke.yml`
+- Interactive playground: `./playground.sh up && ./playground.sh enter`
 
-Per i test che richiedono Tokio (es. swarm mDNS): usa `#[tokio::test]`.
+For async tests requiring Tokio (e.g. swarm mDNS): use `#[tokio::test]`.
+To serialize tests that mutate `HOME`/`XDG_DATA_HOME`: use `static ENV_LOCK: Mutex<()>`.
 
 ---
 
-## Dipendenze chiave
+## Key dependencies
 
-| Crate        | Uso                                    |
-|--------------|----------------------------------------|
-| libp2p 0.54  | Stack P2P (gossipsub, kad, mdns, noise)|
-| tokio 1.x    | Runtime async                          |
-| serde_json   | Protocollo controllo + NodeInfo        |
-| uuid         | service_id (v4)                        |
-| chrono       | Timestamp announced_at                 |
-| sha2 + hex   | Calcolo fingerprint                    |
-| clap 4.x     | CLI (derive)                           |
-| thiserror    | Errori in bp-core                      |
-| anyhow       | Errori in bp-cli                       |
-| directories  | Percorsi XDG                           |
+| Crate            | Purpose                                       |
+|------------------|-----------------------------------------------|
+| libp2p 0.54      | P2P stack (gossipsub, Kademlia, mDNS, Noise)  |
+| tokio 1.x        | Async runtime                                 |
+| serde_json       | Control protocol + NodeInfo wire format       |
+| uuid             | service_id (v4)                               |
+| chrono           | Timestamps on NodeInfo and UserProfile        |
+| sha2 + hex       | Fingerprint derivation                        |
+| blake3           | NetworkMetaKey + PoS challenge                |
+| chacha20poly1305 | CEK encryption + identity key encryption      |
+| argon2           | KDF for passphrase-protected identity keys    |
+| clap 4.x         | CLI (derive)                                  |
+| thiserror        | Errors in bp-core                             |
+| anyhow           | Errors in bp-cli                              |
+| axum 0.7         | REST API in bp-api                            |
+| directories      | XDG-compliant config paths                    |
+
+---
+
+## Current status: v0.2.1 Alpha
+
+All core features implemented: `bp put` / `bp get` (RLNC encode/decode, CEK encryption,
+adaptive k/n, remote fragment distribution), invite system, multi-device identity export/import,
+storage marketplace, Proof-of-Storage, FragmentIndex gossip, REST API + web dashboard.
+
+See `wiki/12-status-roadmap.md` for the full feature list.

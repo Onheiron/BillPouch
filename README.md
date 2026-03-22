@@ -84,32 +84,55 @@ graph TB
 
 ```
 BillPouch/
-├── Cargo.toml                      # Cargo workspace
+├── Cargo.toml                          # Cargo workspace
 └── crates/
-    ├── bp-core/                    # Core library (no I/O)
+    ├── bp-core/                        # Core library (no I/O)
     │   └── src/
-    │       ├── identity.rs         # Ed25519 keypair — login / logout
-    │       ├── service.rs          # ServiceType enum + registry
-    │       ├── config.rs           # XDG-aware config paths
-    │       ├── error.rs            # Unified BpError type
-    │       ├── daemon.rs           # Tokio daemon orchestrator
+    │       ├── identity.rs             # Ed25519 keypair, export/import
+    │       ├── service.rs              # ServiceType enum + registry
+    │       ├── config.rs               # XDG-aware config paths
+    │       ├── error.rs                # Unified BpError type
+    │       ├── daemon.rs               # Tokio daemon orchestrator
+    │       ├── invite.rs               # Invite token create/redeem
+    │       ├── coding/
+    │       │   ├── gf256.rs            # GF(2⁸) arithmetic
+    │       │   ├── rlnc.rs             # RLNC encode/recode/decode
+    │       │   └── params.rs           # Adaptive k/n from QoS + target Ph
+    │       ├── storage/
+    │       │   ├── mod.rs              # StorageManager — quota + FragmentIndex
+    │       │   ├── fragment.rs         # Per-chunk fragment index
+    │       │   ├── manifest.rs         # FileManifest + NetworkMetaKey
+    │       │   ├── meta.rs             # PouchMeta (capacity, available bytes)
+    │       │   ├── encryption.rs       # ChunkCipher — CEK encrypt/decrypt
+    │       │   └── agreement.rs        # StorageOffer + Agreement store
     │       ├── network/
-    │       │   ├── behaviour.rs    # Combined libp2p NetworkBehaviour
-    │       │   ├── mod.rs          # Swarm loop + NetworkCommand channel
-    │       │   └── state.rs        # Gossip-based NodeInfo store (DHT-like)
+    │       │   ├── behaviour.rs        # Combined libp2p NetworkBehaviour
+    │       │   ├── mod.rs              # Swarm loop + NetworkCommand channel
+    │       │   ├── state.rs            # Gossip-based NodeInfo store
+    │       │   ├── qos.rs              # Per-peer RTT + fault score tracking
+    │       │   ├── quality_monitor.rs  # Ping + Proof-of-Storage loop
+    │       │   ├── fragment_gossip.rs  # RemoteFragmentIndex announcements
+    │       │   ├── bootstrap.rs        # Persistent Kademlia peer cache
+    │       │   └── kad_store.rs        # Kademlia record persistence
     │       └── control/
-    │           ├── protocol.rs     # JSON control protocol (CLI ↔ daemon)
-    │           └── server.rs       # Unix socket control server
-    └── bp-cli/                     # `bp` binary
+    │           ├── protocol.rs         # JSON control protocol (CLI ↔ daemon)
+    │           └── server.rs           # Unix socket control server
+    ├── bp-cli/                         # `bp` binary
+    │   └── src/
+    │       ├── main.rs                 # clap CLI entry point
+    │       ├── client.rs               # Unix socket control client
+    │       └── commands/
+    │           ├── auth.rs             # login / logout / export-identity / import-identity
+    │           ├── hatch.rs            # hatch
+    │           ├── flock.rs            # flock
+    │           ├── farewell.rs         # farewell
+    │           ├── join.rs             # join / leave
+    │           ├── put.rs              # put (RLNC encode + distribute)
+    │           ├── get.rs              # get (fetch + RLNC decode)
+    │           └── invite.rs           # invite create / join
+    └── bp-api/                         # REST API daemon (axum)
         └── src/
-            ├── main.rs             # clap CLI entry point
-            ├── client.rs           # Unix socket control client
-            └── commands/           # One file per subcommand
-                ├── auth.rs         # login / logout
-                ├── hatch.rs        # hatch
-                ├── flock.rs        # flock
-                ├── farewell.rs     # farewell
-                └── join.rs         # join
+            └── main.rs                 # HTTP server + embedded dashboard
 ```
 
 ### IPC: CLI ↔ Daemon
@@ -204,7 +227,20 @@ bp hatch post --network my-network
 The first `hatch` command automatically starts the background daemon.
 Each service gets a unique **service ID** (UUID) printed on startup.
 
-### 3. Join an existing network
+### 3. Transfer files
+
+```bash
+# Store a file in the network (RLNC erasure-coded + CEK-encrypted)
+bp put photo.jpg --network my-network
+# → prints chunk_id: 7f3a1...
+
+# Retrieve a file
+bp get 7f3a1... --network my-network -o photo_recovered.jpg
+```
+
+Fragments are distributed automatically to remote Pouch nodes. Recovery works as long as any `k` of the `n` fragments are reachable.
+
+### 4. Join an existing network
 
 ```bash
 bp join my-friends-network
@@ -212,7 +248,7 @@ bp join my-friends-network
 
 Subscribes to the gossipsub topic for that network. Peers announce themselves automatically.
 
-### 4. Inspect the flock
+### 5. Inspect the flock
 
 ```bash
 bp flock
@@ -239,19 +275,40 @@ bp flock
    ...
 ```
 
-### 5. Stop a service
+### 6. Invite a friend to your network
+
+```bash
+# Create an invite token (password-protected)
+bp invite create --network my-network --password secret
+# → prints a base64 token
+
+# On the other machine:
+bp invite join <token> --password secret
+```
+
+### 7. Move your identity to another machine
+
+```bash
+# Export
+bp export-identity --out identity-backup.json
+
+# On the new machine:
+bp import-identity identity-backup.json
+```
+
+### 8. Stop a service
 
 ```bash
 bp farewell a3f19c2b-e9d2-4f1a-bc30-112233445566
 ```
 
-### 6. Log out
+### 9. Log out
 
 ```bash
 bp logout
 ```
 
-Removes your identity key from disk. **This is irreversible** — back up `identity.key` first.
+Removes your identity key from disk. **This is irreversible** — back up with `bp export-identity` first.
 
 ---
 
@@ -294,43 +351,30 @@ Every node periodically broadcasts a `NodeInfo` message on the gossipsub topic `
 
 ---
 
-## Roadmap
+## Status — v0.2.1 Alpha
 
-```mermaid
-graph LR
-    subgraph now["🔨 In Progress"]
-        A["🦤 <b>Pouch</b><br/>FUSE mount +<br/>erasure coding"]
-        B["📂 <b>Bill</b><br/>file chunking +<br/>encryption (age)"]
-        C["📡 <b>Post</b><br/>bandwidth-aware<br/>relay"]
-    end
+| Feature | Status |
+|---|---|
+| Ed25519 identity (login/logout/export/import) | ✅ Done |
+| P2P gossip (gossipsub + Kademlia + mDNS) | ✅ Done |
+| Multi-network support | ✅ Done |
+| Storage marketplace (offer/accept/agreements) | ✅ Done |
+| RLNC erasure coding (GF(2⁸), encode/recode/decode) | ✅ Done |
+| CEK encryption (ChaCha20-Poly1305, per-user key) | ✅ Done |
+| Adaptive k/n from live peer QoS | ✅ Done |
+| File transfer: `bp put` / `bp get` | ✅ Done |
+| Fragment distribution to remote Pouch nodes | ✅ Done |
+| Proof-of-Storage challenge loop | ✅ Done |
+| FragmentIndex gossip (targeted GetFile) | ✅ Done |
+| NAT traversal (AutoNAT + relay circuit v2) | ✅ Done |
+| Invite system (signed+encrypted token) | ✅ Done |
+| Encrypted identity key (Argon2id + ChaCha20) | ✅ Done |
+| REST API + web dashboard (axum) | ✅ Done |
+| FUSE filesystem mount | 🔮 Future |
+| gRPC API | 🔮 Future |
+| Mobile / WASM client | 🔮 Future |
 
-    subgraph next["📋 Up Next"]
-        D["💰 Storage<br/>marketplace"]
-        E["🌐 REST API<br/>(axum)"]
-        F["⚡ gRPC API<br/>(tonic)"]
-    end
-
-    subgraph future["🔮 Future"]
-        G["🖥️ Web dashboard<br/>(Tauri / WASM)"]
-        H["🔀 NAT traversal<br/>(AutoNAT + relay v2)"]
-        I["🚀 Bootstrap<br/>nodes"]
-    end
-
-    now --> next --> future
-
-    style now fill:#0f3460,stroke:#e94560,stroke-width:2px,color:#eee
-    style next fill:#16213e,stroke:#0f3460,stroke-width:2px,color:#eee
-    style future fill:#1a1a2e,stroke:#533483,stroke-width:2px,color:#eee
-    style A fill:#0f3460,stroke:#e94560,color:#eee
-    style B fill:#0f3460,stroke:#e94560,color:#eee
-    style C fill:#0f3460,stroke:#e94560,color:#eee
-    style D fill:#16213e,stroke:#0f3460,color:#eee
-    style E fill:#16213e,stroke:#0f3460,color:#eee
-    style F fill:#16213e,stroke:#0f3460,color:#eee
-    style G fill:#1a1a2e,stroke:#533483,color:#eee
-    style H fill:#1a1a2e,stroke:#533483,color:#eee
-    style I fill:#1a1a2e,stroke:#533483,color:#eee
-```
+See [`wiki/12-status-roadmap.md`](wiki/12-status-roadmap.md) for full details.
 
 ---
 

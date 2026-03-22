@@ -1,14 +1,15 @@
 # BillPouch — Agent Instructions
 
-## Progetto
+## Project
 
-BillPouch è un **filesystem distribuito P2P sociale** scritto in Rust (edition 2021).
-È un Cargo workspace con due crate:
+BillPouch is a **P2P social distributed filesystem** written in Rust (edition 2021).
+It is a Cargo workspace with three crates:
 
-- **`bp-core`** — libreria pura (no I/O diretto, no stdout, no `process::exit`)
-- **`bp-cli`** — binario `bp`, thin client CLI che parla col daemon via Unix socket
+- **`bp-core`** — pure library (no direct I/O, no stdout, no `process::exit`)
+- **`bp-cli`** — `bp` binary, thin CLI client that talks to the daemon via Unix socket
+- **`bp-api`** — REST API server (axum) with embedded web dashboard
 
-Documentazione completa nella cartella `wiki/`.
+Full documentation in the `wiki/` folder.
 
 ---
 
@@ -17,85 +18,118 @@ Documentazione completa nella cartella `wiki/`.
 ```
 crates/
   bp-core/src/
-    identity.rs       # Ed25519 keypair, fingerprint = hex(SHA256(pubkey))[0..8]
-    service.rs        # ServiceType (Pouch|Bill|Post), ServiceInfo, ServiceRegistry
-    config.rs         # Percorsi XDG con crate `directories`
-    error.rs          # BpError (thiserror) + BpResult
-    daemon.rs         # run_daemon(), is_running(), PID file
+    identity.rs           # Ed25519 keypair, export/import, fingerprint = hex(SHA256(pubkey))[0..8]
+    service.rs            # ServiceType (Pouch|Bill|Post), ServiceInfo, ServiceRegistry
+    config.rs             # XDG paths via `directories` crate
+    error.rs              # BpError (thiserror) + BpResult
+    daemon.rs             # run_daemon(), is_running(), PID file
+    invite.rs             # Invite token create/redeem (signed + password-encrypted)
+    coding/
+      gf256.rs            # GF(2⁸) arithmetic (AES polynomial)
+      rlnc.rs             # RLNC encode / recode / decode (Gaussian elimination)
+      params.rs           # Adaptive k/n from peer QoS + target recovery probability Ph
+    storage/
+      mod.rs              # StorageManager — quota, disk layout, FragmentIndex
+      fragment.rs         # In-memory per-chunk fragment index
+      manifest.rs         # FileManifest + NetworkMetaKey (BLAKE3)
+      meta.rs             # PouchMeta — capacity, available_bytes, has_capacity
+      encryption.rs       # ChunkCipher — per-user CEK (ChaCha20-Poly1305)
+      agreement.rs        # StorageOffer + Agreement store
     network/
-      behaviour.rs    # BillPouchBehaviour: gossipsub+kad+identify+mdns
-      mod.rs          # NetworkCommand, build_swarm(), run_network_loop()
-      state.rs        # NetworkState: upsert/evict_stale/in_network
+      behaviour.rs        # BillPouchBehaviour: gossipsub+kad+identify+mdns
+      mod.rs              # NetworkCommand, build_swarm(), run_network_loop()
+      state.rs            # NetworkState: upsert/evict_stale/in_network
+      qos.rs              # PeerQos — RTT EWMA + fault score
+      quality_monitor.rs  # Ping loop (60 s) + Proof-of-Storage loop (300 s)
+      fragment_gossip.rs  # RemoteFragmentIndex + AnnounceIndex gossip
+      bootstrap.rs        # Persistent Kademlia peer cache (kad_peers.json)
+      kad_store.rs        # Kademlia record persistence
     control/
-      protocol.rs     # ControlRequest / ControlResponse (JSON newline-delimited)
-      server.rs       # DaemonState (Arc), dispatch(), run_control_server()
+      protocol.rs         # ControlRequest / ControlResponse (JSON newline-delimited)
+      server.rs           # DaemonState (Arc), dispatch(), run_control_server()
   bp-cli/src/
-    main.rs           # clap derive CLI
-    client.rs         # ControlClient — Unix socket JSON client
-    commands/         # auth.rs, hatch.rs, flock.rs, farewell.rs, join.rs
+    main.rs               # clap derive CLI
+    client.rs             # ControlClient — Unix socket JSON client
+    commands/
+      auth.rs             # login / logout / export-identity / import-identity
+      hatch.rs            # hatch
+      flock.rs            # flock
+      farewell.rs         # farewell
+      join.rs             # join / leave
+      put.rs              # put (RLNC encode + CEK encrypt + distribute)
+      get.rs              # get (fetch fragments + RLNC decode + CEK decrypt)
+      invite.rs           # invite create / invite join
+  bp-api/src/
+    main.rs               # axum HTTP server, embedded SPA dashboard at GET /
 ```
 
 ---
 
-## Regole fondamentali
+## Core rules
 
-### bp-core — libreria pura
-- **Vietato:** `println!`, `eprintln!`, `std::process::exit`, I/O diretto
-- Error handling con `thiserror` → `BpError` + `BpResult`
-- Stato condiviso: `Arc<DaemonState>` con `RwLock` interni
-- Async con Tokio (`features = ["full"]`)
-- Logging con `tracing` (mai `println!` per debug)
+### bp-core — pure library
+- **Forbidden:** `println!`, `eprintln!`, `std::process::exit`, any direct I/O
+- Error handling with `thiserror` → `BpError` + `BpResult`
+- Shared state: `Arc<DaemonState>` with internal `RwLock` per field
+- Async with Tokio (`features = ["full"]`)
+- Logging with `tracing` (never `println!` for debug)
 
 ### bp-cli
-- Error handling con `anyhow`
-- Non accede mai al swarm libp2p direttamente
-- Comunica col daemon via `ControlClient` su Unix socket
+- Error handling with `anyhow`
+- Never accesses the libp2p swarm directly
+- All daemon communication via `ControlClient` on Unix socket
 
-### Convenzioni
+## Conventions
 - `service_id` → UUID v4 (`uuid::Uuid::new_v4().to_string()`)
-- `user_fingerprint` → `hex(SHA-256(pubkey_bytes))[0..8]` — immutabile
-- Topic gossipsub → `format!("billpouch/v1/{}/nodes", network_id)`
+- `user_fingerprint` → `hex(SHA-256(pubkey_bytes))[0..8]` — immutable
+- Gossipsub topic → `format!("billpouch/v1/{}/nodes", network_id)`
 - Socket → `~/.local/share/billpouch/control.sock`
-- Rete di default → `"public"`
+- Default network → `"public"`
 
 ---
 
-## Protocollo di controllo
+## Control protocol
 
-Trasporto: Unix domain socket, JSON newline-delimited, UTF-8.
+Transport: Unix domain socket, JSON newline-delimited, UTF-8.
 
-**Request:**
-```json
-{"cmd":"ping"}
-{"cmd":"status"}
-{"cmd":"hatch","service_type":"pouch","network_id":"amici","metadata":{"storage_bytes":10737418240}}
-{"cmd":"hatch","service_type":"bill","network_id":"amici","metadata":{"mount_path":"/mnt/files"}}
-{"cmd":"hatch","service_type":"post","network_id":"amici","metadata":{}}
-{"cmd":"flock"}
-{"cmd":"farewell","service_id":"<uuid>"}
-{"cmd":"join","network_id":"lavoro"}
+```rust
+pub enum ControlRequest {
+    Ping,
+    Status,
+    Hatch           { service_type, network_id, metadata },
+    Flock,
+    Farewell        { service_id },
+    Join            { network_id },
+    Leave           { network_id },
+    ConnectRelay    { relay_addr },
+    PutFile         { chunk_data, ph, q_target, network_id },
+    GetFile         { chunk_id, network_id },
+    ProposeStorage  { network_id, bytes_offered, duration_secs, price_tokens },
+    AcceptStorage   { offer_id },
+    ListOffers      { network_id },
+    ListAgreements  { network_id },
+    CreateInvite    { network_id, password },
+    RedeemInvite    { token, password },
+}
+
+// Responses
+ControlResponse::Ok    { data: Option<Value> }
+ControlResponse::Error { message: String }
 ```
 
-**Response:**
-```json
-{"status":"ok","data":{ ... }}
-{"status":"ok"}
-{"status":"error","message":"<descrizione>"}
-```
+---
+
+## Service types
+
+| Type    | CLI              | Role                                       |
+|---------|------------------|--------------------------------------------|
+| `pouch` | `bp hatch pouch` | Bids local storage into the network        |
+| `bill`  | `bp hatch bill`  | Personal file I/O interface                |
+| `post`  | `bp hatch post`  | Pure relay — CPU + bandwidth, no storage   |
 
 ---
 
-## I tre tipi di servizio
-
-| Tipo    | CLI              | Ruolo                                         |
-|---------|------------------|-----------------------------------------------|
-| `pouch` | `bp hatch pouch` | Offre storage locale alla rete                |
-| `bill`  | `bp hatch bill`  | Interfaccia file I/O personale                |
-| `post`  | `bp hatch post`  | Relay puro (solo CPU + banda, nessun storage) |
-
----
-
-## NodeInfo (messaggio gossip)
+## NodeInfo gossip message
 
 ```json
 {
@@ -113,13 +147,13 @@ Trasporto: Unix domain socket, JSON newline-delimited, UTF-8.
 
 ---
 
-## Comandi per sviluppo
+## Development commands
 
 ```bash
 cargo test --workspace
 cargo clippy --workspace -- -D warnings
 cargo fmt --all
-./playground.sh up && ./playground.sh enter   # test interattivo
+./playground.sh up && ./playground.sh enter   # interactive test
 ```
 
 ---
