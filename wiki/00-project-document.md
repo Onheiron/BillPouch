@@ -528,7 +528,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    Start([Start]) --> A[CLI sends Hatch{Pouch} to daemon socket]
+    Start([Start]) --> A["CLI sends Hatch{Pouch} to daemon socket"]
     A --> B{Daemon running?}
     B -- No --> C[CLI spawns bp --daemon in background]
     C --> D[Wait 500ms for socket]
@@ -552,7 +552,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    Start([Start]) --> A[CLI sends Hatch{Bill, network_id}]
+    Start([Start]) --> A["CLI sends Hatch{Bill, network_id}"]
     A --> B{Daemon running?}
     B -- No --> C[CLI spawns bp --daemon]
     C --> D[Wait for socket]
@@ -565,7 +565,7 @@ flowchart TD
     G --> H{Already subscribed to network?}
     H -- No --> I[Subscribe to gossip topics for network_id]
     I --> J
-    H -- Yes --> J[Announce NodeInfo{service=Bill}]
+    H -- Yes --> J["Announce NodeInfo{service=Bill}"]
     J --> K[Return service_id]
     K --> End([End])
     Z1 --> End
@@ -576,7 +576,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    Start([Start]) --> A[CLI sends Hatch{Post, network_id}]
+    Start([Start]) --> A["CLI sends Hatch{Post, network_id}"]
     A --> B{Daemon running?}
     B -- No --> C[CLI spawns bp --daemon]
     C --> D[Wait for socket]
@@ -588,7 +588,7 @@ flowchart TD
     G -- Yes --> H[Dial relay_addr via connect_relay]
     H --> I
     G -- No --> I[Subscribe to gossip topics]
-    I --> J[Announce NodeInfo{service=Post}]
+    I --> J["Announce NodeInfo{service=Post}"]
     J --> K[Enable Circuit Relay listener mode]
     K --> L[Return service_id]
     L --> End([End])
@@ -599,7 +599,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    Start([Start]) --> A[CLI sends Join{network_id}]
+    Start([Start]) --> A["CLI sends Join{network_id}"]
     A --> B{Daemon running?}
     B -- No --> Z1[Error: daemon not running]
     B -- Yes --> C{Already member of network?}
@@ -618,7 +618,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    Start([Start]) --> A[CLI sends Leave{network_id}]
+    Start([Start]) --> A["CLI sends Leave{network_id}"]
     A --> B{Daemon running?}
     B -- No --> Z1[Error: daemon not running]
     B -- Yes --> C{Member of network?}
@@ -665,7 +665,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    Start([Start]) --> A[Send GetFile{chunk_id} to daemon]
+    Start([Start]) --> A["Send GetFile{chunk_id} to daemon"]
     A --> B[Check local FragmentIndex]
     B --> C{Local fragments ≥ k?}
     C -- Yes --> F
@@ -688,7 +688,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    Start([Start]) --> A[CLI sends Flock{}]
+    Start([Start]) --> A["CLI sends Flock{}"]
     A --> B[Daemon reads NetworkState]
     B --> C[Filter: last_seen < 120s threshold]
     C --> D[For each live peer: collect NodeInfo]
@@ -696,7 +696,7 @@ flowchart TD
     E --> F{Any peers found?}
     F -- No --> G[Return: nodes = empty list]
     F -- Yes --> H[Sort by network_id then service_type]
-    H --> I[Return: FlockData{nodes: list}]
+    H --> I["Return: FlockData{nodes: list}"]
     G --> J[CLI prints empty table]
     I --> K[CLI prints peer table:\npeer_id, alias, service, network, addrs, QoS]
     J --> End([End])
@@ -707,7 +707,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    Start([Start]) --> A[CLI sends Farewell{service_id}]
+    Start([Start]) --> A["CLI sends Farewell{service_id}"]
     A --> B[Daemon looks up service in ServiceRegistry]
     B --> C{Service found?}
     C -- No --> Z1[Error: service not found]
@@ -759,7 +759,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    Start([Start]) --> A[CLI sends RedeemInvite{token, password}]
+    Start([Start]) --> A["CLI sends RedeemInvite{token, password}"]
     A --> B[Daemon Base64-decodes token]
     B --> C{Decode OK?}
     C -- No --> Z1[Error: malformed token]
@@ -776,7 +776,7 @@ flowchart TD
     K --> L{Token expired?}
     L -- Yes --> Z4[Error: token expired]
     L -- No --> M[Extract network_id from payload]
-    M --> N[Internally call Join{network_id}]
+    M --> N["Internally call Join{network_id}"]
     N --> O[Return: network_id + issuer_fingerprint]
     O --> End([End])
     Z1 --> End
@@ -807,7 +807,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    Start([Start]) --> A[CLI sends AcceptStorage{offer_id}]
+    Start([Start]) --> A["CLI sends AcceptStorage{offer_id}"]
     A --> B[Daemon looks up offer in AgreementStore]
     B --> C{Offer found?}
     C -- No --> Z1[Error: offer not found]
