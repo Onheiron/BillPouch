@@ -123,6 +123,51 @@ ogni ora senza eventi negativi → `-1`.
 
 ---
 
+## Reputation Tier (R0–R4)
+
+Mentre il `fault_score` \u00e8 un punteggio continuo e di breve termine, il **Reputation Tier**
+\u00e8 una classificazione discreta che riassume l'affidabilit\u00e0 storica di un Pouch su orizzonti
+temporali lunghi (7 giorni \u2013 1 anno). \u00c8 implementato in `network/reputation.rs`.
+
+### Tier
+
+| Tier | Nome       | Criteri                                                          |
+|------|------------|------------------------------------------------------------------|
+| R0   | Quarantine | `fault_score \u2265 FAULT_BLACKLISTED` — isolato dai peer fidati     |
+| R1   | Fledgling  | Nodo gi\u00e0 nella rete da < 7 giorni                               |
+| R2   | Reliable   | uptime \u2265 95% su 30 gg; PoS pass rate \u2265 98%                      |
+| R3   | Trusted    | uptime \u2265 99% su 90 gg; PoS pass rate \u2265 99.5%                   |
+| R4   | Pillar     | uptime \u2265 99.9% su 365 gg; PoS pass rate \u2265 99.9%                |
+
+### Score continuo sottostante
+
+La progressione di tier \u00e8 guidata da un `reputation_score: i64`:
+
+| Evento                           | Delta            |
+|----------------------------------|------------------|
+| PoS challenge passato            | +2               |
+| PoS challenge fallito            | \u221210              |
+| 24 h di uptime verificato        | +1               |
+| `bp pause --eta` rispettato      | 0                |
+| `bp pause --eta` sforato         | \u22125               |
+| Eviction forzata (senza preavviso) | score \u2192 0, R0 lock 30 gg |
+
+### Placement preference
+
+Quando `PutFile` sceglie i Pouch su cui distribuire i fragment, preferisce Pouch il cui
+tier reputazione \u00e8 **\u2265 quello del mittente**. I Pouch R0 ricevono fragment solo da utenti R0
+(la quarantena \u00e8 isolata: nodi compromessi non contaminano il pool dei nodi fidati).
+
+```rust
+// Regola di eligibilit\u00e0:
+fn is_eligible_for(pouch_tier: ReputationTier, sender_tier: ReputationTier) -> bool {
+    if sender_tier == R0 { pouch_tier == R0 }
+    else { pouch_tier >= sender_tier }
+}
+```
+
+---
+
 ## Propagazione della blacklist via gossip
 
 Quando un nodo raggiunge `fault_score = 100`, il challenger pubblica un
