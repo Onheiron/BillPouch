@@ -706,9 +706,8 @@ async fn leave_blocked_by_active_service() {
     )
     .await;
     let leave_data = unwrap_ok(leave_resp);
-    assert_eq!(
+    assert!(
         leave_data["blocked"].as_bool().unwrap_or(false),
-        true,
         "leave must be blocked when active services remain"
     );
     let blocking = leave_data["blocking_services"]
