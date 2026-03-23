@@ -1101,3 +1101,78 @@ async fn announce_self(
         Err(e) => tracing::warn!("Failed to serialize NodeInfo: {}", e),
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Unit tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    /// `load_cek_hints` on a non-existent file returns an empty map.
+    #[test]
+    fn load_cek_hints_missing_file_returns_empty() {
+        // Point $HOME to a temp dir that contains no cek_hints.json.
+        let tmp = tempdir();
+        std::env::set_var("XDG_DATA_HOME", &tmp);
+        let hints = load_cek_hints();
+        assert!(hints.is_empty(), "expected empty map for missing file");
+        std::env::remove_var("XDG_DATA_HOME");
+    }
+
+    /// `persist_cek_hints` + `load_cek_hints` round-trip.
+    #[test]
+    fn cek_hints_persist_load_roundtrip() {
+        let tmp = tempdir();
+        std::env::set_var("XDG_DATA_HOME", &tmp);
+
+        // Build a small hints map.
+        let mut hints: HashMap<String, [u8; 32]> = HashMap::new();
+        let key_a = *b"abcdefghijklmnopqrstuvwxyz012345";
+        let key_b = *b"ABCDEFGHIJKLMNOPQRSTUVWXYZ678901";
+        hints.insert("chunk-aaa".to_string(), key_a);
+        hints.insert("chunk-bbb".to_string(), key_b);
+
+        // Persist to disk.
+        persist_cek_hints(&hints);
+
+        // Load back and compare.
+        let loaded = load_cek_hints();
+        assert_eq!(loaded.len(), 2, "wrong number of hints loaded");
+        assert_eq!(loaded["chunk-aaa"], key_a);
+        assert_eq!(loaded["chunk-bbb"], key_b);
+
+        std::env::remove_var("XDG_DATA_HOME");
+    }
+
+    /// `load_cek_hints` with a corrupt JSON file returns an empty map without panicking.
+    #[test]
+    fn load_cek_hints_corrupt_file_returns_empty() {
+        let tmp = tempdir();
+        std::env::set_var("XDG_DATA_HOME", &tmp);
+
+        // Write garbage to cek_hints.json.
+        let path = std::path::Path::new(&tmp)
+            .join("billpouch")
+            .join("cek_hints.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"NOT_VALID_JSON").unwrap();
+
+        let hints = load_cek_hints();
+        assert!(hints.is_empty(), "corrupt file must yield empty map");
+
+        std::env::remove_var("XDG_DATA_HOME");
+    }
+
+    // ── helpers ───────────────────────────────────────────────────────────
+
+    /// Create a temporary directory and return its path as a String.
+    fn tempdir() -> String {
+        let mut path = std::env::temp_dir();
+        path.push(format!("bp_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&path).unwrap();
+        path.to_string_lossy().to_string()
+    }
+}
