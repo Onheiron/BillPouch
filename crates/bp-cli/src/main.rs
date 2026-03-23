@@ -17,8 +17,8 @@
 //!    bp bootstrap list              Show configured WAN bootstrap nodes
 //!    bp bootstrap add <addr>        Add a bootstrap node
 //!    bp bootstrap remove <addr>     Remove a bootstrap node
+//!    bp leave <network>              Leave a network (requires no active services)
 //!    bp relay connect <addr>        Dial a relay node for NAT traversal
-//!    bp --daemon [--passphrase <p>] (internal) run the background daemon
 //! ```
 
 mod client;
@@ -148,6 +148,16 @@ enum Cmd {
     #[clap(hide = true)]
     Join {
         /// The network identifier to subscribe to.
+        network_id: String,
+    },
+
+    /// Leave a network.
+    ///
+    /// Fails if any services are still active on the network.
+    /// Stop Pouches with `bp farewell <id> --evict` and other services
+    /// with `bp farewell <id>` before leaving.
+    Leave {
+        /// The network to leave.
         network_id: String,
     },
 
@@ -366,6 +376,10 @@ async fn main() -> anyhow::Result<()> {
 
         Some(Cmd::Join { network_id }) => {
             commands::join::join(network_id).await?;
+        }
+
+        Some(Cmd::Leave { network_id }) => {
+            commands::leave::leave(network_id).await?;
         }
 
         Some(Cmd::Put {
