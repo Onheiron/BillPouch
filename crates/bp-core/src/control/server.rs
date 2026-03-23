@@ -499,10 +499,7 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                     .filter(|s| s.network_id == network_id)
                     .map(|s| {
                         let hint = if s.service_type == ServiceType::Pouch {
-                            format!(
-                                "bp farewell {} --evict",
-                                s.id
-                            )
+                            format!("bp farewell {} --evict", s.id)
                         } else {
                             format!("bp farewell {}", s.id)
                         };
