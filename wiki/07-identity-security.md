@@ -112,21 +112,32 @@ entrambe le reti. Non esiste un meccanismo di federazione automatica.
 
 Il modulo `config.rs` usa la crate `directories` per percorsi conformi alle specifiche XDG:
 
-| Dato             | Percorso (Linux / macOS)                         |
-|------------------|--------------------------------------------------|
-| Identity key     | `~/.local/share/billpouch/identity.key`          |
-| Control socket   | `~/.local/share/billpouch/control.sock`          |
-| PID file         | `~/.local/share/billpouch/bp.pid`                |
-| Config dir       | `~/.config/billpouch/`                           |
+| Dato                    | Percorso (`~/.local/share/billpouch/`)    |
+|-------------------------|-------------------------------------------|
+| Identity key (plaintext)| `identity.key`                            |
+| Identity key (cifrata)  | `identity.key.enc` (Argon2id + ChaCha20) |
+| User profile            | `profile.json`                            |
+| Control socket          | `control.sock`                            |
+| PID file                | `daemon.pid`                              |
+| Service registry        | `services.json`                           |
+| Network membership      | `networks.json`                           |
+| Kademlia peers cache    | `kad_peers.json`                          |
+| Bootstrap node list     | `bootstrap.json`                          |
+| Network secret keys     | `network_keys.json`                       |
+| CEK plaintext hints     | `cek_hints.json`                          |
+| Storage data            | `storage/<network_id>/<service_id>/`      |
 
 ---
 
-## Sicurezza: limitazioni attuali
+## Sicurezza: stato attuale
 
-| Limitazione                     | Descrizione                                            |
-|---------------------------------|--------------------------------------------------------|
-| Nessun backup automatico        | La chiave non viene backuppata automaticamente         |
-| Nessuna password/passphrase     | La chiave è salvata in chiaro su disco                 |
-| Nessun multi-device sync        | Non c'è modo di sincronizzare la chiave tra dispositivi |
-| Nessuna revoca                  | Non esiste meccanismo di revoca della chiave           |
-| Nessuna autenticazione delle reti | Chiunque può joinare una rete conoscendone l'ID     |
+| Feature                    | Stato                                                       |
+|----------------------------|-------------------------------------------------------------|
+| Passphrase identità         | ✅ Argon2id KDF + ChaCha20-Poly1305 (`identity.key.enc`)   |
+| Multi-device identity      | ✅ `bp export-identity` / `bp import-identity`             |
+| Cifratura chunk at rest    | ✅ CEK per-utente (ChaCha20-Poly1305), BLAKE3-derivata      |
+| Network secret keys        | ✅ `NetworkMetaKey` random, distribuita solo via invite     |
+| Invite token               | ✅ Firmato Ed25519 + cifrato Argon2id+ChaCha20              |
+| CEK persistence            | ✅ `cek_hints.json` — file decifrabili dopo riavvio daemon  |
+| Revoca keypair             | ❌ Nessun meccanismo di revoca implementato               |
+| Backup automatico          | ❌ Backup manuale con `bp export-identity`                 |
