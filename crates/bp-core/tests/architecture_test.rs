@@ -2461,7 +2461,7 @@ fn service_status_paused_serde_roundtrip() {
 #[test]
 fn service_status_varianti_complete() {
     // Verify all expected variants are constructible and distinguishable.
-    let variants = vec![
+    let variants = [
         ServiceStatus::Starting,
         ServiceStatus::Running,
         ServiceStatus::Paused {
