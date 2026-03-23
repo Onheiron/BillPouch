@@ -26,6 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`bp pause <service_id> --eta <minutes>`** / **`bp resume <service_id>`** — nuovi comandi CLI
 - **`bp farewell --evict`** — flag eviction permanente
 - **`BpError::InvalidInput`** — nuova variante per input non validi (es. tier sconosciuto)
+- **CEK hints persistence** (`cek_hints.json`) — `load_cek_hints()` + `persist_cek_hints()` in `server.rs`; le chiavi di cifratura sopravvivono al riavvio del daemon
+- **`bp flock` tier display** — i servizi Pouch mostrano il tier (`tier: T2`) nella lista locale
+- **bp-api route v0.3** — `POST /services/:id/pause`, `POST /services/:id/resume`, `DELETE /services/:id?evict=true`, `POST /invites`, `POST /invites/redeem`
 
 ### Tests
 
