@@ -32,6 +32,79 @@ use tokio::{
     sync::mpsc,
 };
 
+// ── CEK hint persistence ──────────────────────────────────────────────────────
+
+/// Load persisted CEK hints from `cek_hints.json`.
+///
+/// Returns an empty map if the file does not exist or cannot be parsed.
+/// Called once at daemon startup so files encrypted in previous sessions
+/// remain decryptable.
+pub fn load_cek_hints() -> HashMap<String, [u8; 32]> {
+    let path = match crate::config::cek_hints_path() {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!("cek_hints_path error: {e}");
+            return HashMap::new();
+        }
+    };
+    if !path.exists() {
+        return HashMap::new();
+    }
+    let data = match std::fs::read_to_string(&path) {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::warn!("Failed to read cek_hints: {e}");
+            return HashMap::new();
+        }
+    };
+    let hex_map: HashMap<String, String> = match serde_json::from_str(&data) {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::warn!("Failed to parse cek_hints: {e}");
+            return HashMap::new();
+        }
+    };
+    hex_map
+        .into_iter()
+        .filter_map(|(k, v)| {
+            let bytes = hex::decode(&v).ok()?;
+            if bytes.len() != 32 {
+                return None;
+            }
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(&bytes);
+            Some((k, arr))
+        })
+        .collect()
+}
+
+/// Persist CEK hints to `cek_hints.json`.
+///
+/// Failures are logged as warnings and silently ignored — a missing hint
+/// means the file cannot be decrypted after restart, but it does not
+/// corrupt any other state.
+fn persist_cek_hints(hints: &HashMap<String, [u8; 32]>) {
+    let path = match crate::config::cek_hints_path() {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!("cek_hints_path error: {e}");
+            return;
+        }
+    };
+    let hex_map: HashMap<&str, String> = hints
+        .iter()
+        .map(|(k, v)| (k.as_str(), hex::encode(v)))
+        .collect();
+    match serde_json::to_string(&hex_map) {
+        Ok(json) => {
+            if let Err(e) = std::fs::write(&path, json) {
+                tracing::warn!("Failed to write cek_hints: {e}");
+            }
+        }
+        Err(e) => tracing::warn!("Failed to serialize cek_hints: {e}"),
+    }
+}
+
 /// Shared daemon state accessible from the control server.
 pub struct DaemonState {
     pub identity: Identity,
@@ -693,6 +766,11 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 .write()
                 .unwrap()
                 .insert(chunk_id.clone(), plaintext_hash);
+            // Persist hints so the CEK survives a daemon restart.
+            {
+                let hints = state.chunk_cek_hints.read().unwrap();
+                persist_cek_hints(&hints);
+            }
 
             // Store all fragments locally in the first candidate with capacity.
             let mut stored = 0usize;

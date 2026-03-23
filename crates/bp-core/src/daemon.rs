@@ -5,7 +5,7 @@
 
 use crate::{
     config,
-    control::server::{run_control_server, DaemonState},
+    control::server::{load_cek_hints, run_control_server, DaemonState},
     error::{BpError, BpResult},
     identity::Identity,
     network::{
@@ -66,7 +66,7 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
         qos,
         outgoing_assignments: Arc::clone(&outgoing_assignments),
         remote_fragment_index: Arc::clone(&remote_fragment_index),
-        chunk_cek_hints: RwLock::new(HashMap::new()),
+        chunk_cek_hints: RwLock::new(load_cek_hints()),
         reputation: RwLock::new(ReputationStore::new()),
     });
 

@@ -75,6 +75,16 @@ pub fn network_keys_path() -> BpResult<PathBuf> {
     Ok(base_dir()?.join("network_keys.json"))
 }
 
+/// Path to the persisted per-chunk CEK hints.
+///
+/// JSON map: `{ "<chunk_id>": "<hex-encoded 32-byte plaintext hash>" }`.
+/// The plaintext hash is used to re-derive the per-user CEK at `GetFile` time.
+/// Without this file, files encrypted with a previous daemon session cannot
+/// be decrypted after a daemon restart.
+pub fn cek_hints_path() -> BpResult<PathBuf> {
+    Ok(base_dir()?.join("cek_hints.json"))
+}
+
 /// Ensure the base directory (and any subdirs) exist.
 pub fn ensure_dirs() -> BpResult<()> {
     std::fs::create_dir_all(base_dir()?).map_err(BpError::Io)
