@@ -558,7 +558,7 @@ async fn pause_resume_roundtrip() {
     let status_data: StatusData =
         serde_json::from_value(unwrap_ok(status_resp)).expect("Status must succeed");
     let svc = status_data
-        .services
+        .local_services
         .iter()
         .find(|s| s.id == svc_id)
         .expect("service must appear in status");
@@ -588,7 +588,7 @@ async fn pause_resume_roundtrip() {
     let status_data2: StatusData =
         serde_json::from_value(unwrap_ok(status_resp2)).expect("Status must succeed");
     let svc2 = status_data2
-        .services
+        .local_services
         .iter()
         .find(|s| s.id == svc_id)
         .expect("service must appear in status");
