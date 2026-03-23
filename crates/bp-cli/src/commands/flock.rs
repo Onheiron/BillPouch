@@ -33,12 +33,22 @@ fn print_flock(flock: &FlockData) {
         println!("   (none)");
     } else {
         for svc in &flock.local_services {
+            // Show tier for Pouch services if available.
+            let tier_info = if svc.service_type == bp_core::service::ServiceType::Pouch {
+                match svc.metadata.get("tier").and_then(|v| v.as_str()) {
+                    Some(t) => format!("  tier: {t}"),
+                    None => String::new(),
+                }
+            } else {
+                String::new()
+            };
             println!(
-                "   [{:>6}]  {}  │  net: {}  │  status: {}",
+                "   [{:>6}]  {}  │  net: {}  │  status: {}{}",
                 svc.service_type,
                 &svc.id[..8],
                 svc.network_id,
                 svc.status,
+                tier_info,
             );
         }
     }
@@ -48,7 +58,7 @@ fn print_flock(flock: &FlockData) {
     println!("🌐 Joined Networks  ({})", flock.networks.len());
     println!("─────────────────────────────────────────────────────");
     if flock.networks.is_empty() {
-        println!("   (none — use `bp join <network_id>` to join a network)");
+        println!("   (none — use `bp invite join <token>` to join a network)");
     } else {
         for net in &flock.networks {
             let peers_in_net = flock
