@@ -104,13 +104,12 @@ BillPouch/
     │       │   ├── manifest.rs         # FileManifest + NetworkMetaKey
     │       │   ├── meta.rs             # PouchMeta (capacity, available bytes)
     │       │   ├── encryption.rs       # ChunkCipher — CEK encrypt/decrypt
-    │       │   └── agreement.rs        # StorageOffer + Agreement store
+    │       │   └── tier.rs             # StorageTier T1–T5
     │       ├── network/
     │       │   ├── behaviour.rs        # Combined libp2p NetworkBehaviour
     │       │   ├── mod.rs              # Swarm loop + NetworkCommand channel
     │       │   ├── state.rs            # Gossip-based NodeInfo store
-    │       │   ├── qos.rs              # Per-peer RTT + fault score tracking
-    │       │   ├── quality_monitor.rs  # Ping + Proof-of-Storage loop
+    │       │   ├── qos.rs              # Per-peer RTT + fault score tracking    │       │   ├── reputation.rs       # ReputationTier R0–R4    │       │   ├── quality_monitor.rs  # Ping + Proof-of-Storage loop
     │       │   ├── fragment_gossip.rs  # RemoteFragmentIndex announcements
     │       │   ├── bootstrap.rs        # Persistent Kademlia peer cache
     │       │   └── kad_store.rs        # Kademlia record persistence
@@ -125,8 +124,10 @@ BillPouch/
     │           ├── auth.rs             # login / logout / export-identity / import-identity
     │           ├── hatch.rs            # hatch
     │           ├── flock.rs            # flock
-    │           ├── farewell.rs         # farewell
-    │           ├── join.rs             # join / leave
+    │           ├── farewell.rs         # farewell / farewell --evict
+    │           ├── pause.rs            # pause / resume
+    │           ├── leave.rs            # leave
+    │           ├── join.rs             # join (hidden — internal script use)
     │           ├── put.rs              # put (RLNC encode + distribute)
     │           ├── get.rs              # get (fetch + RLNC decode)
     │           └── invite.rs           # invite create / join
@@ -214,8 +215,8 @@ Your **fingerprint** (first 8 bytes of SHA-256 of your public key) is your user 
 ### 2. Start a service
 
 ```bash
-# Bid 10 GiB of local storage into the "my-network" network
-bp hatch pouch --network my-network --storage-bytes 10737418240
+# Bid storage tier T1 (10 GiB) into the "my-network" network
+bp hatch pouch --network my-network --tier T1
 
 # Start a personal file I/O interface
 bp hatch bill --network my-network
@@ -240,13 +241,12 @@ bp get 7f3a1... --network my-network -o photo_recovered.jpg
 
 Fragments are distributed automatically to remote Pouch nodes. Recovery works as long as any `k` of the `n` fragments are reachable.
 
-### 4. Join an existing network
+### 4. Join an existing network via invite
 
 ```bash
-bp join my-friends-network
+# Receive a token from a friend, then:
+bp invite join <token> --password secret
 ```
-
-Subscribes to the gossipsub topic for that network. Peers announce themselves automatically.
 
 ### 5. Inspect the flock
 
@@ -296,19 +296,33 @@ bp export-identity --out identity-backup.json
 bp import-identity identity-backup.json
 ```
 
-### 8. Stop a service
+### 8. Pause and resume a service
 
 ```bash
-bp farewell a3f19c2b-e9d2-4f1a-bc30-112233445566
+# Graceful maintenance (announces ETA to peers)
+bp pause <service_id> --eta 30
+
+# Back online
+bp resume <service_id>
 ```
 
-### 9. Log out
+### 9. Stop a service permanently
+
+```bash
+# Simple stop
+bp farewell <service_id>
+
+# Permanent eviction (purge storage + notify peers)
+bp farewell <service_id> --evict
+```
+
+### 10. Log out
 
 ```bash
 bp logout
 ```
 
-Removes your identity key from disk. **This is irreversible** — back up with `bp export-identity` first.
+Rimuove il keypair da disco. **Irreversibile** — usa `bp export-identity` prima.
 
 ---
 
@@ -342,23 +356,23 @@ Every node periodically broadcasts a `NodeInfo` message on the gossipsub topic `
   "listen_addrs": ["/ip4/192.168.1.10/tcp/54321"],
   "announced_at": 1710000000,
   "metadata": {
-    "storage_bytes": 10737418240,
-    "free_bytes": 8000000000,
-    "version": "0.1.0"
+    "tier": "T1",
+    "storage_bytes_bid": 10737418240,
+    "storage_bytes_used": 2500000000,
+    "version": "0.3.0"
   }
 }
 ```
 
 ---
 
-## Status — v0.2.1 Alpha
+## Status — v0.3.0-dev
 
 | Feature | Status |
 |---|---|
 | Ed25519 identity (login/logout/export/import) | ✅ Done |
 | P2P gossip (gossipsub + Kademlia + mDNS) | ✅ Done |
 | Multi-network support | ✅ Done |
-| Storage marketplace (offer/accept/agreements) | ✅ Done |
 | RLNC erasure coding (GF(2⁸), encode/recode/decode) | ✅ Done |
 | CEK encryption (ChaCha20-Poly1305, per-user key) | ✅ Done |
 | Adaptive k/n from live peer QoS | ✅ Done |
@@ -369,6 +383,11 @@ Every node periodically broadcasts a `NodeInfo` message on the gossipsub topic `
 | NAT traversal (AutoNAT + relay circuit v2) | ✅ Done |
 | Invite system (signed+encrypted token) | ✅ Done |
 | Encrypted identity key (Argon2id + ChaCha20) | ✅ Done |
+| StorageTier T1–T5 (fixed quota tiers) | ✅ Done |
+| ReputationTier R0–R4 (historical reliability score) | ✅ Done |
+| `bp pause --eta` / `bp resume` (maintenance mode) | ✅ Done |
+| `bp farewell --evict` (permanent Pouch removal) | ✅ Done |
+| `bp leave` with active-service precondition | ✅ Done |
 | REST API + web dashboard (axum) | ✅ Done |
 | FUSE filesystem mount | 🔮 Future |
 | gRPC API | 🔮 Future |
