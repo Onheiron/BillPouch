@@ -500,3 +500,274 @@ async fn get_file_missing_cek_hint_returns_error() {
     server_handle.abort();
     let _ = std::fs::remove_file(&socket_path);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v0.3 feature tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Hatch a Pouch → Pause → confirm status is paused → Resume → confirm running.
+#[tokio::test]
+async fn pause_resume_roundtrip() {
+    let socket_path = temp_socket_path();
+    let (state, _net_rx) = make_daemon_state();
+
+    let server_state = Arc::clone(&state);
+    let server_path = socket_path.clone();
+    let server_handle = tokio::spawn(async move {
+        let _ = run_control_server(&server_path, server_state).await;
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+
+    // 1. Hatch a Pouch.
+    let hatch_resp = send_request(
+        &socket_path,
+        &ControlRequest::Hatch {
+            service_type: bp_core::service::ServiceType::Pouch,
+            network_id: "test-net".to_string(),
+            metadata: {
+                let mut m = HashMap::new();
+                m.insert("storage_bytes".to_string(), serde_json::json!(1_048_576u64));
+                m
+            },
+        },
+    )
+    .await;
+    let hatch_data: HatchData =
+        serde_json::from_value(unwrap_ok(hatch_resp)).expect("Hatch must succeed");
+    let svc_id = hatch_data.service_id.clone();
+
+    // 2. Pause the service with ETA = 45 minutes.
+    let pause_resp = send_request(
+        &socket_path,
+        &ControlRequest::Pause {
+            service_id: svc_id.clone(),
+            eta_minutes: 45,
+        },
+    )
+    .await;
+    let pause_data = unwrap_ok(pause_resp);
+    assert_eq!(
+        pause_data["status"].as_str().unwrap_or(""),
+        "paused",
+        "pause response must have status=paused"
+    );
+    assert_eq!(pause_data["eta_minutes"].as_u64().unwrap_or(0), 45);
+
+    // 3. Status must reflect the paused state.
+    let status_resp = send_request(&socket_path, &ControlRequest::Status).await;
+    let status_data: StatusData =
+        serde_json::from_value(unwrap_ok(status_resp)).expect("Status must succeed");
+    let svc = status_data
+        .services
+        .iter()
+        .find(|s| s.id == svc_id)
+        .expect("service must appear in status");
+    assert!(
+        svc.status.to_string().contains("paused"),
+        "service status must be paused: {}",
+        svc.status
+    );
+
+    // 4. Resume the service.
+    let resume_resp = send_request(
+        &socket_path,
+        &ControlRequest::Resume {
+            service_id: svc_id.clone(),
+        },
+    )
+    .await;
+    let resume_data = unwrap_ok(resume_resp);
+    assert_eq!(
+        resume_data["status"].as_str().unwrap_or(""),
+        "running",
+        "resume response must have status=running"
+    );
+
+    // 5. Status must now show running again.
+    let status_resp2 = send_request(&socket_path, &ControlRequest::Status).await;
+    let status_data2: StatusData =
+        serde_json::from_value(unwrap_ok(status_resp2)).expect("Status must succeed");
+    let svc2 = status_data2
+        .services
+        .iter()
+        .find(|s| s.id == svc_id)
+        .expect("service must appear in status");
+    assert_eq!(
+        svc2.status.to_string(),
+        "running",
+        "service must be running after resume"
+    );
+
+    server_handle.abort();
+    let _ = std::fs::remove_file(&socket_path);
+}
+
+/// FarewellEvict must remove the service and return storage summary data.
+#[tokio::test]
+async fn farewell_evict_removes_service() {
+    let socket_path = temp_socket_path();
+    let (state, _net_rx) = make_daemon_state();
+
+    let server_state = Arc::clone(&state);
+    let server_path = socket_path.clone();
+    let server_handle = tokio::spawn(async move {
+        let _ = run_control_server(&server_path, server_state).await;
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+
+    // Hatch a Pouch.
+    let hatch_resp = send_request(
+        &socket_path,
+        &ControlRequest::Hatch {
+            service_type: bp_core::service::ServiceType::Pouch,
+            network_id: "evict-net".to_string(),
+            metadata: {
+                let mut m = HashMap::new();
+                m.insert("storage_bytes".to_string(), serde_json::json!(1_048_576u64));
+                m
+            },
+        },
+    )
+    .await;
+    let hatch_data: HatchData =
+        serde_json::from_value(unwrap_ok(hatch_resp)).expect("Hatch must succeed");
+    let svc_id = hatch_data.service_id.clone();
+
+    // FarewellEvict the service.
+    let evict_resp = send_request(
+        &socket_path,
+        &ControlRequest::FarewellEvict {
+            service_id: svc_id.clone(),
+        },
+    )
+    .await;
+    let evict_data = unwrap_ok(evict_resp);
+    assert_eq!(
+        evict_data["service_id"].as_str().unwrap_or(""),
+        svc_id,
+        "evict response must echo the service_id"
+    );
+
+    // The service must no longer appear in Flock.
+    let flock_resp = send_request(&socket_path, &ControlRequest::Flock).await;
+    let flock_data: FlockData =
+        serde_json::from_value(unwrap_ok(flock_resp)).expect("Flock must succeed");
+    let still_present = flock_data.local_services.iter().any(|s| s.id == svc_id);
+    assert!(!still_present, "evicted service must not appear in Flock");
+
+    server_handle.abort();
+    let _ = std::fs::remove_file(&socket_path);
+}
+
+/// `bp leave` with an active service must return `blocked=true` with hints.
+#[tokio::test]
+async fn leave_blocked_by_active_service() {
+    let socket_path = temp_socket_path();
+    let (state, _net_rx) = make_daemon_state();
+
+    let server_state = Arc::clone(&state);
+    let server_path = socket_path.clone();
+    let server_handle = tokio::spawn(async move {
+        let _ = run_control_server(&server_path, server_state).await;
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+
+    // Join a network, then hatch a Pouch on it.
+    let _ = send_request(
+        &socket_path,
+        &ControlRequest::Join {
+            network_id: "block-net".to_string(),
+        },
+    )
+    .await;
+
+    let hatch_resp = send_request(
+        &socket_path,
+        &ControlRequest::Hatch {
+            service_type: bp_core::service::ServiceType::Pouch,
+            network_id: "block-net".to_string(),
+            metadata: {
+                let mut m = HashMap::new();
+                m.insert("storage_bytes".to_string(), serde_json::json!(1_048_576u64));
+                m
+            },
+        },
+    )
+    .await;
+    let hatch_data: HatchData =
+        serde_json::from_value(unwrap_ok(hatch_resp)).expect("Hatch must succeed");
+
+    // Leave must be blocked.
+    let leave_resp = send_request(
+        &socket_path,
+        &ControlRequest::Leave {
+            network_id: "block-net".to_string(),
+        },
+    )
+    .await;
+    let leave_data = unwrap_ok(leave_resp);
+    assert_eq!(
+        leave_data["blocked"].as_bool().unwrap_or(false),
+        true,
+        "leave must be blocked when active services remain"
+    );
+    let blocking = leave_data["blocking_services"]
+        .as_array()
+        .expect("blocking_services must be an array");
+    assert!(
+        !blocking.is_empty(),
+        "blocking_services must name the active service"
+    );
+    let ids: Vec<&str> = blocking
+        .iter()
+        .filter_map(|v| v["id"].as_str())
+        .collect();
+    assert!(
+        ids.contains(&hatch_data.service_id.as_str()),
+        "active service must appear in blocking_services"
+    );
+
+    server_handle.abort();
+    let _ = std::fs::remove_file(&socket_path);
+}
+
+/// A second `hatch pouch` on the same network must be rejected.
+#[tokio::test]
+async fn hatch_second_pouch_same_network_rejected() {
+    let socket_path = temp_socket_path();
+    let (state, _net_rx) = make_daemon_state();
+
+    let server_state = Arc::clone(&state);
+    let server_path = socket_path.clone();
+    let server_handle = tokio::spawn(async move {
+        let _ = run_control_server(&server_path, server_state).await;
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+
+    let hatch_pouch = || ControlRequest::Hatch {
+        service_type: bp_core::service::ServiceType::Pouch,
+        network_id: "dup-net".to_string(),
+        metadata: {
+            let mut m = HashMap::new();
+            m.insert("storage_bytes".to_string(), serde_json::json!(1_048_576u64));
+            m
+        },
+    };
+
+    // First Pouch — must succeed.
+    let first = send_request(&socket_path, &hatch_pouch()).await;
+    unwrap_ok(first); // panics if Error
+
+    // Second Pouch on the same network — must be rejected.
+    let second = send_request(&socket_path, &hatch_pouch()).await;
+    let err_msg = unwrap_err(second);
+    assert!(
+        err_msg.to_lowercase().contains("already")
+            || err_msg.to_lowercase().contains("pouch")
+            || err_msg.to_lowercase().contains("dup-net"),
+        "second hatch must be rejected with a meaningful error: {err_msg}"
+    );
+
+    server_handle.abort();
+    let _ = std::fs::remove_file(&socket_path);
+}

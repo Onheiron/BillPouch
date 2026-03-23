@@ -2280,3 +2280,202 @@ fn identity_export_senza_identita_ritorna_not_authenticated() {
         );
     });
 }
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 11. STORAGE TIER — fixed capacity buckets T1..T5
+// ═════════════════════════════════════════════════════════════════════════════
+
+use bp_core::storage::StorageTier;
+
+#[test]
+fn storage_tier_quota_bytes_valori_corretti() {
+    assert_eq!(StorageTier::T1.quota_bytes(), 10 * 1024 * 1024 * 1024);
+    assert_eq!(StorageTier::T2.quota_bytes(), 100 * 1024 * 1024 * 1024);
+    assert_eq!(StorageTier::T3.quota_bytes(), 500 * 1024 * 1024 * 1024);
+    assert_eq!(StorageTier::T4.quota_bytes(), 1024 * 1024 * 1024 * 1024);
+    assert_eq!(StorageTier::T5.quota_bytes(), 5 * 1024 * 1024 * 1024 * 1024);
+}
+
+#[test]
+fn storage_tier_ordinamento_crescente() {
+    assert!(StorageTier::T1 < StorageTier::T2);
+    assert!(StorageTier::T2 < StorageTier::T3);
+    assert!(StorageTier::T3 < StorageTier::T4);
+    assert!(StorageTier::T4 < StorageTier::T5);
+}
+
+#[test]
+fn storage_tier_parse_case_insensitive() {
+    use std::str::FromStr;
+    assert_eq!(StorageTier::from_str("t1").unwrap(), StorageTier::T1);
+    assert_eq!(StorageTier::from_str("T2").unwrap(), StorageTier::T2);
+    assert_eq!(StorageTier::from_str("t3").unwrap(), StorageTier::T3);
+    assert_eq!(StorageTier::from_str("T4").unwrap(), StorageTier::T4);
+    assert_eq!(StorageTier::from_str("t5").unwrap(), StorageTier::T5);
+}
+
+#[test]
+fn storage_tier_parse_valore_invalido_ritorna_err() {
+    use std::str::FromStr;
+    assert!(StorageTier::from_str("T6").is_err());
+    assert!(StorageTier::from_str("XL").is_err());
+    assert!(StorageTier::from_str("").is_err());
+}
+
+#[test]
+fn storage_tier_name_ritorna_stringa_corretta() {
+    assert_eq!(StorageTier::T1.name(), "Pebble");
+    assert_eq!(StorageTier::T2.name(), "Stone");
+    assert_eq!(StorageTier::T3.name(), "Boulder");
+    assert_eq!(StorageTier::T4.name(), "Rock");
+    assert_eq!(StorageTier::T5.name(), "Monolith");
+}
+
+#[test]
+fn storage_tier_for_file_size_riconosce_tier_minimo() {
+    // 1 byte → T1
+    assert_eq!(StorageTier::for_file_size(1), Some(StorageTier::T1));
+    // 10 GiB esatti → T1
+    assert_eq!(
+        StorageTier::for_file_size(10 * 1024 * 1024 * 1024),
+        Some(StorageTier::T1)
+    );
+    // 10 GiB + 1 byte → T2
+    assert_eq!(
+        StorageTier::for_file_size(10 * 1024 * 1024 * 1024 + 1),
+        Some(StorageTier::T2)
+    );
+    // Troppo grande → None
+    assert_eq!(
+        StorageTier::for_file_size(5 * 1024 * 1024 * 1024 * 1024 + 1),
+        None
+    );
+}
+
+#[test]
+fn storage_tier_participating_tiers_lunghezza_corretta() {
+    assert_eq!(StorageTier::T1.participating_tiers().len(), 1);
+    assert_eq!(StorageTier::T2.participating_tiers().len(), 2);
+    assert_eq!(StorageTier::T3.participating_tiers().len(), 3);
+    assert_eq!(StorageTier::T4.participating_tiers().len(), 4);
+    assert_eq!(StorageTier::T5.participating_tiers().len(), 5);
+}
+
+#[test]
+fn storage_tier_serde_roundtrip() {
+    let tier = StorageTier::T3;
+    let json = serde_json::to_string(&tier).expect("serialize");
+    let back: StorageTier = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(back, tier);
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 12. REPUTATION TIER — R0..R4 peer quality tiers
+// ═════════════════════════════════════════════════════════════════════════════
+
+use bp_core::network::{ReputationStore, ReputationTier};
+
+#[test]
+fn reputation_tier_ordinamento_crescente() {
+    assert!(ReputationTier::R0 < ReputationTier::R1);
+    assert!(ReputationTier::R1 < ReputationTier::R2);
+    assert!(ReputationTier::R2 < ReputationTier::R3);
+    assert!(ReputationTier::R3 < ReputationTier::R4);
+}
+
+#[test]
+fn reputation_tier_nomi_corretti() {
+    assert_eq!(ReputationTier::R0.name(), "Quarantine");
+    assert_eq!(ReputationTier::R1.name(), "Fledgling");
+    assert_eq!(ReputationTier::R2.name(), "Reliable");
+    assert_eq!(ReputationTier::R3.name(), "Trusted");
+    assert_eq!(ReputationTier::R4.name(), "Pillar");
+}
+
+#[test]
+fn reputation_tier_is_eligible_for_r0_sender_solo_r0() {
+    // R0 senders can only distribute to other R0 peers.
+    assert!(ReputationTier::R0.is_eligible_for(ReputationTier::R0));
+    assert!(!ReputationTier::R1.is_eligible_for(ReputationTier::R0));
+    assert!(!ReputationTier::R4.is_eligible_for(ReputationTier::R0));
+}
+
+#[test]
+fn reputation_tier_is_eligible_for_r2_sender_accetta_r2_e_superiori() {
+    // R2 senders prefer peers with tier ≥ R2.
+    assert!(!ReputationTier::R1.is_eligible_for(ReputationTier::R2));
+    assert!(ReputationTier::R2.is_eligible_for(ReputationTier::R2));
+    assert!(ReputationTier::R3.is_eligible_for(ReputationTier::R2));
+    assert!(ReputationTier::R4.is_eligible_for(ReputationTier::R2));
+}
+
+#[test]
+fn reputation_store_nuovo_e_vuoto() {
+    let store = ReputationStore::new();
+    assert!(store.get("any_peer_id").is_none());
+}
+
+#[test]
+fn reputation_tier_serde_roundtrip() {
+    let tier = ReputationTier::R3;
+    let json = serde_json::to_string(&tier).expect("serialize");
+    let back: ReputationTier = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(back, tier);
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 13. SERVICE LIFECYCLE v0.3 — Paused state + new variants
+// ═════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn service_status_paused_display() {
+    let s = ServiceStatus::Paused {
+        eta_minutes: 30,
+        paused_at: 0,
+    };
+    let text = s.to_string();
+    assert!(
+        text.contains("paused"),
+        "Display must contain 'paused': {text}"
+    );
+    assert!(
+        text.contains("30"),
+        "Display must contain eta_minutes: {text}"
+    );
+}
+
+#[test]
+fn service_status_paused_serde_roundtrip() {
+    let original = ServiceStatus::Paused {
+        eta_minutes: 60,
+        paused_at: 1_700_000_000,
+    };
+    let json = serde_json::to_string(&original).expect("serialize");
+    let back: ServiceStatus = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(
+        original, back,
+        "ServiceStatus::Paused must survive JSON round-trip"
+    );
+}
+
+#[test]
+fn service_status_varianti_complete() {
+    // Verify all expected variants are constructible and distinguishable.
+    let variants = vec![
+        ServiceStatus::Starting,
+        ServiceStatus::Running,
+        ServiceStatus::Paused { eta_minutes: 10, paused_at: 0 },
+        ServiceStatus::Stopping,
+        ServiceStatus::Stopped,
+        ServiceStatus::Error("test".into()),
+    ];
+    assert_eq!(variants.len(), 6);
+    // Each variant must have a distinct Display string.
+    let displays: Vec<String> = variants.iter().map(|s| s.to_string()).collect();
+    let unique: std::collections::HashSet<_> = displays.iter().collect();
+    assert_eq!(
+        unique.len(),
+        displays.len(),
+        "All ServiceStatus variants must have distinct Display strings"
+    );
+}
