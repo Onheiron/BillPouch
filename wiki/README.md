@@ -22,6 +22,7 @@ Benvenuto nella wiki di **BillPouch**, un filesystem distribuito P2P scritto in 
 | 14 | [Storage Bidding](./14-storage-bidding.md) | Protocollo bid Pouch, directory locale, metadata gossip |
 | 15 | [Erasure Coding](./15-erasure-coding.md) | RLNC su GF(2⁸), chunking, recoding senza decodifica, N/K |
 | 16 | [Network Quality](./16-network-quality.md) | Challenge PoS, fault score, blacklist via gossip |
+| 17 | [REST API](./17-rest-api.md) | bp-api: tutti gli endpoint HTTP con esempi request/response |
 
 ## Quick Reference
 
