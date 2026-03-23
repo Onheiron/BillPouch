@@ -184,7 +184,7 @@ Se `--network` non viene specificato, il servizio gira in **modalità locale**: 
 
 ### 🟢 Nuovi comandi
 
-#### `bp leave <network>` — procedura di abbandono asincrona — 🔲 Todo
+#### `bp leave <network>` — procedura di abbandono asincrona — ✅ Done (v1)
 
 Abbandono di un network è una procedura multi-step **non interrompibile** una volta avviata:
 
@@ -292,6 +292,7 @@ Error: a Pouch for network X already exists on this node.
 - **feat:** `network/reputation.rs` — `ReputationTier` (R0–R4), `ReputationRecord`, `ReputationStore`; integrato in `DaemonState`
 - **feat:** `bp pause <service_id> --eta <minutes>` / `bp resume <service_id>` — manutenzione temporanea; gossip maintenance announcement; `ServiceStatus::Paused`; `ControlRequest::{Pause,Resume}`
 - **feat:** `bp farewell <service_id> --evict` — eviction permanente Pouch; purge storage su disco; gossip `evicting=true`; `ControlRequest::FarewellEvict`; `StorageManager::purge()` + `storage_summary()`; reputation `evict_without_notice()`
+- **feat:** `bp leave <network>` — precondition check servizi attivi; unsubscribe gossip; `ControlRequest::Leave` aggiornato con blocklist servizi da fermare prima
 
 ### v0.2.1 (Marzo 2026)
 - **feat:** Web dashboard — `GET /` in `bp-api` restituisce una SPA HTML/JS embedded via `include_str!`; dark UI; sezioni Status, Peers, Files, Marketplace; auto-refresh 5s; zero dipendenze runtime

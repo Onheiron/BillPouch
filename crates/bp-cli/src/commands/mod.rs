@@ -16,6 +16,7 @@ pub mod get;
 pub mod hatch;
 pub mod invite;
 pub mod join;
+pub mod leave;
 pub mod pause;
 pub mod put;
 pub mod relay;

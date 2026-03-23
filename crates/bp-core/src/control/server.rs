@@ -490,6 +490,45 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
 
         // ── Leave ─────────────────────────────────────────────────────────
         ControlRequest::Leave { network_id } => {
+            // Precondition: no active services on this network.
+            // The caller must stop/evict each service before leaving.
+            let blocking: Vec<serde_json::Value> = {
+                let reg = state.services.read().unwrap();
+                reg.all()
+                    .iter()
+                    .filter(|s| s.network_id == network_id)
+                    .map(|s| {
+                        let hint = if s.service_type == ServiceType::Pouch {
+                            format!(
+                                "bp farewell {} --evict",
+                                s.id
+                            )
+                        } else {
+                            format!("bp farewell {}", s.id)
+                        };
+                        serde_json::json!({
+                            "id":   s.id,
+                            "type": s.service_type.to_string(),
+                            "hint": hint,
+                        })
+                    })
+                    .collect()
+            };
+
+            if !blocking.is_empty() {
+                return ControlResponse::ok(serde_json::json!({
+                    "network_id": network_id,
+                    "blocked": true,
+                    "blocking_services": blocking,
+                    "message": format!(
+                        "Cannot leave '{}': {} active service(s) must be stopped first \
+                         (see 'blocking_services' for commands)",
+                        network_id,
+                        blocking.len()
+                    ),
+                }));
+            }
+
             let _ = state
                 .net_tx
                 .send(NetworkCommand::LeaveNetwork {
