@@ -148,6 +148,8 @@ Ultimo commit verde atteso: branch `main` (post push).
 | 45 | `various` | feat: **FarewellEvict** — `bp farewell --evict`; `StorageManager::purge()`; reputation evict_without_notice |
 | 46 | `various` | feat: **Leave precondition** — `bp leave` blocca se servizi attivi; hint comandi di stop |
 | 47 | `e0bee5e` | docs+tests: wiki 04/05/08; nuovi test architecture e integration per v0.3 features |
+| 48 | `3fbf8fd` | feat: **CEK hints persistence** — `cek_hints.json`; `load_cek_hints()` al startup; `persist_cek_hints()` ad ogni PutFile; file decifrabili dopo riavvio daemon |
+| 49 | `5686a1c` | docs: wiki/02 aggiornata — workspace tree completo, DaemonState tutti i campi, NetworkCommand aggiornato, startup flow con quality monitor |
 
 ---
 
