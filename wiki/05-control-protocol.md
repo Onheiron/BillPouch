@@ -17,8 +17,17 @@ pub enum ControlRequest {
     Status,
     Hatch    { service_type: ServiceType, network_id: String, metadata: HashMap<String, Value> },
     Flock,
-    Farewell { service_id: String },
-    Join     { network_id: String },
+    Farewell      { service_id: String },
+    FarewellEvict { service_id: String },
+    Pause         { service_id: String, eta_minutes: u64 },
+    Resume        { service_id: String },
+    Join          { network_id: String },  // internal/hidden
+    Leave         { network_id: String },
+    PutFile  { chunk_data: Vec<u8>, ph: Option<f64>, q_target: Option<f64>, network_id: String },
+    GetFile  { chunk_id: String, network_id: String },
+    ConnectRelay  { relay_addr: String },
+    CreateInvite  { network_id: String, invitee_fingerprint: Option<String>, invite_password: String, ttl_hours: Option<u64> },
+    RedeemInvite  { token: String, invite_password: String },
 }
 ```
 
@@ -31,14 +40,11 @@ pub enum ControlRequest {
 // Status completo
 {"cmd":"status"}
 
-// Avvia servizio pouch con 10 GB
-{"cmd":"hatch","service_type":"pouch","network_id":"amici","metadata":{"storage_bytes":10737418240}}
+// Avvia pouch tier T2 (100 GiB)
+{"cmd":"hatch","service_type":"pouch","network_id":"amici","metadata":{"tier":"T2","storage_bytes":107374182400}}
 
-// Avvia servizio bill con mount
+// Avvia bill con mount
 {"cmd":"hatch","service_type":"bill","network_id":"amici","metadata":{"mount_path":"/mnt/files"}}
-
-// Avvia relay puro
-{"cmd":"hatch","service_type":"post","network_id":"amici","metadata":{}}
 
 // Lista peer
 {"cmd":"flock"}
@@ -46,8 +52,17 @@ pub enum ControlRequest {
 // Ferma servizio
 {"cmd":"farewell","service_id":"550e8400-e29b-41d4-a716-446655440000"}
 
-// Unisciti a rete
-{"cmd":"join","network_id":"lavoro"}
+// Evict permanente Pouch (purge storage)
+{"cmd":"farewell_evict","service_id":"550e8400-e29b-41d4-a716-446655440000"}
+
+// Pausa manutenzione (30 minuti)
+{"cmd":"pause","service_id":"550e8400-e29b-41d4-a716-446655440000","eta_minutes":30}
+
+// Ripristino dopo pausa
+{"cmd":"resume","service_id":"550e8400-e29b-41d4-a716-446655440000"}
+
+// Abbandona network (richiede nessun servizio attivo)
+{"cmd":"leave","network_id":"lavoro"}
 ```
 
 ---
@@ -137,12 +152,18 @@ Il server (`control/server.rs`) riceve la request, la dispatcha, restituisce la 
 ```rust
 async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlResponse {
     match req {
-        ControlRequest::Ping      => ControlResponse::ok("pong"),
-        ControlRequest::Status    => { /* legge DaemonState */ },
-        ControlRequest::Hatch{..} => { /* crea ServiceInfo, invia Announce */ },
-        ControlRequest::Flock     => { /* legge services + network_state */ },
-        ControlRequest::Farewell  => { /* rimuove servizio dal registry */ },
-        ControlRequest::Join{..}  => { /* invia JoinNetwork via net_tx */ },
+        ControlRequest::Ping             => ControlResponse::ok("pong"),
+        ControlRequest::Status           => { /* legge DaemonState */ },
+        ControlRequest::Hatch{..}        => { /* crea ServiceInfo, StorageManager, Announce */ },
+        ControlRequest::Flock            => { /* legge services + network_state */ },
+        ControlRequest::Farewell{..}     => { /* rimuove servizio dal registry */ },
+        ControlRequest::FarewellEvict{..}=> { /* purge storage, gossip evicting=true, reputation evict */ },
+        ControlRequest::Pause{..}        => { /* ServiceStatus::Paused, Announce */ },
+        ControlRequest::Resume{..}       => { /* ServiceStatus::Running, Announce */ },
+        ControlRequest::Leave{..}        => { /* precondition check, LeaveNetwork */ },
+        ControlRequest::Join{..}         => { /* JoinNetwork (internal) */ },
+        ControlRequest::PutFile{..}      => { /* RLNC encode, distribute fragments */ },
+        ControlRequest::GetFile{..}      => { /* fetch fragments, RLNC decode, CEK decrypt */ },
     }
 }
 ```
@@ -164,9 +185,14 @@ echo '{"cmd":"status"}' | socat -T2 - UNIX-CONNECT:$HOME/.local/share/billpouch/
 
 ## Casi di errore gestiti
 
-| Situazione                          | Messaggio d'errore                        |
-|-------------------------------------|-------------------------------------------|
-| `farewell` con ID inesistente       | `"service not found: <service_id>"`       |
-| `join` su rete già joined           | `"already joined network: <network_id>`" |
-| Identità non trovata al login       | `"identity not found"`                    |
-| Parsing JSON malformato             | Risposta di errore dal server             |
+| Situazione                                | Messaggio d'errore                                              |
+|-------------------------------------------|-----------------------------------------------------------------|
+| `farewell` con ID inesistente             | `"No service with id '<id>'"` |
+| `farewell_evict` su non-Pouch             | Ritorna ok (nessun StorageManager, bytes_freed=0) |
+| `pause` su servizio non running           | `"Service '<id>' is not running"` |
+| `resume` su servizio non paused           | `"Service '<id>' is not paused"` |
+| `leave` con servizi attivi                | ok con `blocked:true` e lista `blocking_services` |
+| `hatch pouch` secondo Pouch stesso network| `"a Pouch for network '<id>' already exists"` |
+| `join` su rete già joined                 | `"Already a member of network '<id>'"` |
+| Identità non trovata                      | `"identity not found"` |
+| Parsing JSON malformato                   | Risposta di errore dal server |

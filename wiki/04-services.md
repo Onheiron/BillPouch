@@ -90,11 +90,16 @@ bp hatch post --network my-network
 
 ```
   bp hatch  →  Starting  →  Running  →  (gossip announce)
-                                 │
-                          bp farewell
-                                 │
-                                 ▼
-                             Stopped
+                                 │           │
+                          bp farewell    bp pause --eta <m>
+                                 │           │
+                                 ▼           ▼
+                             Stopped      Paused  →  bp resume  →  Running
+                                │
+                         bp farewell --evict
+                                │
+                                ▼
+                          (storage purged + gossip evicting=true)
 ```
 
 ### ServiceStatus
@@ -102,10 +107,18 @@ bp hatch post --network my-network
 ```rust
 pub enum ServiceStatus {
     Starting,
+    /// Fully operational and announcing itself to the network.
     Running,
+    /// Temporarily paused for maintenance (ETA in minutes).
+    Paused { eta_minutes: u64, paused_at: u64 },
+    Stopping,
     Stopped,
+    Error(String),
 }
 ```
+
+> **Nota:** un solo Pouch per network per macchina. Il daemon rifiuta un secondo
+> `bp hatch pouch --network X` se esiste già un Pouch attivo su quella rete.
 
 ---
 

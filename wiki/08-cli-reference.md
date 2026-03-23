@@ -66,21 +66,32 @@ bp logout
 Avvia un nuovo servizio. Se il daemon non è in esecuzione, lo avvia automaticamente.
 
 ```bash
-bp hatch <service_type> [--network <id>] [--storage-bytes <n>] [--mount <path>]
+bp hatch <service_type> [--network <id>] [--tier <tier>] [--mount <path>]
 ```
 
 | Argomento/Flag    | Tipo   | Default    | Descrizione                           |
 |-------------------|--------|------------|---------------------------------------|
 | `service_type`    | string | *required* | `bill` \| `pouch` \| `post`           |
 | `--network`, `-n` | string | `"public"` | ID della rete di destinazione         |
-| `--storage-bytes` | u64    | —          | Solo `pouch`: byte da offrire         |
+| `--tier`          | string | —          | Solo `pouch`: `T1` `T2` `T3` `T4` `T5`|
 | `--mount`         | string | —          | Solo `bill`: percorso mount locale    |
 
-**Output:** restituisce il `service_id` (UUID v4) del servizio avviato.
+**Storage tier Pouch:**
+
+| Tier | Dimensione | Nome     |
+|------|------------|----------|
+| T1   | 10 GiB     | Pebble   |
+| T2   | 100 GiB    | Stone    |
+| T3   | 500 GiB    | Boulder  |
+| T4   | 1 TiB      | Rock     |
+| T5   | 5 TiB      | Monolith |
+
+> **Vincolo:** un solo Pouch per network per nodo. Un secondo `hatch pouch --network X`
+> viene rifiutato dal daemon.
 
 **Esempi:**
 ```bash
-bp hatch pouch --network amici --storage-bytes 10737418240  # 10 GiB
+bp hatch pouch --network amici --tier T2    # 100 GiB
 bp hatch bill  --network amici --mount /mnt/myfiles
 bp hatch post  --network amici
 ```
@@ -123,34 +134,65 @@ bp flock
 Ferma un servizio attivo tramite il suo UUID.
 
 ```bash
-bp farewell <service_id>
+bp farewell <service_id> [--evict]
+```
+
+| Flag      | Descrizione                                                                 |
+|-----------|-----------------------------------------------------------------------------|
+| `--evict` | Eviction permanente: purge dello storage su disco, annuncio gossip `evicting=true`, penalita' reputazione. **Irreversibile.** |
+
+**Esempi:**
+```bash
+bp farewell 550e8400-e29b-41d4-a716-446655440000         # stop semplice
+bp farewell 550e8400-e29b-41d4-a716-446655440000 --evict  # rimozione definitiva
+```
+
+---
+
+## `bp pause`
+
+Mette in pausa un servizio per manutenzione pianificata. Annuncia ai peer che il nodo
+tornerà online entro `--eta` minuti. Se non torna in tempo, il quality monitor applica
+incrementi al `fault_score`.
+
+```bash
+bp pause <service_id> --eta <minutes>
 ```
 
 **Esempio:**
 ```bash
-bp farewell 550e8400-e29b-41d4-a716-446655440000
+bp pause 550e8400-... --eta 60   # torno entro un'ora
 ```
-
-**Errore se** il service_id non esiste nel registry locale.
 
 ---
 
-## `bp join`
+## `bp resume`
 
-Unisciti a una rete BillPouch già esistente (sottoscrive il topic gossipsub).
+Ripristina un servizio precedentemente messo in pausa. Riannuncia il nodo come disponibile.
 
 ```bash
-bp join <network_id>
+bp resume <service_id>
 ```
 
-**Esempi:**
+---
+
+## `bp leave`
+
+Abbandona un network. Fallisce se ci sono servizi attivi su quella rete — fermarli prima.
+
 ```bash
-bp join amici
-bp join lavoro
-bp join public
+bp leave <network_id>
 ```
 
-**Errore se** sei già joined a quella rete.
+Se ci sono servizi attivi, il daemon risponde con `blocked: true` e una lista di comandi
+da eseguire per fermarli:
+
+```
+$ bp leave amici
+🚪 Cannot leave 'amici': 2 active service(s) must be stopped first
+   • 550e8400-... (pouch)  → bp farewell 550e8400-... --evict
+   • 7d82e401-... (bill)   → bp farewell 7d82e401-...
+```
 
 ---
 
