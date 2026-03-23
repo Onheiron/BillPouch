@@ -24,6 +24,16 @@ pub enum ControlRequest {
     Flock,
     /// Kill a running service by ID.
     Farewell { service_id: String },
+    /// Permanently evict a Pouch from the network.
+    ///
+    /// Announces to the network that this Pouch is going offline permanently,
+    /// records a reputation eviction, removes the service from `ServiceRegistry`,
+    /// and purges all on-disk fragment storage.
+    ///
+    /// Fragment redistribution to other peers is not yet automated — the
+    /// remaining network peers will detect missing fragments via Proof-of-Storage
+    /// challenges and trigger preventive recoding.
+    FarewellEvict { service_id: String },
     /// Pause a running Pouch service for planned maintenance.
     ///
     /// Announces via gossip that peers should mark this node's fragments as

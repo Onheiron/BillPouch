@@ -207,7 +207,7 @@ Per spegnimento pianificato con garanzia di ritorno:
 3. Se non torna entro T → `fault_score++` automatico per ogni PoS challenge mancato
 4. Al ritorno → PoS challenge immediato; se passa → nessuna penalità reputazione
 
-#### `bp farewell <service_id> --evict` — rimozione permanente con eviction — 🔲 Todo
+#### `bp farewell <service_id> --evict` — rimozione permanente con eviction — ✅ Done (v1)
 
 Procedura asincrona per rimozione definitiva di un Pouch:
 
@@ -291,6 +291,7 @@ Error: a Pouch for network X already exists on this node.
 - **feat:** `bp hatch pouch --tier T2` — sostituisce `--storage-bytes`; one-Pouch-per-network enforced in server
 - **feat:** `network/reputation.rs` — `ReputationTier` (R0–R4), `ReputationRecord`, `ReputationStore`; integrato in `DaemonState`
 - **feat:** `bp pause <service_id> --eta <minutes>` / `bp resume <service_id>` — manutenzione temporanea; gossip maintenance announcement; `ServiceStatus::Paused`; `ControlRequest::{Pause,Resume}`
+- **feat:** `bp farewell <service_id> --evict` — eviction permanente Pouch; purge storage su disco; gossip `evicting=true`; `ControlRequest::FarewellEvict`; `StorageManager::purge()` + `storage_summary()`; reputation `evict_without_notice()`
 
 ### v0.2.1 (Marzo 2026)
 - **feat:** Web dashboard — `GET /` in `bp-api` restituisce una SPA HTML/JS embedded via `include_str!`; dark UI; sezioni Status, Peers, Files, Marketplace; auto-refresh 5s; zero dipendenze runtime
