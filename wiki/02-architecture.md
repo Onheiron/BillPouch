@@ -4,35 +4,59 @@
 
 ```
 BillPouch/
-├── Cargo.toml                      # Cargo workspace (edition 2021, v0.1.0)
+├── Cargo.toml                          # Cargo workspace (edition 2021)
 └── crates/
-    ├── bp-core/                    # Libreria core (no I/O diretto)
+    ├── bp-core/                            # Libreria core (no I/O diretto)
     │   └── src/
-    │       ├── lib.rs              # Punto di entrata: re-esporta tutti i moduli
-    │       ├── identity.rs         # Gestione keypair Ed25519 — login/logout
-    │       ├── service.rs          # enum ServiceType + ServiceInfo + ServiceRegistry
-    │       ├── config.rs           # Percorsi config XDG-aware (directories crate)
-    │       ├── error.rs            # Tipo BpError unificato + BpResult alias
-    │       ├── daemon.rs           # Orchestratore daemon Tokio + PID file
+    │       ├── lib.rs                      # Re-esporta tutti i sottomoduli
+    │       ├── identity.rs                 # Ed25519 keypair, export/import, fingerprint
+    │       ├── service.rs                  # ServiceType, ServiceStatus, ServiceInfo, ServiceRegistry
+    │       ├── config.rs                   # Percorsi XDG-aware (directories crate)
+    │       ├── error.rs                    # BpError (thiserror) + BpResult alias
+    │       ├── daemon.rs                   # Orchestratore daemon Tokio + PID file
+    │       ├── invite.rs                   # Token invito: create/redeem, signed+encrypted
+    │       ├── coding/
+    │       │   ├── gf256.rs                # GF(2⁸) arithmetic (AES polynomial)
+    │       │   ├── rlnc.rs                 # RLNC encode/recode/decode (Gaussian elimination)
+    │       │   └── params.rs               # Adaptive k/n da peer QoS + target probability Ph
+    │       ├── storage/
+    │       │   ├── mod.rs                  # StorageManager — quota, disk layout, FragmentIndex
+    │       │   ├── fragment.rs             # In-memory FragmentIndex per chunk
+    │       │   ├── manifest.rs             # FileManifest + NetworkMetaKey (BLAKE3)
+    │       │   ├── meta.rs                 # PouchMeta (quota, available_bytes)
+    │       │   ├── encryption.rs           # ChunkCipher — CEK per-utente (ChaCha20-Poly1305)
+    │       │   └── tier.rs                 # StorageTier T1–T5 — quote fisse
     │       ├── network/
-    │       │   ├── behaviour.rs    # #[derive(NetworkBehaviour)] BillPouchBehaviour
-    │       │   ├── mod.rs          # Swarm loop + canale NetworkCommand (mpsc)
-    │       │   └── state.rs        # NetworkState: store gossip NodeInfo (HashMap)
+    │       │   ├── behaviour.rs            # BillPouchBehaviour (#[derive(NetworkBehaviour)])
+    │       │   ├── mod.rs                  # build_swarm(), run_network_loop(), NetworkCommand
+    │       │   ├── state.rs                # NetworkState: upsert, evict_stale, in_network
+    │       │   ├── qos.rs                  # PeerQos — RTT EWMA + fault score
+    │       │   ├── reputation.rs           # ReputationTier R0–R4, ReputationRecord, ReputationStore
+    │       │   ├── quality_monitor.rs      # Ping loop 60 s + Proof-of-Storage loop 300 s
+    │       │   ├── fragment_gossip.rs      # RemoteFragmentIndex + AnnounceIndex
+    │       │   ├── bootstrap.rs            # Persistent Kademlia peer cache (kad_peers.json)
+    │       │   └── kad_store.rs            # Kademlia record persistence
     │       └── control/
-    │           ├── mod.rs          # Re-export
-    │           ├── protocol.rs     # ControlRequest/Response JSON (CLI ↔ daemon)
-    │           └── server.rs       # Unix socket server + DaemonState + dispatch
-    └── bp-cli/                     # Binario `bp`
+    │           ├── protocol.rs             # ControlRequest/Response (JSON newline-delimited)
+    │           └── server.rs               # DaemonState (Arc), dispatch(), run_control_server()
+    ├── bp-cli/                             # Binario `bp`
+    │   └── src/
+    │       ├── main.rs                     # Entry point clap derive CLI
+    │       ├── client.rs                   # ControlClient — Unix socket thin client
+    │       └── commands/
+    │           ├── auth.rs                 # login / logout / export-identity / import-identity
+    │           ├── hatch.rs                # hatch (+ auto-avvio daemon)
+    │           ├── flock.rs                # flock
+    │           ├── farewell.rs             # farewell / --evict
+    │           ├── pause.rs                # pause / resume
+    │           ├── leave.rs                # leave
+    │           ├── join.rs                 # join (hidden — interno)
+    │           ├── put.rs                  # put (RLNC encode + CEK encrypt + distribute)
+    │           ├── get.rs                  # get (fetch + RLNC decode + CEK decrypt)
+    │           └── invite.rs               # invite create / invite join
+    └── bp-api/                             # REST API daemon (axum)
         └── src/
-            ├── main.rs             # Entry point clap derive CLI
-            ├── client.rs           # ControlClient — Unix socket thin client
-            └── commands/
-                ├── mod.rs
-                ├── auth.rs         # login / logout
-                ├── hatch.rs        # hatch (+ auto-avvio daemon)
-                ├── flock.rs        # flock
-                ├── farewell.rs     # farewell
-                └── join.rs         # join
+            └── main.rs                     # HTTP server + embedded SPA dashboard
 ```
 
 ## Principio di separazione bp-core / bp-cli
@@ -109,32 +133,48 @@ pub struct BillPouchBehaviour {
 
 ```rust
 pub struct DaemonState {
-    pub identity:      Identity,                      // keypair + fingerprint + alias
-    pub services:      RwLock<ServiceRegistry>,       // servizi locali attivi
-    pub network_state: Arc<RwLock<NetworkState>>,     // peer gossip noti
-    pub networks:      RwLock<Vec<String>>,           // reti joined
-    pub net_tx:        mpsc::Sender<NetworkCommand>,  // canale verso swarm
+    pub identity:              Identity,                          // keypair + fingerprint + alias
+    pub services:              RwLock<ServiceRegistry>,           // servizi locali attivi
+    pub network_state:         Arc<RwLock<NetworkState>>,         // peer gossip noti
+    pub networks:              RwLock<Vec<String>>,               // reti joined
+    pub net_tx:                mpsc::Sender<NetworkCommand>,      // canale verso swarm
+    pub storage_managers:      StorageManagerMap,                 // un manager per Pouch attivo
+    pub qos:                   Arc<RwLock<QosRegistry>>,          // RTT + fault score per peer
+    pub reputation:            RwLock<ReputationStore>,           // tier R0–R4 per peer
+    pub outgoing_assignments:  OutgoingAssignments,               // chunk_id → Vec<peer_id> tracking PoS
+    pub remote_fragment_index: Arc<RwLock<RemoteFragmentIndex>>,  // indice gossippato frammenti remoti
+    pub chunk_cek_hints:       RwLock<HashMap<String, [u8;32]>>,  // chunk_id → plaintext_hash CEK
 }
 ```
+
+I campi `storage_managers`, `qos`, `reputation` e `chunk_cek_hints` sono persistiti su disco
+(directory XDG). In particolare `chunk_cek_hints` viene salvato in `cek_hints.json` ad ogni
+`PutFile` e ricaricato al riavvio del daemon, garantendo che i file rimangano decifrabili.
 
 ## NetworkCommand (daemon → swarm)
 
 ```rust
 pub enum NetworkCommand {
-    JoinNetwork  { network_id: String },
-    LeaveNetwork { network_id: String },
-    Announce     { network_id: String, payload: Vec<u8> },
-    Dial         { addr: Multiaddr },
-    Shutdown,
+    JoinNetwork         { network_id: String },
+    LeaveNetwork        { network_id: String },
+    Announce            { network_id: String, payload: Vec<u8> },
+    Dial                { addr: Multiaddr },
+    DialRelay           { relay_addr: Multiaddr },
+    PushFragment        { peer_id: PeerId, fragment: EncodedFragment },
+    FetchChunkFragments { chunk_id: String, peer_id: PeerId, reply: oneshot::Sender<…> },
+    ProofOfStorage      { peer_id: PeerId, chunk_id: String, fragment_id: String, nonce: u64 },
+    AnnounceIndex       { network_id: String, announcements: Vec<…> },
 }
 ```
 
 ## Flusso di avvio daemon
 
 1. `config::ensure_dirs()` — crea le directory XDG se non esistono
-2. `Identity::load()` — legge il keypair da disk
-3. Scrive PID file (`~/.local/share/billpouch/bp.pid`)
-4. Crea `DaemonState` condiviso con `Arc`
-5. `network::build_swarm(keypair)` — costruisce il swarm libp2p
-6. `tokio::spawn(network::run_network_loop(...))` — loop swarm asincrono
-7. `run_control_server(state)` — loop Unix socket (tokio::select! main loop)
+2. `Identity::load()` — legge il keypair da disk (plaintext o Argon2id+ChaCha20)
+3. Scrive PID file (`~/.local/share/billpouch/daemon.pid`)
+4. Carica `load_cek_hints()` da `cek_hints.json` (survivono i riavvii)
+5. Crea `DaemonState` condiviso con `Arc`
+6. `network::build_swarm(keypair)` — costruisce il swarm libp2p (TCP+Noise+Yamux)
+7. `tokio::spawn(network::run_network_loop(...))` — loop swarm asincrono
+8. `tokio::spawn(run_quality_monitor(...))` — Ping 60 s + PoS 300 s
+9. `run_control_server(state)` — main loop Unix socket
