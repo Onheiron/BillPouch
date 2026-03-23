@@ -290,13 +290,17 @@ Create a signed, password-encrypted invite token for a network.  Share the token
 ```json
 {
   "network_id": "friends",
-  "password": "s3cr3t"
+  "invite_password": "secret",
+  "invitee_fingerprint": "a3f19c2b",
+  "ttl_hours": 24
 }
 ```
 
+(`invitee_fingerprint` and `ttl_hours` are optional.)
+
 **Response 200:**
 ```json
-{ "token": "<base64url-encoded invite token>" }
+{ "blob": "<hex invite token>", "network_id": "friends", "inviter_fingerprint": "a3f19c2b", "expires_at": 1711040000 }
 ```
 
 ---
@@ -308,14 +312,14 @@ Join a network by redeeming an invite token.  Equivalent to `bp invite join <tok
 **Body:**
 ```json
 {
-  "token": "<base64url-encoded invite token>",
-  "password": "s3cr3t"
+  "blob": "<hex invite token>",
+  "invite_password": "secret"
 }
 ```
 
 **Response 200:**
 ```json
-{ "status": "joined", "network_id": "friends" }
+{ "status": "joined", "network_id": "friends", "inviter_fingerprint": "a3f19c2b" }
 ```
 
 ---

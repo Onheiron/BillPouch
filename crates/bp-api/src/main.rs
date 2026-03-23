@@ -390,13 +390,17 @@ async fn get_file(
 #[derive(Deserialize)]
 struct CreateInviteBody {
     network_id: String,
-    password: String,
+    invite_password: String,
+    #[serde(default)]
+    invitee_fingerprint: Option<String>,
+    #[serde(default)]
+    ttl_hours: Option<u64>,
 }
 
 /// `POST /invites` — create a signed invite token for a network.
 ///
-/// Body JSON: `{ "network_id": "friends", "password": "secret" }`
-/// Returns: `{ "token": "<base64url>" }`
+/// Body JSON: `{ "network_id": "friends", "invite_password": "secret" }`
+/// Returns: `{ "blob": "<hex>", "network_id": "...", ... }`
 #[instrument(skip_all)]
 async fn create_invite(
     State(state): State<AppState>,
@@ -406,32 +410,64 @@ async fn create_invite(
         state,
         ControlRequest::CreateInvite {
             network_id: body.network_id,
-            password: body.password,
+            invitee_fingerprint: body.invitee_fingerprint,
+            invite_password: body.invite_password,
+            ttl_hours: body.ttl_hours,
         }
     )
 }
 
 #[derive(Deserialize)]
 struct RedeemInviteBody {
-    token: String,
-    password: String,
+    blob: String,
+    invite_password: String,
 }
 
-/// `POST /invites/redeem` — join a network by redeeming an invite token.
+/// `POST /invites/redeem` — redeem an invite token and join the network.
 ///
-/// Body JSON: `{ "token": "<base64url>", "password": "secret" }`
+/// Body JSON: `{ "blob": "<hex>", "invite_password": "secret" }`
+///
+/// The crypto (decrypt + verify) runs locally inside bp-api.  After saving
+/// the NetworkMetaKey the daemon is asked to subscribe to the network topics.
 #[instrument(skip_all)]
 async fn redeem_invite(
     State(state): State<AppState>,
     Json(body): Json<RedeemInviteBody>,
 ) -> Response {
-    daemon_call!(
-        state,
-        ControlRequest::RedeemInvite {
-            token: body.token,
-            password: body.password,
+    // 1. Decrypt and verify the invite token locally.
+    let payload = match bp_core::invite::redeem_invite(&body.blob, &body.invite_password) {
+        Ok(p) => p,
+        Err(e) => return api_error(StatusCode::UNPROCESSABLE_ENTITY, e.to_string()),
+    };
+
+    // 2. Persist the NetworkMetaKey.
+    if let Err(e) = bp_core::invite::save_invite_key(&payload) {
+        return api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+    }
+
+    let network_id = payload.network_id.clone();
+
+    // 3. Ask the daemon to join (subscribe gossip topics).
+    let path = state.socket_path.as_ref();
+    match DaemonClient::connect(path).await {
+        Err(e) => daemon_unavailable(e),
+        Ok(mut client) => {
+            let req = ControlRequest::Join {
+                network_id: network_id.clone(),
+            };
+            // Ignore join error (e.g. already joined) — the key is already saved.
+            let _ = client.call(req).await;
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "status": "joined",
+                    "network_id": network_id,
+                    "inviter_fingerprint": payload.inviter_fingerprint,
+                })),
+            )
+                .into_response()
         }
-    )
+    }
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
