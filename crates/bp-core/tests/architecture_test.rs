@@ -2464,7 +2464,10 @@ fn service_status_varianti_complete() {
     let variants = vec![
         ServiceStatus::Starting,
         ServiceStatus::Running,
-        ServiceStatus::Paused { eta_minutes: 10, paused_at: 0 },
+        ServiceStatus::Paused {
+            eta_minutes: 10,
+            paused_at: 0,
+        },
         ServiceStatus::Stopping,
         ServiceStatus::Stopped,
         ServiceStatus::Error("test".into()),

@@ -718,10 +718,7 @@ async fn leave_blocked_by_active_service() {
         !blocking.is_empty(),
         "blocking_services must name the active service"
     );
-    let ids: Vec<&str> = blocking
-        .iter()
-        .filter_map(|v| v["id"].as_str())
-        .collect();
+    let ids: Vec<&str> = blocking.iter().filter_map(|v| v["id"].as_str()).collect();
     assert!(
         ids.contains(&hatch_data.service_id.as_str()),
         "active service must appear in blocking_services"
