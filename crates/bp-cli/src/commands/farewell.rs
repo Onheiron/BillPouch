@@ -44,10 +44,7 @@ pub async fn farewell_evict(service_id: String) -> anyhow::Result<()> {
                 .get("fragments_removed")
                 .and_then(|f| f.as_u64())
                 .unwrap_or(0);
-            let bytes = v
-                .get("bytes_freed")
-                .and_then(|b| b.as_u64())
-                .unwrap_or(0);
+            let bytes = v.get("bytes_freed").and_then(|b| b.as_u64()).unwrap_or(0);
             println!(
                 "   Removed {} chunk(s), {} fragment(s), {} bytes.",
                 chunks, frags, bytes
