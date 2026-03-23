@@ -4,15 +4,15 @@
 
 ```
 crates/bp-core/tests/
-├── architecture_test.rs    # 43+ test unitari — verifica comportamento documentato
-└── integration_test.rs     # 1 test end-to-end — daemon reale su Unix socket
+├── architecture_test.rs    # 60+ test unitari — verifica comportamento documentato
+└── integration_test.rs     # test end-to-end — daemon reale su Unix socket
 ```
 
 ---
 
 ## Test di architettura (`architecture_test.rs`)
 
-Contiene **43+ test unitari** che verificano che il codice si comporti
+Contiene **60+ test unitari** che verificano che il codice si comporti
 esattamente come descritto nel README e nella documentazione.
 Sono organizzati in sezioni numerate:
 
@@ -29,6 +29,9 @@ Sono organizzati in sezioni numerate:
 | 9       | Swarm libp2p: costruzione con tutti i protocolli  |
 | 10      | Scenario completo: rete "amici" Carlo/Marco/Lucia |
 | 11      | Error handling                                    |
+| 12      | StorageTier: quota bytes, parse, ordering         |
+| 13      | ReputationTier: tier ordering, is_eligible_for    |
+| 14      | ServiceStatus::Paused: display, serializzazione   |
 
 ### Selezione test notevoli
 
@@ -67,21 +70,26 @@ Verifica: 6 nodi totali, 3 fingerprint distinte, storage totale 160 GB.
 
 ## Integration test (`integration_test.rs`)
 
-Test `full_user_journey` — verifica il percorso completo dell'utente:
+Test end-to-end — verifica il percorso completo dell'utente e i nuovi
+flussi v0.3:
 
-1. Avvia un daemon reale su Unix socket (processo in-process)
-2. `bp login --alias "test-pelican"` — crea identità
-3. `bp hatch pouch --network amici` — avvia storage
-4. `bp hatch bill  --network amici` — avvia file I/O
-5. `bp hatch post  --network amici` — avvia relay
-6. `bp flock` → verifica 3 servizi locali
-7. `bp status` → verifica peer_id, fingerprint, alias, networks
-8. `bp join lavoro` → seconda rete
-9. `bp status` → verifica networks = ["amici", "lavoro"]
-10. `bp farewell <service_id_post>` → ferma il relay
-11. `bp flock` → verifica 2 servizi rimasti
-12. `bp farewell <id_inesistente>` → verifica errore
-13. `bp join amici` → verifica errore "already joined"
+**`full_user_journey`** — hatch ×3, flock, status, join, farewell, ping, error cases
+
+**`put_file_get_file_roundtrip`** — encode RLNC + store + decode locale
+
+**`put_file_without_pouch_returns_error`** — PutFile senza Pouch attivo → errore esplicito
+
+**`get_file_unknown_chunk_returns_error`** — GetFile chunk_id inesistente → errore
+
+**`get_file_missing_cek_hint_returns_error`** — GetFile dopo riavvio daemon (hint scomparso) → errore CEK
+
+**`pause_resume_roundtrip`** (v0.3) — hatch pouch → Pause → verifica `status=paused` → Resume → verifica `status=running`
+
+**`farewell_evict_removes_service`** (v0.3) — hatch pouch → FarewellEvict → servizio scompare da flock
+
+**`leave_blocked_by_active_service`** (v0.3) — hatch → Leave → verifica `blocked=true` + service_id in lista
+
+**`hatch_second_pouch_same_network_rejected`** (v0.3) — hatch pouch → secondo hatch pouch stesso network → errore
 
 ---
 

@@ -34,12 +34,13 @@ crates/
       manifest.rs         # FileManifest + NetworkMetaKey (BLAKE3)
       meta.rs             # PouchMeta — capacity, available_bytes, has_capacity
       encryption.rs       # ChunkCipher — per-user CEK (ChaCha20-Poly1305)
-      agreement.rs        # StorageOffer + Agreement store
+      tier.rs             # StorageTier T1–T5 — fixed quota tiers
     network/
       behaviour.rs        # BillPouchBehaviour: gossipsub+kad+identify+mdns
       mod.rs              # NetworkCommand, build_swarm(), run_network_loop()
       state.rs            # NetworkState: upsert/evict_stale/in_network
       qos.rs              # PeerQos — RTT EWMA + fault score
+      reputation.rs       # ReputationTier R0–R4, ReputationStore
       quality_monitor.rs  # Ping loop (60 s) + Proof-of-Storage loop (300 s)
       fragment_gossip.rs  # RemoteFragmentIndex + AnnounceIndex gossip
       bootstrap.rs        # Persistent Kademlia peer cache (kad_peers.json)
@@ -54,8 +55,10 @@ crates/
       auth.rs             # login / logout / export-identity / import-identity
       hatch.rs            # hatch
       flock.rs            # flock
-      farewell.rs         # farewell
-      join.rs             # join / leave
+      farewell.rs         # farewell / --evict
+      pause.rs            # pause / resume
+      leave.rs            # leave
+      join.rs             # join (hidden, internal)
       put.rs              # put (RLNC encode + CEK encrypt + distribute)
       get.rs              # get (fetch fragments + RLNC decode + CEK decrypt)
       invite.rs           # invite create / invite join
@@ -160,5 +163,4 @@ cargo fmt --all
 
 ## Stato
 
-**v0.2.1 Alpha.** File transfer implementato: `bp put` / `bp get` (RLNC encode/decode, distribuzione frammenti ai Pouch remoti, QoS adattivo, CEK encryption, Proof-of-Storage).
-Vedi `wiki/12-status-roadmap.md` per dettagli.
+**v0.3.0-dev** — In sviluppo: StorageTier T1–T5, ReputationTier R0–R4, `bp pause/resume`, `bp farewell --evict`, `bp leave` precondition.
