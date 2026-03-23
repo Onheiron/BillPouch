@@ -222,6 +222,26 @@ impl StorageManager {
         &self.root
     }
 
+    /// Permanently delete all on-disk storage for this Pouch.
+    ///
+    /// Removes the entire storage directory (`fragments/`, `meta.json`, etc.).
+    /// Call only after the service has been removed from `ServiceRegistry`.
+    pub fn purge(&self) -> BpResult<()> {
+        if self.root.exists() {
+            std::fs::remove_dir_all(&self.root).map_err(BpError::Io)?;
+        }
+        tracing::info!(root=?self.root, "Pouch storage purged");
+        Ok(())
+    }
+
+    /// Summary of what is stored: (chunk_count, fragment_count, total_bytes).
+    pub fn storage_summary(&self) -> (usize, usize, u64) {
+        let chunks = self.index.chunk_ids().count();
+        let frags = self.index.fragment_count();
+        let bytes = self.index.total_bytes();
+        (chunks, frags, bytes)
+    }
+
     // ── Private helpers ───────────────────────────────────────────────────
 
     fn root_path(network_id: &str, service_id: &str) -> BpResult<PathBuf> {

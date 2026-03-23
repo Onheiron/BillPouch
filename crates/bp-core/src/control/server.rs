@@ -257,7 +257,104 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 None => ControlResponse::err(format!("No service with id '{}'", service_id)),
             }
         }
+        // ── FarewellEvict ─────────────────────────────────────────────────
+        ControlRequest::FarewellEvict { service_id } => {
+            let now_secs = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
 
+            // Look up the service.
+            let (network_id, service_type, peer_id_str) = {
+                let reg = state.services.read().unwrap();
+                match reg.get(&service_id) {
+                    Some(info) => (
+                        info.network_id.clone(),
+                        info.service_type,
+                        state.identity.peer_id.to_string(),
+                    ),
+                    None => {
+                        return ControlResponse::err(format!(
+                            "No service with id '{}'",
+                            service_id
+                        ));
+                    }
+                }
+            };
+
+            // Collect storage stats and purge disk (if Pouch).
+            let (chunk_count, fragment_count, bytes_freed) = {
+                let mut managers = state.storage_managers.write().unwrap();
+                if let Some(sm_lock) = managers.remove(&service_id) {
+                    let sm = sm_lock.read().unwrap();
+                    let summary = sm.storage_summary();
+                    if let Err(e) = sm.purge() {
+                        tracing::warn!("Failed to purge storage for {}: {}", service_id, e);
+                    }
+                    summary
+                } else {
+                    (0, 0, 0)
+                }
+            };
+
+            // Announce eviction via gossip before removing from registry.
+            {
+                let mut meta = HashMap::new();
+                meta.insert("evicting".to_string(), serde_json::Value::Bool(true));
+                let info = NodeInfo {
+                    peer_id: peer_id_str,
+                    user_fingerprint: state.identity.fingerprint.clone(),
+                    user_alias: state.identity.profile.alias.clone(),
+                    service_type,
+                    service_id: service_id.clone(),
+                    network_id: network_id.clone(),
+                    listen_addrs: vec![],
+                    announced_at: now_secs,
+                    metadata: meta,
+                };
+                if let Ok(payload) = serde_json::to_vec(&info) {
+                    let _ = state
+                        .net_tx
+                        .send(NetworkCommand::Announce {
+                            network_id: network_id.clone(),
+                            payload,
+                        })
+                        .await;
+                }
+            }
+
+            // Record reputation eviction.
+            {
+                let local_peer = state.identity.peer_id.to_string();
+                let mut rep = state.reputation.write().unwrap();
+                rep.get_or_create(&local_peer, now_secs)
+                    .evict_without_notice(now_secs);
+            }
+
+            // Remove from registry.
+            state.services.write().unwrap().remove(&service_id);
+
+            tracing::info!(
+                service_id = %service_id,
+                chunks = chunk_count,
+                fragments = fragment_count,
+                bytes = bytes_freed,
+                "Pouch evicted"
+            );
+
+            ControlResponse::ok(serde_json::json!({
+                "service_id": service_id,
+                "network_id": network_id,
+                "chunks_removed": chunk_count,
+                "fragments_removed": fragment_count,
+                "bytes_freed": bytes_freed,
+                "message": format!(
+                    "Pouch {} evicted — {} chunk(s), {} fragment(s), {} bytes freed. \
+                     Network peers will rebalance via Proof-of-Storage.",
+                    service_id, chunk_count, fragment_count, bytes_freed
+                ),
+            }))
+        }
         // ── Pause ─────────────────────────────────────────────────────────
         ControlRequest::Pause {
             service_id,

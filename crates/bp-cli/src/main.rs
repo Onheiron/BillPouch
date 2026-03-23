@@ -9,6 +9,7 @@
 //!    bp hatch  <type> [--network <id>] [--tier T2]  Start a service (bill|pouch|post)
 //!    bp flock                       Show peers and network summary
 //!    bp farewell <service_id>       Stop a running service
+//!    bp farewell <service_id> --evict  Permanently evict a Pouch from the network
 //!    bp pause <service_id> --eta <m> Pause for maintenance (ETA in minutes)
 //!    bp resume <service_id>         Resume a paused service
 //!    bp invite create --network <id> --invite-password <pw>  Create invite token
@@ -114,6 +115,11 @@ enum Cmd {
     Farewell {
         /// The service ID returned by `bp hatch`.
         service_id: String,
+        /// Permanently evict a Pouch: purges all local fragment storage and
+        /// announces to the network that this node is going offline for good.
+        /// This is irreversible.
+        #[arg(long)]
+        evict: bool,
     },
 
     /// Pause a running service for planned maintenance.
@@ -342,8 +348,12 @@ async fn main() -> anyhow::Result<()> {
             commands::flock::flock().await?;
         }
 
-        Some(Cmd::Farewell { service_id }) => {
-            commands::farewell::farewell(service_id).await?;
+        Some(Cmd::Farewell { service_id, evict }) => {
+            if evict {
+                commands::farewell::farewell_evict(service_id).await?;
+            } else {
+                commands::farewell::farewell(service_id).await?;
+            }
         }
 
         Some(Cmd::Pause { service_id, eta }) => {
