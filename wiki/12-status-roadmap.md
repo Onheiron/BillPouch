@@ -3,7 +3,7 @@
 ## Versione corrente
 
 **v0.2.1** (Alpha) — Marzo 2026  
-**v0.3.0-dev** — implementazione in corso
+**v0.3.0-dev** — feature implementate, cleanup/test in corso
 
 ---
 
@@ -43,6 +43,10 @@
 | **Network quality monitor**       | ✅ Done | `network/quality_monitor.rs` — Ping loop 60s, RTT EWMA → QosRegistry |
 | **Proof-of-Storage challenge**    | ✅ Done | `network/quality_monitor.rs` — PoS loop 300s, BLAKE3 challenge, fault score |
 | **FragmentIndex gossip**           | ✅ Done | `network/fragment_gossip.rs` — `RemoteFragmentIndex`, topic `billpouch/v1/{net}/index`, targeted GetFile |
+| **StorageTier T1–T5**              | ✅ Done | `storage/tier.rs` — `quota_bytes()`, `parse()`, `for_file_size()`, serde, 7 unit test |
+| **ReputationTier R0–R4**           | ✅ Done | `network/reputation.rs` — `ReputationRecord`, `ReputationStore`, 9 unit test |
+| **ServiceStatus::Paused**          | ✅ Done | `service.rs` — `Paused { eta_minutes, paused_at }`, `Stopping`, `Error(String)` |
+| **One-Pouch-per-network**          | ✅ Done | `control/server.rs` — rifiuta secondo `hatch pouch` su stesso network per stessa identità |
 
 ### CLI (`bp-cli`)
 
@@ -50,10 +54,12 @@
 |------------------|---------|--------------------------------------------------------------|
 | `bp login`       | ✅ Done | Con `--alias` opzionale                                      |
 | `bp logout`      | ✅ Done | Rimozione irreversibile keypair                              |
-| `bp hatch`       | ✅ Done | Auto-avvio daemon; Pouch inits StorageManager + quota        |
+| `bp hatch`       | ✅ Done | Auto-avvio daemon; Pouch inits StorageManager + quota; `--tier T1..T5`; one-Pouch-per-network enforced |
 | `bp flock`       | ✅ Done | Output formattato con tabelle                                |
-| `bp farewell`    | ✅ Done | Stop servizio per UUID                                       |
-| `bp join`        | ✅ Done | Join rete, errore se già joined                              |
+| `bp farewell`    | ✅ Done | Stop servizio per UUID; `--evict` per eviction permanente (purge + gossip + reputation) |
+| `bp pause`       | ✅ Done | Manutenzione temporanea con ETA; gossip maintenance; `ServiceStatus::Paused` |
+| `bp resume`      | ✅ Done | Ripristina servizio paused; re-annuncia gossip willing        |
+| `bp leave`       | ✅ Done | Abbandona network; precondition check servizi attivi; blocklist hint |
 | `bp --daemon`    | ✅ Done | Avvio daemon interno                                         |
 | `bp put`     | ✅ Done | RLNC encode + store locale + distribute a Pouch remoti; `--ph`/`--q-target` al posto di `--k`/`--n` |
 | `bp get`     | ✅ Done | Decode da frammenti locali + fetch remoti se necessario      |
@@ -88,7 +94,7 @@
 
 ---
 
-## Stato sessione di sviluppo (aggiornato 21 Marzo 2026)
+## Stato sessione di sviluppo (aggiornato 23 Marzo 2026)
 
 Ultimo commit verde atteso: branch `main` (post push).
 
@@ -135,6 +141,13 @@ Ultimo commit verde atteso: branch `main` (post push).
 | 38 | `068300e` | test: `ENV_LOCK` mutex in test invite — serializzazione test che mutano `HOME`/`XDG_DATA_HOME` |
 | 39 | `487a26d` | feat: **Multi-device identity** — `ExportedIdentity`, `ExportedKeyData`; `Identity::export_to_file` / `import_from_file`; `bp export-identity --out` / `bp import-identity [--force]` |
 | 40 | `d4cfa3b` | feat: **Web dashboard** — UI HTML/JS embedded in `bp-api`; `GET /` restituisce la dashboard; auto-refresh 5s |
+| 41 | `various` | refactor: **Rimozione storage marketplace** — `StorageOffer/Agreement`, `ProposeStorage/AcceptStorage/ListAgreements/ListOffers`, `bp offer/agree` CLI, REST `/marketplace/*` |
+| 42 | `various` | feat: **StorageTier** T1–T5 (`storage/tier.rs`); `bp hatch pouch --tier`; one-Pouch-per-network enforced |
+| 43 | `various` | feat: **ReputationTier** R0–R4 (`network/reputation.rs`); `ReputationStore` in `DaemonState` |
+| 44 | `various` | feat: **Pause/Resume** — `bp pause --eta` / `bp resume`; `ServiceStatus::Paused`; gossip maintenance |
+| 45 | `various` | feat: **FarewellEvict** — `bp farewell --evict`; `StorageManager::purge()`; reputation evict_without_notice |
+| 46 | `various` | feat: **Leave precondition** — `bp leave` blocca se servizi attivi; hint comandi di stop |
+| 47 | `e0bee5e` | docs+tests: wiki 04/05/08; nuovi test architecture e integration per v0.3 features |
 
 ---
 

@@ -5,6 +5,33 @@ All notable changes to BillPouch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — v0.3.0-dev
+
+### Breaking Changes
+
+- `bp hatch pouch --storage-bytes <N>` rimosso — sostituito da `--tier <T1..T5>`
+- `bp join` rimosso dal CLI pubblico — resta hidden per uso interno script
+- Storage marketplace rimosso: `bp offer`, `bp agree`, `bp offers`, `bp agreements`, REST `/marketplace/*`
+
+### Added
+
+- **`StorageTier` T1–T5** (`storage/tier.rs`) — tier fissi 10 GiB / 100 GiB / 500 GiB / 1 TiB / 5 TiB con `quota_bytes()`, `participating_tiers()`, `parse()`, serde
+- **`ReputationTier` R0–R4** (`network/reputation.rs`) — tier discreti di reputazione basati su storico uptime e PoS, `ReputationRecord`, `ReputationStore` in `DaemonState`
+- **`ServiceStatus::Paused`** (`service.rs`) — con `eta_minutes` e `paused_at`; aggiornati `Stopping` e `Error(String)`
+- **`ControlRequest::Pause` / `Resume`** — manutenzione temporanea con announcement gossip
+- **`ControlRequest::FarewellEvict`** — eviction permanente Pouch: purge storage + gossip `evicting=true` + penalità reputazione
+- **`ControlRequest::Leave`** aggiornato — precondition check servizi attivi; risposta con `blocked: true` e lista hint di stop
+- **`StorageManager::purge()` / `storage_summary()`** — rimozione definitiva storage su disco
+- **One-Pouch-per-network enforcement** — il daemon rifiuta un secondo `hatch pouch --network X` sulla stessa identità
+- **`bp pause <service_id> --eta <minutes>`** / **`bp resume <service_id>`** — nuovi comandi CLI
+- **`bp farewell --evict`** — flag eviction permanente
+- **`BpError::InvalidInput`** — nuova variante per input non validi (es. tier sconosciuto)
+
+### Tests
+
+- Nuovi test architettura (sezioni 11–13): `StorageTier`, `ReputationTier`, `ServiceStatus::Paused` lifecycle
+- Nuovi integration test: `pause_resume_roundtrip`, `farewell_evict_removes_service`, `leave_blocked_by_active_service`, `hatch_second_pouch_same_network_rejected`
+
 ## [0.1.3](https://github.com/Onheiron/BillPouch/compare/billpouch-v0.1.2...billpouch-v0.1.3) (2026-03-18)
 
 
