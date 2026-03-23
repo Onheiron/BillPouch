@@ -6,17 +6,24 @@
 //!
 //! ## Endpoints
 //!
-//! | Method | Path                         | Description                        |
-//! |--------|------------------------------|------------------------------------|
-//! | GET    | `/ping`                      | Liveness check                     |
-//! | GET    | `/status`                    | Daemon identity + services         |
-//! | GET    | `/peers`                     | Known peers + network info         |
-//! | POST   | `/services`                  | Hatch a new service                |
-//! | DELETE | `/services/:service_id`      | Stop a service                     |
-//! | POST   | `/networks/join`             | Join a gossip network              |
-//! | POST   | `/networks/leave`            | Leave a gossip network             |
-//! | POST   | `/files`                     | Store a file (base64 chunk_data)   |
-//! | GET    | `/files/:chunk_id`           | Retrieve a file (`?network=public`)|//! | POST   | `/relay/connect`             | Dial a relay node for NAT traversal|//!
+//! | Method | Path                              | Description                             |
+//! |--------|-----------------------------------|-----------------------------------------|
+//! | GET    | `/ping`                           | Liveness check                          |
+//! | GET    | `/status`                         | Daemon identity + services              |
+//! | GET    | `/peers`                          | Known peers + network info              |
+//! | POST   | `/services`                       | Hatch a new service                     |
+//! | DELETE | `/services/:service_id`           | Stop a service                          |
+//! | DELETE | `/services/:service_id?evict=true`| Stop + evict all stored fragments       |
+//! | POST   | `/services/:service_id/pause`     | Pause a service (body: `eta_minutes`)   |
+//! | POST   | `/services/:service_id/resume`    | Resume a paused service                 |
+//! | POST   | `/networks/join`                  | Join a gossip network                   |
+//! | POST   | `/networks/leave`                 | Leave a gossip network                  |
+//! | POST   | `/files`                          | Store a file (base64 chunk_data)        |
+//! | GET    | `/files/:chunk_id`                | Retrieve a file (`?network=public`)     |
+//! | POST   | `/relay/connect`                  | Dial a relay node for NAT traversal     |
+//! | POST   | `/invites`                        | Create an invite token                  |
+//! | POST   | `/invites/redeem`                 | Join a network via invite token         |
+//!
 //! ## Usage
 //!
 //! ```text
@@ -187,10 +194,60 @@ async fn hatch(State(state): State<AppState>, Json(body): Json<HatchBody>) -> Re
     }
 }
 
-/// `DELETE /services/:service_id` — stop a service.
+/// Optional query parameters for `DELETE /services/:service_id`.
+#[derive(Deserialize, Default)]
+struct FarewellQuery {
+    /// If `true`, the daemon also evicts all fragments stored by this service.
+    #[serde(default)]
+    evict: bool,
+}
+
+/// `DELETE /services/:service_id[?evict=true]` — stop (and optionally evict) a service.
 #[instrument(skip_all)]
-async fn farewell(State(state): State<AppState>, Path(service_id): Path<String>) -> Response {
-    daemon_call!(state, ControlRequest::Farewell { service_id })
+async fn farewell(
+    State(state): State<AppState>,
+    Path(service_id): Path<String>,
+    Query(query): Query<FarewellQuery>,
+) -> Response {
+    if query.evict {
+        daemon_call!(state, ControlRequest::FarewellEvict { service_id })
+    } else {
+        daemon_call!(state, ControlRequest::Farewell { service_id })
+    }
+}
+
+// ── /services/:id/pause  /services/:id/resume ─────────────────────────────────
+
+#[derive(Deserialize)]
+struct PauseBody {
+    eta_minutes: u64,
+}
+
+/// `POST /services/:service_id/pause` — pause a running service.
+///
+/// Body JSON: `{ "eta_minutes": 30 }`
+#[instrument(skip_all)]
+async fn pause_service(
+    State(state): State<AppState>,
+    Path(service_id): Path<String>,
+    Json(body): Json<PauseBody>,
+) -> Response {
+    daemon_call!(
+        state,
+        ControlRequest::Pause {
+            service_id,
+            eta_minutes: body.eta_minutes,
+        }
+    )
+}
+
+/// `POST /services/:service_id/resume` — resume a paused service.
+#[instrument(skip_all)]
+async fn resume_service(
+    State(state): State<AppState>,
+    Path(service_id): Path<String>,
+) -> Response {
+    daemon_call!(state, ControlRequest::Resume { service_id })
 }
 
 // ── /networks ─────────────────────────────────────────────────────────────────
@@ -331,6 +388,55 @@ async fn get_file(
     }
 }
 
+// ── /invites ─────────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct CreateInviteBody {
+    network_id: String,
+    password: String,
+}
+
+/// `POST /invites` — create a signed invite token for a network.
+///
+/// Body JSON: `{ "network_id": "friends", "password": "secret" }`
+/// Returns: `{ "token": "<base64url>" }`
+#[instrument(skip_all)]
+async fn create_invite(
+    State(state): State<AppState>,
+    Json(body): Json<CreateInviteBody>,
+) -> Response {
+    daemon_call!(
+        state,
+        ControlRequest::CreateInvite {
+            network_id: body.network_id,
+            password: body.password,
+        }
+    )
+}
+
+#[derive(Deserialize)]
+struct RedeemInviteBody {
+    token: String,
+    password: String,
+}
+
+/// `POST /invites/redeem` — join a network by redeeming an invite token.
+///
+/// Body JSON: `{ "token": "<base64url>", "password": "secret" }`
+#[instrument(skip_all)]
+async fn redeem_invite(
+    State(state): State<AppState>,
+    Json(body): Json<RedeemInviteBody>,
+) -> Response {
+    daemon_call!(
+        state,
+        ControlRequest::RedeemInvite {
+            token: body.token,
+            password: body.password,
+        }
+    )
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 /// Body for `POST /relay/connect`.
@@ -381,11 +487,15 @@ async fn main() -> anyhow::Result<()> {
         .route("/peers", get(peers))
         .route("/services", post(hatch))
         .route("/services/:service_id", delete(farewell))
+        .route("/services/:service_id/pause", post(pause_service))
+        .route("/services/:service_id/resume", post(resume_service))
         .route("/networks/join", post(network_join))
         .route("/networks/leave", post(network_leave))
         .route("/files", post(put_file))
         .route("/files/:chunk_id", get(get_file))
         .route("/relay/connect", post(relay_connect))
+        .route("/invites", post(create_invite))
+        .route("/invites/redeem", post(redeem_invite))
         .with_state(state);
 
     let addr: SocketAddr = format!("{}:{}", args.host, args.port)
