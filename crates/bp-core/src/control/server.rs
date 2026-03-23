@@ -91,6 +91,13 @@ fn persist_cek_hints(hints: &HashMap<String, [u8; 32]>) {
             return;
         }
     };
+    // Ensure the parent directory exists before writing.
+    if let Some(parent) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            tracing::warn!("Failed to create cek_hints dir: {e}");
+            return;
+        }
+    }
     let hex_map: HashMap<&str, String> = hints
         .iter()
         .map(|(k, v)| (k.as_str(), hex::encode(v)))
@@ -1118,7 +1125,7 @@ mod tests {
     /// `load_cek_hints` on a non-existent file returns an empty map.
     #[test]
     fn load_cek_hints_missing_file_returns_empty() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempdir();
         std::env::set_var("XDG_DATA_HOME", &tmp);
         let hints = load_cek_hints();
@@ -1129,7 +1136,7 @@ mod tests {
     /// `persist_cek_hints` + `load_cek_hints` round-trip.
     #[test]
     fn cek_hints_persist_load_roundtrip() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempdir();
         std::env::set_var("XDG_DATA_HOME", &tmp);
 
@@ -1151,7 +1158,7 @@ mod tests {
     /// `load_cek_hints` with a corrupt JSON file returns an empty map without panicking.
     #[test]
     fn load_cek_hints_corrupt_file_returns_empty() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempdir();
         std::env::set_var("XDG_DATA_HOME", &tmp);
 
