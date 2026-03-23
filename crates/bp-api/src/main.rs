@@ -243,10 +243,7 @@ async fn pause_service(
 
 /// `POST /services/:service_id/resume` — resume a paused service.
 #[instrument(skip_all)]
-async fn resume_service(
-    State(state): State<AppState>,
-    Path(service_id): Path<String>,
-) -> Response {
+async fn resume_service(State(state): State<AppState>, Path(service_id): Path<String>) -> Response {
     daemon_call!(state, ControlRequest::Resume { service_id })
 }
 
