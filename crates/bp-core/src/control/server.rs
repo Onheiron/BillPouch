@@ -1110,46 +1110,48 @@ async fn announce_self(
 mod tests {
     use super::*;
     use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    /// Serialize all env-mutating tests to prevent races on XDG_DATA_HOME.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     /// `load_cek_hints` on a non-existent file returns an empty map.
     #[test]
     fn load_cek_hints_missing_file_returns_empty() {
-        // Point $HOME to a temp dir that contains no cek_hints.json.
+        let _g = ENV_LOCK.lock().unwrap();
         let tmp = tempdir();
         std::env::set_var("XDG_DATA_HOME", &tmp);
         let hints = load_cek_hints();
-        assert!(hints.is_empty(), "expected empty map for missing file");
         std::env::remove_var("XDG_DATA_HOME");
+        assert!(hints.is_empty(), "expected empty map for missing file");
     }
 
     /// `persist_cek_hints` + `load_cek_hints` round-trip.
     #[test]
     fn cek_hints_persist_load_roundtrip() {
+        let _g = ENV_LOCK.lock().unwrap();
         let tmp = tempdir();
         std::env::set_var("XDG_DATA_HOME", &tmp);
 
-        // Build a small hints map.
         let mut hints: HashMap<String, [u8; 32]> = HashMap::new();
         let key_a = *b"abcdefghijklmnopqrstuvwxyz012345";
         let key_b = *b"ABCDEFGHIJKLMNOPQRSTUVWXYZ678901";
         hints.insert("chunk-aaa".to_string(), key_a);
         hints.insert("chunk-bbb".to_string(), key_b);
 
-        // Persist to disk.
         persist_cek_hints(&hints);
-
-        // Load back and compare.
         let loaded = load_cek_hints();
+        std::env::remove_var("XDG_DATA_HOME");
+
         assert_eq!(loaded.len(), 2, "wrong number of hints loaded");
         assert_eq!(loaded["chunk-aaa"], key_a);
         assert_eq!(loaded["chunk-bbb"], key_b);
-
-        std::env::remove_var("XDG_DATA_HOME");
     }
 
     /// `load_cek_hints` with a corrupt JSON file returns an empty map without panicking.
     #[test]
     fn load_cek_hints_corrupt_file_returns_empty() {
+        let _g = ENV_LOCK.lock().unwrap();
         let tmp = tempdir();
         std::env::set_var("XDG_DATA_HOME", &tmp);
 
@@ -1161,14 +1163,13 @@ mod tests {
         std::fs::write(&path, b"NOT_VALID_JSON").unwrap();
 
         let hints = load_cek_hints();
-        assert!(hints.is_empty(), "corrupt file must yield empty map");
-
         std::env::remove_var("XDG_DATA_HOME");
+
+        assert!(hints.is_empty(), "corrupt file must yield empty map");
     }
 
     // ── helpers ───────────────────────────────────────────────────────────
 
-    /// Create a temporary directory and return its path as a String.
     fn tempdir() -> String {
         let mut path = std::env::temp_dir();
         path.push(format!("bp_test_{}", uuid::Uuid::new_v4()));
