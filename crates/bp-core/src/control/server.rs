@@ -47,10 +47,15 @@ pub fn load_cek_hints() -> HashMap<String, [u8; 32]> {
             return HashMap::new();
         }
     };
+    load_cek_hints_at(&path)
+}
+
+/// Core deserialization logic — reads from an explicit `path`.
+fn load_cek_hints_at(path: &std::path::Path) -> HashMap<String, [u8; 32]> {
     if !path.exists() {
         return HashMap::new();
     }
-    let data = match std::fs::read_to_string(&path) {
+    let data = match std::fs::read_to_string(path) {
         Ok(d) => d,
         Err(e) => {
             tracing::warn!("Failed to read cek_hints: {e}");
@@ -91,6 +96,11 @@ fn persist_cek_hints(hints: &HashMap<String, [u8; 32]>) {
             return;
         }
     };
+    persist_cek_hints_at(&path, hints);
+}
+
+/// Core serialization logic — writes to an explicit `path`.
+fn persist_cek_hints_at(path: &std::path::Path, hints: &HashMap<String, [u8; 32]>) {
     // Ensure the parent directory exists before writing.
     if let Some(parent) = path.parent() {
         if let Err(e) = std::fs::create_dir_all(parent) {
@@ -104,7 +114,7 @@ fn persist_cek_hints(hints: &HashMap<String, [u8; 32]>) {
         .collect();
     match serde_json::to_string(&hex_map) {
         Ok(json) => {
-            if let Err(e) = std::fs::write(&path, json) {
+            if let Err(e) = std::fs::write(path, json) {
                 tracing::warn!("Failed to write cek_hints: {e}");
             }
         }
@@ -1117,28 +1127,21 @@ async fn announce_self(
 mod tests {
     use super::*;
     use std::collections::HashMap;
-    use std::sync::Mutex;
 
-    /// Serialize all env-mutating tests to prevent races on XDG_DATA_HOME.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
-    /// `load_cek_hints` on a non-existent file returns an empty map.
+    /// `load_cek_hints_at` on a non-existent path returns an empty map.
     #[test]
     fn load_cek_hints_missing_file_returns_empty() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let tmp = tempdir();
-        std::env::set_var("XDG_DATA_HOME", &tmp);
-        let hints = load_cek_hints();
-        std::env::remove_var("XDG_DATA_HOME");
+        let dir = tempdir();
+        let path = dir.join("cek_hints.json");
+        let hints = load_cek_hints_at(&path);
         assert!(hints.is_empty(), "expected empty map for missing file");
     }
 
-    /// `persist_cek_hints` + `load_cek_hints` round-trip.
+    /// `persist_cek_hints_at` + `load_cek_hints_at` round-trip.
     #[test]
     fn cek_hints_persist_load_roundtrip() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let tmp = tempdir();
-        std::env::set_var("XDG_DATA_HOME", &tmp);
+        let dir = tempdir();
+        let path = dir.join("cek_hints.json");
 
         let mut hints: HashMap<String, [u8; 32]> = HashMap::new();
         let key_a = *b"abcdefghijklmnopqrstuvwxyz012345";
@@ -1146,41 +1149,31 @@ mod tests {
         hints.insert("chunk-aaa".to_string(), key_a);
         hints.insert("chunk-bbb".to_string(), key_b);
 
-        persist_cek_hints(&hints);
-        let loaded = load_cek_hints();
-        std::env::remove_var("XDG_DATA_HOME");
+        persist_cek_hints_at(&path, &hints);
+        let loaded = load_cek_hints_at(&path);
 
         assert_eq!(loaded.len(), 2, "wrong number of hints loaded");
         assert_eq!(loaded["chunk-aaa"], key_a);
         assert_eq!(loaded["chunk-bbb"], key_b);
     }
 
-    /// `load_cek_hints` with a corrupt JSON file returns an empty map without panicking.
+    /// `load_cek_hints_at` with a corrupt JSON file returns an empty map without panicking.
     #[test]
     fn load_cek_hints_corrupt_file_returns_empty() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let tmp = tempdir();
-        std::env::set_var("XDG_DATA_HOME", &tmp);
-
-        // Write garbage to cek_hints.json.
-        let path = std::path::Path::new(&tmp)
-            .join("billpouch")
-            .join("cek_hints.json");
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let dir = tempdir();
+        let path = dir.join("cek_hints.json");
         std::fs::write(&path, b"NOT_VALID_JSON").unwrap();
 
-        let hints = load_cek_hints();
-        std::env::remove_var("XDG_DATA_HOME");
-
+        let hints = load_cek_hints_at(&path);
         assert!(hints.is_empty(), "corrupt file must yield empty map");
     }
 
     // ── helpers ───────────────────────────────────────────────────────────
 
-    fn tempdir() -> String {
+    fn tempdir() -> std::path::PathBuf {
         let mut path = std::env::temp_dir();
         path.push(format!("bp_test_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&path).unwrap();
-        path.to_string_lossy().to_string()
+        path
     }
 }
