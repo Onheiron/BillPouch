@@ -1087,6 +1087,7 @@ fn protocollo_leave_request_serde() {
     // Serializzazione
     let req = ControlRequest::Leave {
         network_id: "amici".into(),
+        force: false,
     };
     let json = serde_json::to_string(&req).unwrap();
     assert!(json.contains("\"cmd\":\"leave\""));
@@ -1096,7 +1097,7 @@ fn protocollo_leave_request_serde() {
     let back: ControlRequest =
         serde_json::from_str(r#"{"cmd":"leave","network_id":"amici"}"#).unwrap();
     match back {
-        ControlRequest::Leave { network_id } => assert_eq!(network_id, "amici"),
+        ControlRequest::Leave { network_id, .. } => assert_eq!(network_id, "amici"),
         _ => panic!("Deve essere Leave"),
     }
 }
@@ -1905,6 +1906,7 @@ async fn dispatch_leave_rete_raggiunta() {
         &sp,
         &ControlRequest::Leave {
             network_id: "bye-net".into(),
+            force: false,
         },
     )
     .await;
@@ -1925,6 +1927,7 @@ async fn dispatch_leave_rete_non_raggiunta() {
         &sp,
         &ControlRequest::Leave {
             network_id: "non-raggiunta".into(),
+            force: false,
         },
     )
     .await;
