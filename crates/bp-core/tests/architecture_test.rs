@@ -509,6 +509,56 @@ fn protocollo_ping_request() {
 }
 
 #[test]
+fn protocollo_status_request_serializza_e_deserializza() {
+    // Claim: "bp status sends ControlRequest::Status to the daemon"
+    let req = ControlRequest::Status;
+    let json = serde_json::to_string(&req).unwrap();
+    assert!(
+        json.contains("\"cmd\":\"status\""),
+        "Status deve serializzare con cmd=status"
+    );
+
+    let decoded: ControlRequest = serde_json::from_str(&json).unwrap();
+    assert!(
+        matches!(decoded, ControlRequest::Status),
+        "Deve deserializzare come ControlRequest::Status"
+    );
+}
+
+#[test]
+fn protocollo_status_data_campi_obbligatori() {
+    // Claim: "StatusData contains peer_id, fingerprint, alias, local_services, networks, known_peers, version"
+    use bp_core::control::protocol::StatusData;
+
+    let data = StatusData {
+        peer_id: "12D3KooWTest".into(),
+        fingerprint: "a3f19c2b00000000".into(),
+        alias: Some("testbird".into()),
+        local_services: vec![],
+        networks: vec!["public".into()],
+        known_peers: 3,
+        version: env!("CARGO_PKG_VERSION").into(),
+    };
+
+    let json = serde_json::to_string(&data).unwrap();
+    assert!(json.contains("\"peer_id\""));
+    assert!(json.contains("\"fingerprint\""));
+    assert!(json.contains("\"alias\""));
+    assert!(json.contains("\"local_services\""));
+    assert!(json.contains("\"networks\""));
+    assert!(json.contains("\"known_peers\""));
+    assert!(json.contains("\"version\""));
+
+    // Round-trip
+    let decoded: StatusData = serde_json::from_str(&json).unwrap();
+    assert_eq!(decoded.peer_id, "12D3KooWTest");
+    assert_eq!(decoded.fingerprint, "a3f19c2b00000000");
+    assert_eq!(decoded.alias, Some("testbird".into()));
+    assert_eq!(decoded.known_peers, 3);
+    assert!(decoded.networks.contains(&"public".to_string()));
+}
+
+#[test]
 fn protocollo_response_ok_con_data() {
     let resp = ControlResponse::ok(serde_json::json!({"key": "value"}));
     let json = serde_json::to_string(&resp).unwrap();
