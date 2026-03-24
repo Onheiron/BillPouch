@@ -98,6 +98,38 @@ bp hatch post  --network amici
 
 ---
 
+## `bp status`
+
+Mostra identità daemon, servizi locali e conteggio peer in un formato compatto.
+Per il dettaglio completo dei peer usa `bp flock`.
+
+```bash
+bp status
+```
+
+**Output esempio:**
+```
+╔══════════════════════════════════════════════════════╗
+║           🦤  BillPouch — Daemon Status              ║
+╚══════════════════════════════════════════════════════╝
+
+🔑 Identity
+   fingerprint  : a3f19c2b
+   alias         : carlo
+   peer_id       : 12D3KooWGjE4XmRWauN…
+   daemon version : 0.3.0-dev
+
+🔌 Services  (2)
+─────────────────────────────────────────────────────
+   [ Pouch]  a3f19c2b  │  net: amici  │  running  tier: T2
+   [  Bill]  7d82e401  │  net: amici  │  running
+
+🌐 Networks  amici
+📡 Known peers  4
+```
+
+---
+
 ## `bp flock`
 
 Mostra tutti i peer noti, i servizi locali e il sommario della rete.

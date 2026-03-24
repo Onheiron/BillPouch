@@ -3,7 +3,7 @@
 ## Versione corrente
 
 **v0.2.1** (Alpha) — Marzo 2026  
-**v0.3.0-dev** — feature implementate, cleanup/test in corso
+**v0.3.0-dev** (Alpha) — Marzo 2026 — CI verde  
 
 ---
 
@@ -150,6 +150,15 @@ Ultimo commit verde atteso: branch `main` (post push).
 | 47 | `e0bee5e` | docs+tests: wiki 04/05/08; nuovi test architecture e integration per v0.3 features |
 | 48 | `3fbf8fd` | feat: **CEK hints persistence** — `cek_hints.json`; `load_cek_hints()` al startup; `persist_cek_hints()` ad ogni PutFile; file decifrabili dopo riavvio daemon |
 | 49 | `5686a1c` | docs: wiki/02 aggiornata — workspace tree completo, DaemonState tutti i campi, NetworkCommand aggiornato, startup flow con quality monitor |
+| 50 | `59fae24` | feat(cli): `bp flock` mostra tier (T1–T5) per servizi Pouch; hint `bp invite join` al posto di `bp join` |
+| 51 | `9596bfd` | feat(api): `bp-api` — route `POST /services/:id/pause`, `POST /services/:id/resume`, `DELETE /services/:id?evict=true`, `POST /invites`, `POST /invites/redeem` |
+| 52 | `1d6d76d` | docs: `wiki/17-rest-api.md` — reference completa endpoint HTTP; CHANGELOG v0.3; wiki/README aggiornato |
+| 53 | `5d14e64` | fix(dashboard): `index.html` aggiornato a v0.3 — `local_services`, status chip, colonna tier, rimosso marketplace |
+| 54 | `de9b9d6` + `32ec1b5` | test(core): 3 unit test round-trip CEK hints (missing file, persist/load, JSON corrotto); `ENV_LOCK` mutex |
+| 55 | `f9a8c94` | style: rustfmt `resume_service` su una riga |
+| 56 | `6113f53` | fix(api): `CreateInvite` usa `invite_password`/`invitee_fingerprint`/`ttl_hours`; `redeem_invite` handler riscritta — chiama `bp_core::invite::redeem_invite` + `save_invite_key` + `ControlRequest::Join` |
+| 57 | `06a6658` | fix(test): `persist_cek_hints_at` crea directory padre prima della write; mutex poisoning con `unwrap_or_else` |
+| 58 | `0fa1c46` | fix(test): estrae `load_cek_hints_at` / `persist_cek_hints_at` (path-based); test usano path diretti senza env vars — portabile su macOS |
 
 ---
 
@@ -286,7 +295,7 @@ Error: a Pouch for network X already exists on this node.
 | Funzionalità | Priorità | Descrizione |
 |---|---|---|
 | FUSE mount | Alta | `bp mount <network> <mountpoint>` — filesystem nativo |
-| CEK persistence | Alta | Cifrare e persistere `chunk_cek_hints` su disco — sopravvive al riavvio del daemon |
+| CEK persistence | ✅ Done | `cek_hints.json` — `load_cek_hints_at` / `persist_cek_hints_at`; daemon carica al boot |
 | Bootstrap pubblici | Alta | 3+ nodi pubblici always-on per cold-start del network |
 | gRPC API | Media | Alternativa programmatica alla socket Unix control |
 | Mobile client | Media | iOS/Android via UniFFI bindings a `bp-core` |
