@@ -586,7 +586,7 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 reg.all()
                     .iter()
                     .filter(|s| s.network_id == network_id)
-                    .cloned()
+                    .map(|s| (*s).clone())
                     .collect()
             };
 
