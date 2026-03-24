@@ -271,7 +271,8 @@ async fn network_leave(State(state): State<AppState>, Json(body): Json<NetworkBo
     daemon_call!(
         state,
         ControlRequest::Leave {
-            network_id: body.network_id
+            network_id: body.network_id,
+            force: false,
         }
     )
 }

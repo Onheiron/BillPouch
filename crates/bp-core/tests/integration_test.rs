@@ -702,6 +702,7 @@ async fn leave_blocked_by_active_service() {
         &socket_path,
         &ControlRequest::Leave {
             network_id: "block-net".to_string(),
+            force: false,
         },
     )
     .await;
