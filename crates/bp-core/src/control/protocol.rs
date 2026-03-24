@@ -55,7 +55,18 @@ pub enum ControlRequest {
     /// Join an existing network (subscribe to gossip topics).
     Join { network_id: String },
     /// Leave a network.
-    Leave { network_id: String },
+    ///
+    /// If `force` is `true` the daemon automatically evicts all active services
+    /// on the network before leaving instead of returning a blocking error.
+    /// Pouch services are evicted permanently (equivalent to
+    /// `bp farewell --evict`); Bill and Post services are stopped gracefully
+    /// (equivalent to `bp farewell`).
+    Leave {
+        network_id: String,
+        /// Auto-evict all blocking services, then leave.
+        #[serde(default)]
+        force: bool,
+    },
     /// Return info about this daemon (identity, services, networks).
     Status,
     /// Ping — used to check if daemon is alive.
@@ -203,6 +214,20 @@ pub struct GetFileData {
     pub fragments_used: usize,
     /// How many of those fragments came from remote Pouches.
     pub fragments_remote: usize,
+}
+
+/// Returned by [`ControlRequest::Leave`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LeaveData {
+    pub network_id: String,
+    /// Whether the leave was blocked by active services (only when `force=false`).
+    #[serde(default)]
+    pub blocked: bool,
+    /// Services that were automatically evicted (when `force=true`).
+    #[serde(default)]
+    pub services_auto_evicted: Vec<serde_json::Value>,
+    /// Human-readable summary.
+    pub message: String,
 }
 
 /// Returned by [`ControlRequest::CreateInvite`].
