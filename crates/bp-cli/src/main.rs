@@ -7,6 +7,7 @@
 //!    bp export-identity --out <path>   Export identity to a portable file
 //!    bp import-identity <path> [--force]  Import identity from a portable file
 //!    bp hatch  <type> [--network <id>] [--tier T2]  Start a service (bill|pouch|post)
+//!    bp status                      Show daemon identity + active services
 //!    bp flock                       Show peers and network summary
 //!    bp farewell <service_id>       Stop a running service
 //!    bp farewell <service_id> --evict  Permanently evict a Pouch from the network
@@ -110,6 +111,11 @@ enum Cmd {
 
     /// Show all known peers and network info.
     Flock,
+
+    /// Show daemon identity and active services (compact view).
+    ///
+    /// For the full peer list and network summary use `bp flock`.
+    Status,
 
     /// Kill a running service by its service ID.
     Farewell {
@@ -356,6 +362,10 @@ async fn main() -> anyhow::Result<()> {
 
         Some(Cmd::Flock) => {
             commands::flock::flock().await?;
+        }
+
+        Some(Cmd::Status) => {
+            commands::status::status().await?;
         }
 
         Some(Cmd::Farewell { service_id, evict }) => {

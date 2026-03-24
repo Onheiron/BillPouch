@@ -20,3 +20,4 @@ pub mod leave;
 pub mod pause;
 pub mod put;
 pub mod relay;
+pub mod status;
