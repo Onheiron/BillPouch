@@ -252,6 +252,9 @@ async fn resume_service(State(state): State<AppState>, Path(service_id): Path<St
 #[derive(Deserialize)]
 struct NetworkBody {
     network_id: String,
+    /// Auto-evict all active services before leaving (only used by `POST /networks/leave`).
+    #[serde(default)]
+    force: bool,
 }
 
 /// `POST /networks/join` — subscribe to a gossip network.
@@ -272,7 +275,7 @@ async fn network_leave(State(state): State<AppState>, Json(body): Json<NetworkBo
         state,
         ControlRequest::Leave {
             network_id: body.network_id,
-            force: false,
+            force: body.force,
         }
     )
 }

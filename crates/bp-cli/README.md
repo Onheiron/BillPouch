@@ -23,15 +23,22 @@ All business logic, networking and persistence live in `bp-core`. The CLI never 
 | `bp logout` | Remove your identity key from this machine. |
 | `bp export-identity --out <file>` | Export your identity to a portable JSON file. |
 | `bp import-identity <file> [--force]` | Import an identity from a previously exported file. |
-| `bp hatch <type> [--network <id>]` | Start a service (`bill`, `pouch`, or `post`). Launches the daemon automatically if needed. |
+| `bp hatch <type> [--network <id>] [--tier <T1–T5>]` | Start a service (`bill`, `pouch`, or `post`). Pouch requires `--tier`. Launches the daemon automatically if needed. |
+| `bp status` | Show compact daemon identity, active services, and peer count. |
 | `bp flock` | Display all known peers and a summary of joined networks. |
-| `bp farewell <service_id>` | Stop a running service by its UUID. |
-| `bp join <network_id>` | Subscribe to a new network's gossip topic. |
-| `bp leave <network_id>` | Unsubscribe from a network's gossip topic. |
+| `bp farewell <service_id>` | Stop a running service gracefully. |
+| `bp farewell <service_id> --evict` | Permanently evict a Pouch: purge on-disk storage and notify the network. |
+| `bp pause <service_id> --eta <minutes>` | Pause a service for planned maintenance (announces ETA to peers). |
+| `bp resume <service_id>` | Resume a previously paused service. |
+| `bp leave <network_id> [--force]` | Unsubscribe from a network's gossip topic. `--force` auto-evicts all active services first. |
 | `bp put <file> [--network <id>]` | Encode a file with RLNC, encrypt with CEK, and distribute fragments to Pouch nodes. |
-| `bp get <chunk_id> -o <file> [--network <id>]` | Retrieve and decode a previously stored file. |
-| `bp invite create --network <id> --password <pw>` | Create a password-protected invite token. |
-| `bp invite join <token> --password <pw>` | Join a network using an invite token. |
+| `bp get <chunk_id> -o <file> [--network <id>]` | Retrieve and decode a previously stored file chunk. |
+| `bp invite create --network <id> --invite-password <pw>` | Create a password-protected invite token. |
+| `bp invite join <token> --invite-password <pw>` | Join a network using an invite token. |
+| `bp bootstrap list` | Show configured WAN bootstrap nodes. |
+| `bp bootstrap add <addr>` | Add a bootstrap node (persisted to `bootstrap_nodes.json`). |
+| `bp bootstrap remove <addr>` | Remove a bootstrap node. |
+| `bp relay connect <addr>` | Dial a relay node for NAT traversal via circuit relay v2. |
 
 The hidden `bp --daemon` flag is used internally by `bp hatch` to spawn the daemon
 process; it is not intended for direct use.

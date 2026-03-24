@@ -185,24 +185,34 @@ Subscribe to a gossip network.
 
 ### `POST /networks/leave`
 
-Leave a gossip network.  Returns `blocked: true` if active services are still attached to the network.
+Leave a gossip network.
+
+Without `"force": true`: returns `blocked: true` if active services are still attached to the network.  
+With `"force": true`: auto-evicts all blocking services (Pouch → permanent eviction; Bill/Post → graceful stop), then leaves.
 
 **Body:**
 ```json
 { "network_id": "friends" }
 ```
+or with force:
+```json
+{ "network_id": "friends", "force": true }
+```
 
 **Response 200 (success):**
 ```json
-{ "status": "left", "network_id": "friends" }
+{ "message": "Left network 'friends'", "services_auto_evicted": [] }
 ```
 
-**Response 200 (blocked):**
+**Response 200 (blocked, force not set):**
 ```json
 {
+  "network_id": "friends",
   "blocked": true,
-  "reason": "active services are using this network",
-  "services": ["3f2a...", "8c1d..."]
+  "blocking_services": [
+    { "id": "3f2a...", "type": "pouch", "hint": "bp farewell 3f2a... --evict" }
+  ],
+  "message": "Cannot leave 'friends': 1 active service(s) must be stopped first"
 }
 ```
 

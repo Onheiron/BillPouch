@@ -322,7 +322,7 @@ bp farewell <service_id> --evict
 bp logout
 ```
 
-Rimuove il keypair da disco. **Irreversibile** — usa `bp export-identity` prima.
+Removes the keypair from disk. **Irreversible** — run `bp export-identity` first.
 
 ---
 
@@ -388,6 +388,8 @@ Every node periodically broadcasts a `NodeInfo` message on the gossipsub topic `
 | `bp pause --eta` / `bp resume` (maintenance mode) | ✅ Done |
 | `bp farewell --evict` (permanent Pouch removal) | ✅ Done |
 | `bp leave` with active-service precondition | ✅ Done |
+| `bp leave --force` (auto-evict and leave) | ✅ Done |
+| `bp status` (compact daemon identity + services view) | ✅ Done |
 | REST API + web dashboard (axum) | ✅ Done |
 | FUSE filesystem mount | 🔮 Future |
 | gRPC API | 🔮 Future |
