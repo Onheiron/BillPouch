@@ -55,13 +55,16 @@ crates/
       auth.rs             # login / logout / export-identity / import-identity
       hatch.rs            # hatch
       flock.rs            # flock
+      status.rs           # status
       farewell.rs         # farewell / --evict
       pause.rs            # pause / resume
-      leave.rs            # leave
+      leave.rs            # leave [--force]
       join.rs             # join (hidden, internal)
       put.rs              # put (RLNC encode + CEK encrypt + distribute)
       get.rs              # get (fetch fragments + RLNC decode + CEK decrypt)
       invite.rs           # invite create / invite join
+      bootstrap.rs        # bootstrap list / add / remove
+      relay.rs            # relay connect
   bp-api/src/
     main.rs               # axum HTTP server, embedded SPA dashboard at GET /
 ```
@@ -102,17 +105,15 @@ pub enum ControlRequest {
     Hatch           { service_type: ServiceType, network_id: String, metadata: HashMap<String, Value> },
     Flock,
     Farewell        { service_id: String },
+    FarewellEvict   { service_id: String },
+    Pause           { service_id: String, eta_minutes: u64 },
+    Resume          { service_id: String },
     Join            { network_id: String },
-    Leave           { network_id: String },
+    Leave           { network_id: String, force: bool },
     ConnectRelay    { relay_addr: String },
     PutFile         { chunk_data: Vec<u8>, ph: Option<f64>, q_target: Option<f64>, network_id: String },
     GetFile         { chunk_id: String, network_id: String },
-    ProposeStorage  { network_id: String, bytes_offered: u64, duration_secs: u64, price_tokens: u64 },
-    AcceptStorage   { offer_id: String },
-    ListOffers      { network_id: String },
-    ListAgreements  { network_id: String },
-    CreateInvite    { network_id: String, password: String },
-    RedeemInvite    { token: String, password: String },
+    CreateInvite    { network_id: String, invitee_fingerprint: Option<String>, invite_password: String, ttl_hours: Option<u64> },
 }
 
 // Responses
@@ -167,9 +168,10 @@ docker compose -f docker-compose.smoke.yml up --build -d
 
 ## Stato del progetto
 
-**v0.3.0-dev** — StorageTier T1–T5, ReputationTier R0–R4, `bp pause/resume`,
-`bp farewell --evict`, `bp leave` precondition. File transfer implementato:
-`bp put` / `bp get` (RLNC encode/decode, CEK encryption, distribuzione frammenti,
-QoS adattivo k/n, Proof-of-Storage, FragmentIndex gossip).
+**v0.3.0** — All v0.3 features complete: StorageTier T1–T5, ReputationTier R0–R4,
+`bp status`, `bp pause/resume`, `bp farewell --evict`, `bp leave --force`,
+CEK persistence, invite system, multi-device identity, REST API + web dashboard.
+File transfer: `bp put` / `bp get` (RLNC encode/decode, CEK encryption, fragment
+distribution, adaptive k/n QoS, Proof-of-Storage, FragmentIndex gossip).
 
-Per dettagli completi vedi `wiki/12-status-roadmap.md`.
+See `wiki/12-status-roadmap.md` for the full feature list.

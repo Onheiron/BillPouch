@@ -28,11 +28,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`BpError::InvalidInput`** — nuova variante per input non validi (es. tier sconosciuto)
 - **CEK hints persistence** (`cek_hints.json`) — `load_cek_hints()` + `persist_cek_hints()` in `server.rs`; le chiavi di cifratura sopravvivono al riavvio del daemon
 - **`bp flock` tier display** — i servizi Pouch mostrano il tier (`tier: T2`) nella lista locale
+- **`bp status`** — nuovo comando compatto: identità daemon (fingerprint, alias, peer_id, versione), servizi attivi, reti, conteggio peer
+- **`bp leave --force`** — auto-evict di tutti i servizi attivi sul network (Pouch: eviction permanente; Bill/Post: stop graceful), poi leave; `force: bool` aggiunto a `ControlRequest::Leave` con `#[serde(default)]` per retrocompatibilità
+- **`ControlRequest::Status`** + **`StatusData`** — payload strutturato con `peer_id`, `fingerprint`, `alias`, `local_services`, `networks`, `known_peers`, `version`
+- **`LeaveData`** struct — payload tipizzato per risposte Leave
 - **bp-api route v0.3** — `POST /services/:id/pause`, `POST /services/:id/resume`, `DELETE /services/:id?evict=true`, `POST /invites`, `POST /invites/redeem`
 
 ### Tests
 
 - Nuovi test architettura (sezioni 11–13): `StorageTier`, `ReputationTier`, `ServiceStatus::Paused` lifecycle
+- Nuovi test architettura: `ControlRequest::Status` serialization roundtrip; `StatusData` field completeness
 - Nuovi integration test: `pause_resume_roundtrip`, `farewell_evict_removes_service`, `leave_blocked_by_active_service`, `hatch_second_pouch_same_network_rejected`
 
 ## [0.1.3](https://github.com/Onheiron/BillPouch/compare/billpouch-v0.1.2...billpouch-v0.1.3) (2026-03-18)
