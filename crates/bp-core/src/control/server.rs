@@ -579,14 +579,21 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
         }
 
         // ── Leave ─────────────────────────────────────────────────────────
-        ControlRequest::Leave { network_id } => {
-            // Precondition: no active services on this network.
-            // The caller must stop/evict each service before leaving.
-            let blocking: Vec<serde_json::Value> = {
+        ControlRequest::Leave { network_id, force } => {
+            // Collect blocking services on this network.
+            let blocking: Vec<ServiceInfo> = {
                 let reg = state.services.read().unwrap();
                 reg.all()
                     .iter()
                     .filter(|s| s.network_id == network_id)
+                    .cloned()
+                    .collect()
+            };
+
+            if !blocking.is_empty() && !force {
+                // v1: return helpful error with per-service hints.
+                let blocking_json: Vec<serde_json::Value> = blocking
+                    .iter()
                     .map(|s| {
                         let hint = if s.service_type == ServiceType::Pouch {
                             format!("bp farewell {} --evict", s.id)
@@ -599,23 +606,102 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                             "hint": hint,
                         })
                     })
-                    .collect()
-            };
-
-            if !blocking.is_empty() {
+                    .collect();
                 return ControlResponse::ok(serde_json::json!({
                     "network_id": network_id,
                     "blocked": true,
-                    "blocking_services": blocking,
+                    "blocking_services": blocking_json,
                     "message": format!(
                         "Cannot leave '{}': {} active service(s) must be stopped first \
-                         (see 'blocking_services' for commands)",
+                         (see 'blocking_services' for commands, or use --force to auto-evict)",
                         network_id,
                         blocking.len()
                     ),
                 }));
             }
 
+            // force=true (or no blocking services): auto-evict then leave.
+            let now_secs = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let mut evicted: Vec<serde_json::Value> = Vec::new();
+
+            for svc in &blocking {
+                let service_id = svc.id.clone();
+                let service_type = svc.service_type;
+                let peer_id_str = state.identity.peer_id.to_string();
+
+                if service_type == ServiceType::Pouch {
+                    // Purge on-disk storage.
+                    {
+                        let mut managers = state.storage_managers.write().unwrap();
+                        if let Some(sm_lock) = managers.remove(&service_id) {
+                            let sm = sm_lock.read().unwrap();
+                            if let Err(e) = sm.purge() {
+                                tracing::warn!(
+                                    "leave --force: failed to purge storage for {}: {}",
+                                    service_id,
+                                    e
+                                );
+                            }
+                        }
+                    }
+                    // Gossip eviction notice before removing from registry.
+                    {
+                        let mut meta = HashMap::new();
+                        meta.insert("evicting".to_string(), serde_json::Value::Bool(true));
+                        let info = NodeInfo {
+                            peer_id: peer_id_str.clone(),
+                            user_fingerprint: state.identity.fingerprint.clone(),
+                            user_alias: state.identity.profile.alias.clone(),
+                            service_type,
+                            service_id: service_id.clone(),
+                            network_id: network_id.clone(),
+                            listen_addrs: vec![],
+                            announced_at: now_secs,
+                            metadata: meta,
+                        };
+                        if let Ok(payload) = serde_json::to_vec(&info) {
+                            let _ = state
+                                .net_tx
+                                .send(NetworkCommand::Announce {
+                                    network_id: network_id.clone(),
+                                    payload,
+                                })
+                                .await;
+                        }
+                    }
+                    // Record reputation eviction.
+                    {
+                        let mut rep = state.reputation.write().unwrap();
+                        rep.get_or_create(&peer_id_str, now_secs)
+                            .evict_without_notice(now_secs);
+                    }
+                    tracing::info!(
+                        service_id = %service_id,
+                        network_id = %network_id,
+                        "Pouch auto-evicted by leave --force"
+                    );
+                } else {
+                    tracing::info!(
+                        service_id = %service_id,
+                        service_type = %service_type,
+                        network_id = %network_id,
+                        "service stopped by leave --force"
+                    );
+                }
+
+                // Remove from registry regardless of type.
+                state.services.write().unwrap().remove(&service_id);
+                evicted.push(serde_json::json!({
+                    "service_id":   service_id,
+                    "service_type": service_type.to_string(),
+                    "evicted":       service_type == ServiceType::Pouch,
+                }));
+            }
+
+            // Unsubscribe gossip and remove from active_networks.
             let _ = state
                 .net_tx
                 .send(NetworkCommand::LeaveNetwork {
@@ -623,9 +709,20 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 })
                 .await;
             state.networks.write().unwrap().retain(|n| n != &network_id);
+
+            let msg = if evicted.is_empty() {
+                format!("Left network '{}'", network_id)
+            } else {
+                format!(
+                    "Left network '{}' — {} service(s) auto-evicted",
+                    network_id,
+                    evicted.len()
+                )
+            };
             ControlResponse::ok(serde_json::json!({
                 "network_id": network_id,
-                "message": format!("Left network '{}'", network_id),
+                "services_auto_evicted": evicted,
+                "message": msg,
             }))
         }
 

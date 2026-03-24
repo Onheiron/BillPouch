@@ -18,7 +18,7 @@
 //!    bp bootstrap list              Show configured WAN bootstrap nodes
 //!    bp bootstrap add <addr>        Add a bootstrap node
 //!    bp bootstrap remove <addr>     Remove a bootstrap node
-//!    bp leave <network>              Leave a network (requires no active services)
+//!    bp leave <network> [--force]    Leave a network (--force auto-evicts active services)
 //!    bp relay connect <addr>        Dial a relay node for NAT traversal
 //! ```
 
@@ -159,12 +159,18 @@ enum Cmd {
 
     /// Leave a network.
     ///
-    /// Fails if any services are still active on the network.
-    /// Stop Pouches with `bp farewell <id> --evict` and other services
-    /// with `bp farewell <id>` before leaving.
+    /// Without `--force`: fails if any services are still active on the network.
+    /// Use `bp farewell <id> --evict` (Pouch) or `bp farewell <id>` (Bill/Post) first.
+    ///
+    /// With `--force`: automatically evicts all active services on the network,
+    /// then leaves.  Equivalent to running `bp farewell --evict` on each Pouch
+    /// and `bp farewell` on each Bill/Post, then leaving.
     Leave {
         /// The network to leave.
         network_id: String,
+        /// Auto-evict all blocking services before leaving.
+        #[arg(long)]
+        force: bool,
     },
 
     /// Store a local file in the active Pouch (RLNC erasure-coded).
@@ -388,8 +394,8 @@ async fn main() -> anyhow::Result<()> {
             commands::join::join(network_id).await?;
         }
 
-        Some(Cmd::Leave { network_id }) => {
-            commands::leave::leave(network_id).await?;
+        Some(Cmd::Leave { network_id, force }) => {
+            commands::leave::leave(network_id, force).await?;
         }
 
         Some(Cmd::Put {

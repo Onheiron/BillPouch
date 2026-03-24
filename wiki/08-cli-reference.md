@@ -210,21 +210,38 @@ bp resume <service_id>
 
 ## `bp leave`
 
-Abbandona un network. Fallisce se ci sono servizi attivi su quella rete — fermarli prima.
+Abbandona un network.
 
 ```bash
-bp leave <network_id>
+bp leave <network_id> [--force]
 ```
 
-Se ci sono servizi attivi, il daemon risponde con `blocked: true` e una lista di comandi
-da eseguire per fermarli:
+**Senza `--force`:** fallisce se ci sono servizi attivi su quella rete, elencando i comandi
+necessari per fermarli:
 
 ```
 $ bp leave amici
 🚪 Cannot leave 'amici': 2 active service(s) must be stopped first
    • 550e8400-... (pouch)  → bp farewell 550e8400-... --evict
    • 7d82e401-... (bill)   → bp farewell 7d82e401-...
+
+   Tip: use `bp leave amici --force` to auto-evict and leave.
 ```
+
+**Con `--force`:** il daemon evict automaticamente tutti i servizi attivi sul network
+(Pouch: eviction permanente + purge storage; Bill/Post: stop), poi abbandona la rete:
+
+```
+$ bp leave amici --force
+🚪 Left network 'amici' — 2 service(s) auto-evicted
+   Auto-evicted services:
+   • 550e8400-... (pouch) — evicted
+   • 7d82e401-... (bill)  — stopped
+```
+
+> **Nota:** `--force` non esegue materializzazione dei file prima dell'abbandono
+> (feature v0.4). Se hai file distribuiti sulla rete che non hai mai scaricato
+> localmente, assicurati di recuperarli con `bp get` prima di usare `--force`.
 
 ---
 

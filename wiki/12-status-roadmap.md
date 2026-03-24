@@ -171,7 +171,7 @@ Le decisioni riportate qui sono **design finalized** — implementazione da iniz
 | Componente | Azione | Stato |
 |---|---|---|
 | `bp join <network>` (CLI pubblico) | Rimosso — rimane interno hidden | ✅ Done |
-| `bp leave <network>` | Ridisegnare completamente (vedi §Leave) | 🔲 Todo |
+| `bp leave <network>` | Ridisegnare completamente (vedi §Leave) | ✅ Done (`--force` auto-evict) |
 | `bp propose-storage` / `bp accept-storage` | Eliminati | ✅ Done |
 | `StorageOffer` / `Agreement` | Eliminati | ✅ Done |
 | `ControlRequest::ProposeStorage` / `AcceptStorage` / `ListAgreements` / `ListOffers` | Eliminati | ✅ Done |
