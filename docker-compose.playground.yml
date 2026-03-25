@@ -15,9 +15,9 @@ services:
 
   # ── Carlo: storage + personal I/O ──────────────────────────────────────────
   carlo:
-    build:
-      context: .
-      dockerfile: Dockerfile.playground
+    image: onheirongithub/billpouch:latest
+    volumes:
+      - ./playground/entrypoint.sh:/entrypoint.sh:ro
     container_name: bp-carlo
     hostname: bp-carlo
     environment:
@@ -30,9 +30,9 @@ services:
 
   # ── Marco: relay + storage ─────────────────────────────────────────────────
   marco:
-    build:
-      context: .
-      dockerfile: Dockerfile.playground
+    image: onheirongithub/billpouch:latest
+    volumes:
+      - ./playground/entrypoint.sh:/entrypoint.sh:ro
     container_name: bp-marco
     hostname: bp-marco
     environment:
@@ -45,9 +45,9 @@ services:
 
   # ── Lucia: personal I/O + relay ────────────────────────────────────────────
   lucia:
-    build:
-      context: .
-      dockerfile: Dockerfile.playground
+    image: onheirongithub/billpouch:latest
+    volumes:
+      - ./playground/entrypoint.sh:/entrypoint.sh:ro
     container_name: bp-lucia
     hostname: bp-lucia
     environment:
@@ -60,9 +60,9 @@ services:
 
   # ── Elena: heavy storage node ──────────────────────────────────────────────
   elena:
-    build:
-      context: .
-      dockerfile: Dockerfile.playground
+    image: onheirongithub/billpouch:latest
+    volumes:
+      - ./playground/entrypoint.sh:/entrypoint.sh:ro
     container_name: bp-elena
     hostname: bp-elena
     environment:
@@ -75,9 +75,9 @@ services:
 
   # ── Paolo: file I/O only ───────────────────────────────────────────────────
   paolo:
-    build:
-      context: .
-      dockerfile: Dockerfile.playground
+    image: onheirongithub/billpouch:latest
+    volumes:
+      - ./playground/entrypoint.sh:/entrypoint.sh:ro
     container_name: bp-paolo
     hostname: bp-paolo
     environment:
@@ -90,9 +90,9 @@ services:
 
   # ── YOU: interactive node ──────────────────────────────────────────────────
   me:
-    build:
-      context: .
-      dockerfile: Dockerfile.playground
+    image: onheirongithub/billpouch:latest
+    volumes:
+      - ./playground/entrypoint.sh:/entrypoint.sh:ro
     container_name: bp-me
     hostname: bp-me
     stdin_open: true
