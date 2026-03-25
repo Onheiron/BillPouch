@@ -1,10 +1,13 @@
 name: Release
 
+# This workflow is disabled - release-please.yml handles the full release
+# process (build, upload, docker push) when a release PR is merged.
 on:
-  push:
-    tags:
-      - "v*"
-      - "billpouch-v*"
+  workflow_dispatch:
+    inputs:
+      dummy:
+        description: "Manual trigger only (disabled)"
+        required: false
 
 env:
   CARGO_TERM_COLOR: always
