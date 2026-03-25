@@ -24,6 +24,7 @@ services:
       NODE_NAME: "carlo"
       SERVICES: "pouch,bill"
       NETWORK: "playground"
+      BP_LISTEN_PORT: "4001"
       RUST_LOG: "bp_core=info,bp_cli=info"
     networks:
       - bp-playground
@@ -39,6 +40,7 @@ services:
       NODE_NAME: "marco"
       SERVICES: "post,pouch"
       NETWORK: "playground"
+      BP_LISTEN_PORT: "4002"
       RUST_LOG: "bp_core=info,bp_cli=info"
     networks:
       - bp-playground
@@ -54,6 +56,7 @@ services:
       NODE_NAME: "lucia"
       SERVICES: "bill,post"
       NETWORK: "playground"
+      BP_LISTEN_PORT: "4003"
       RUST_LOG: "bp_core=info,bp_cli=info"
     networks:
       - bp-playground
@@ -67,8 +70,9 @@ services:
     hostname: bp-elena
     environment:
       NODE_NAME: "elena"
-      SERVICES: "pouch,pouch"
+      SERVICES: "pouch"
       NETWORK: "playground"
+      BP_LISTEN_PORT: "4004"
       RUST_LOG: "bp_core=info,bp_cli=info"
     networks:
       - bp-playground
@@ -84,6 +88,7 @@ services:
       NODE_NAME: "paolo"
       SERVICES: "bill"
       NETWORK: "playground"
+      BP_LISTEN_PORT: "4005"
       RUST_LOG: "bp_core=info,bp_cli=info"
     networks:
       - bp-playground
@@ -101,6 +106,7 @@ services:
       NODE_NAME: "me"
       INTERACTIVE: "true"
       NETWORK: "playground"
+      BP_LISTEN_PORT: "4006"
       RUST_LOG: "bp_core=info,bp_cli=info"
     networks:
       - bp-playground
