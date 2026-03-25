@@ -796,12 +796,10 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 })
                 .collect();
 
-            if candidates.is_empty() {
-                return ControlResponse::err(format!(
-                    "No active Pouch on network '{}' — run `bp hatch pouch --network {0}` first",
-                    network_id
-                ));
-            }
+            // bill/post nodes have no local Pouch — they act as pure coordinators
+            // that encode the chunk and distribute all fragments to remote Pouches.
+            // We only fail if there are neither local nor remote Pouches.
+            let has_local_pouch = !candidates.is_empty();
 
             // ── Compute adaptive k/n from live QoS data ──────────────────────
             let pouch_peer_ids: Vec<String> = {
@@ -886,9 +884,9 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 persist_cek_hints(&hints);
             }
 
-            // Store all fragments locally in the first candidate with capacity.
+            // Store all fragments locally if a local Pouch is available.
             let mut stored = 0usize;
-            {
+            if has_local_pouch {
                 let (_, sm_arc) = candidates[0];
                 let mut sm = sm_arc.write().unwrap();
                 for fragment in &fragments {
@@ -902,10 +900,6 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 }
             } // write lock released before async work
 
-            if stored == 0 {
-                return ControlResponse::err("Failed to store any fragments (quota exceeded?)");
-            }
-
             // ── Distribute fragments to remote Pouch peers (round-robin) ────
             let remote_pouches: Vec<PeerId> = {
                 let ns = state.network_state.read().unwrap();
@@ -916,6 +910,14 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                     .filter_map(|n| n.peer_id.parse::<PeerId>().ok())
                     .collect()
             };
+
+            // Fail only if there is nowhere to store fragments at all.
+            if stored == 0 && remote_pouches.is_empty() {
+                return ControlResponse::err(format!(
+                    "No Pouches available on network '{}' — hatch a Pouch or wait for Pouch peers to join",
+                    network_id
+                ));
+            }
 
             let mut distributed = 0usize;
             let mut index_pointers: Vec<FragmentPointer> = Vec::new();
@@ -1004,9 +1006,9 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                     .collect()
             };
 
-            if managers_snap.is_empty() {
-                return ControlResponse::err("No active Pouch found — daemon has no storage");
-            }
+            // bill/post nodes have no local Pouch: skip the local load step and
+            // go straight to remote fragment fetching.
+            let remote_only = managers_snap.is_empty();
 
             // Collect fragments from all matching local managers.
             let mut all_fragments = Vec::new();
@@ -1027,8 +1029,10 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             let k_needed = all_fragments.first().map(|f| f.k).unwrap_or(0);
 
             // ── Fetch from remote Pouches if local fragments < k ────────────
+            // When there is no local Pouch (remote_only), always attempt remote fetch
+            // since k_needed == 0 would otherwise skip this block entirely.
             let mut fragments_remote = 0usize;
-            if k_needed > 0 && all_fragments.len() < k_needed {
+            if remote_only || (k_needed > 0 && all_fragments.len() < k_needed) {
                 let local_peer = state.identity.peer_id.to_string();
 
                 // Build list of remote peers to query: prefer the fragment

@@ -74,7 +74,14 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
     let swarm = network::build_swarm(identity.keypair.clone())
         .map_err(|e| BpError::Network(e.to_string()))?;
 
-    let listen_addr = "/ip4/0.0.0.0/tcp/0"
+    // Allow the operator to bind a fixed port via BP_LISTEN_PORT (useful for
+    // Docker playgrounds and bootstrap peers).  Defaults to 0 (OS assigns a
+    // random port, which is fine for normal use and mDNS-based discovery).
+    let listen_port: u16 = std::env::var("BP_LISTEN_PORT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    let listen_addr = format!("/ip4/0.0.0.0/tcp/{listen_port}")
         .parse()
         .map_err(|e: libp2p::multiaddr::Error| BpError::Network(e.to_string()))?;
 
