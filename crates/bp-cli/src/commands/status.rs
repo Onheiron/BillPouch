@@ -28,10 +28,7 @@ fn print_status(s: &StatusData) {
 
     // ── Identity ──────────────────────────────────────────────────────────
     println!("🔑 Identity");
-    println!(
-        "   fingerprint  : {}",
-        s.fingerprint
-    );
+    println!("   fingerprint  : {}", s.fingerprint);
     if let Some(alias) = &s.alias {
         println!("   alias         : {alias}");
     }

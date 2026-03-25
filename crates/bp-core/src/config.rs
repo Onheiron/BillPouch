@@ -1,3 +1,9 @@
+//! XDG-compliant configuration paths for BillPouch.
+//!
+//! All paths are rooted at the platform data directory
+//! (`~/.local/share/billpouch` on Linux, `~/Library/Application Support/billpouch` on macOS).
+//! Call [`ensure_dirs`] once at daemon startup to create the directory tree.
+
 use crate::error::{BpError, BpResult};
 use directories::ProjectDirs;
 use std::path::PathBuf;

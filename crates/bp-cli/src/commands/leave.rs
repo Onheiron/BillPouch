@@ -10,10 +10,7 @@ use bp_core::control::protocol::ControlRequest;
 pub async fn leave(network_id: String, force: bool) -> anyhow::Result<()> {
     let mut client = ControlClient::connect().await?;
     let data = client
-        .request(ControlRequest::Leave {
-            network_id,
-            force,
-        })
+        .request(ControlRequest::Leave { network_id, force })
         .await?;
 
     if let Some(v) = data {
@@ -31,8 +28,12 @@ pub async fn leave(network_id: String, force: bool) -> anyhow::Result<()> {
                     println!("   • {} ({})  → {}", id, stype, hint);
                 }
                 println!();
-                println!("   Tip: use `bp leave {} --force` to auto-evict and leave.",
-                    v.get("network_id").and_then(|n| n.as_str()).unwrap_or("<network>"));
+                println!(
+                    "   Tip: use `bp leave {} --force` to auto-evict and leave.",
+                    v.get("network_id")
+                        .and_then(|n| n.as_str())
+                        .unwrap_or("<network>")
+                );
             }
         }
         // Auto-evicted services (force=true).
@@ -40,9 +41,18 @@ pub async fn leave(network_id: String, force: bool) -> anyhow::Result<()> {
             if !arr.is_empty() {
                 println!("   Auto-evicted services:");
                 for svc in arr {
-                    let sid = svc.get("service_id").and_then(|s| s.as_str()).unwrap_or("?");
-                    let stype = svc.get("service_type").and_then(|s| s.as_str()).unwrap_or("?");
-                    let evicted = svc.get("evicted").and_then(|e| e.as_bool()).unwrap_or(false);
+                    let sid = svc
+                        .get("service_id")
+                        .and_then(|s| s.as_str())
+                        .unwrap_or("?");
+                    let stype = svc
+                        .get("service_type")
+                        .and_then(|s| s.as_str())
+                        .unwrap_or("?");
+                    let evicted = svc
+                        .get("evicted")
+                        .and_then(|e| e.as_bool())
+                        .unwrap_or(false);
                     let label = if evicted { "evicted" } else { "stopped" };
                     println!("   • {} ({}) — {}", sid, stype, label);
                 }

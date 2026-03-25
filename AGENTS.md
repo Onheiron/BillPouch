@@ -55,13 +55,16 @@ crates/
       auth.rs             # login / logout / export-identity / import-identity
       hatch.rs            # hatch
       flock.rs            # flock
+      status.rs           # status
       farewell.rs         # farewell / --evict
       pause.rs            # pause / resume
-      leave.rs            # leave
+      leave.rs            # leave [--force]
       join.rs             # join (hidden, internal)
       put.rs              # put (RLNC encode + CEK encrypt + distribute)
       get.rs              # get (fetch fragments + RLNC decode + CEK decrypt)
       invite.rs           # invite create / invite join
+      bootstrap.rs        # bootstrap list / add / remove
+      relay.rs            # relay connect
   bp-api/src/
     main.rs               # axum HTTP server, embedded SPA dashboard at GET /
 ```
@@ -102,17 +105,15 @@ pub enum ControlRequest {
     Hatch           { service_type, network_id, metadata },
     Flock,
     Farewell        { service_id },
+    FarewellEvict   { service_id },
+    Pause           { service_id, eta_minutes },
+    Resume          { service_id },
     Join            { network_id },
-    Leave           { network_id },
+    Leave           { network_id, force: bool },
     ConnectRelay    { relay_addr },
     PutFile         { chunk_data, ph, q_target, network_id },
     GetFile         { chunk_id, network_id },
-    ProposeStorage  { network_id, bytes_offered, duration_secs, price_tokens },
-    AcceptStorage   { offer_id },
-    ListOffers      { network_id },
-    ListAgreements  { network_id },
-    CreateInvite    { network_id, password },
-    RedeemInvite    { token, password },
+    CreateInvite    { network_id, invitee_fingerprint, invite_password, ttl_hours },
 }
 
 // Responses
@@ -163,4 +164,8 @@ cargo fmt --all
 
 ## Stato
 
-**v0.3.0-dev** — In sviluppo: StorageTier T1–T5, ReputationTier R0–R4, `bp pause/resume`, `bp farewell --evict`, `bp leave` precondition.
+**v0.3.0** — All v0.3 features complete: StorageTier T1–T5, ReputationTier R0–R4,
+`bp status`, `bp pause/resume`, `bp farewell --evict`, `bp leave --force`,
+CEK persistence, invite system, multi-device identity, REST API + web dashboard.
+
+See `wiki/12-status-roadmap.md` for the full feature list.

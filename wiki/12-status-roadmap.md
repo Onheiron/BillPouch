@@ -2,8 +2,7 @@
 
 ## Versione corrente
 
-**v0.2.1** (Alpha) — Marzo 2026  
-**v0.3.0-dev** (Alpha) — Marzo 2026 — CI verde  
+**v0.3.0** — Marzo 2026 — All v0.3 features complete
 
 ---
 
@@ -159,6 +158,13 @@ Ultimo commit verde atteso: branch `main` (post push).
 | 56 | `6113f53` | fix(api): `CreateInvite` usa `invite_password`/`invitee_fingerprint`/`ttl_hours`; `redeem_invite` handler riscritta — chiama `bp_core::invite::redeem_invite` + `save_invite_key` + `ControlRequest::Join` |
 | 57 | `06a6658` | fix(test): `persist_cek_hints_at` crea directory padre prima della write; mutex poisoning con `unwrap_or_else` |
 | 58 | `0fa1c46` | fix(test): estrae `load_cek_hints_at` / `persist_cek_hints_at` (path-based); test usano path diretti senza env vars — portabile su macOS |
+| 59 | `48242c7` | feat(cli): **`bp status`** — nuovo comando: identità daemon (fingerprint, alias, peer_id, version), servizi attivi con tier, reti, known_peers; `StatusData` struct in protocol.rs |
+| 60 | `1f25a50` | test(arch): 2 nuovi test architetturali — `ControlRequest::Status` serialization roundtrip; `StatusData` field completeness con roundtrip JSON |
+| 61 | `3ab7de3` | feat(cli): **`bp leave --force`** — auto-evict Pouch (purge + gossip + reputation) e stop Bill/Post prima di leave; `force: bool` con `#[serde(default)]` in protocol; `LeaveData` struct; wiki/08 + wiki/12 aggiornati |
+| 62 | `b146ed9` | fix(server): Leave handler — `map(|s| (*s).clone())` per `&&ServiceInfo` da double-ref `reg.all().iter()` |
+| 63 | `a5cf17b` | fix: `force: false` a tutti i literal `ControlRequest::Leave` in integration_test, architecture_test, bp-api |
+| 64 | `d93a480` | style: rustfmt `leave.rs` e `status.rs` |
+| 65 | `(HEAD)` | chore: version bump `0.1.0` → `0.3.0`; `config.rs` module doc; README/CHANGELOG/cli-README v0.3; AGENTS.md+CLAUDE.md protocollo e comandi aggiornati |
 
 ---
 
@@ -307,16 +313,21 @@ Error: a Pouch for network X already exists on this node.
 
 ## Changelog recente
 
-### v0.3.0-dev (Marzo 2026) — in corso
+### v0.3.0 (Marzo 2026)
 - **refactor:** Rimosso intero storage marketplace — `StorageOffer`, `StorageAgreement`, `AgreementStore`, `ControlRequest::{ProposeStorage,AcceptStorage,ListAgreements,ListOffers}`, `NetworkCommand::AnnounceOffer`, `/marketplace/*` REST endpoints, CLI `bp offer/agree/agreements/offers`
-- **refactor:** `bp join` rimosso dal CLI pubblico — resta come comando nascosto usato dagli script (gossipsub topic subscription); accesso alle reti solo via `bp invite join`
-- **feat:** `storage/tier.rs` — `StorageTier` enum (T1–T5 = 10GB/100GB/500GB/1TB/5TB), `quota_bytes()`, `participating_tiers()`, `for_file_size()`, `parse()`, serde, 7 unit test
-- **feat:** `BpError::InvalidInput` — nuova variante per input non validi (es. tier sconosciuto)
-- **feat:** `bp hatch pouch --tier T2` — sostituisce `--storage-bytes`; one-Pouch-per-network enforced in server
-- **feat:** `network/reputation.rs` — `ReputationTier` (R0–R4), `ReputationRecord`, `ReputationStore`; integrato in `DaemonState`
-- **feat:** `bp pause <service_id> --eta <minutes>` / `bp resume <service_id>` — manutenzione temporanea; gossip maintenance announcement; `ServiceStatus::Paused`; `ControlRequest::{Pause,Resume}`
-- **feat:** `bp farewell <service_id> --evict` — eviction permanente Pouch; purge storage su disco; gossip `evicting=true`; `ControlRequest::FarewellEvict`; `StorageManager::purge()` + `storage_summary()`; reputation `evict_without_notice()`
-- **feat:** `bp leave <network>` — precondition check servizi attivi; unsubscribe gossip; `ControlRequest::Leave` aggiornato con blocklist servizi da fermare prima
+- **refactor:** `bp join` rimosso dal CLI pubblico — resta come comando nascosto; accesso alle reti solo via `bp invite join`
+- **feat:** `storage/tier.rs` — `StorageTier` T1–T5
+- **feat:** `network/reputation.rs` — `ReputationTier` R0–R4, `ReputationStore`
+- **feat:** `bp hatch pouch --tier T2` — one-Pouch-per-network enforced
+- **feat:** `bp pause --eta` / `bp resume` — maintenance mode con gossip announcement
+- **feat:** `bp farewell --evict` — Pouch permanent eviction + storage purge + reputation penalty
+- **feat:** `bp leave [--force]` — precondition servizi attivi; `--force` auto-evict e leave
+- **feat:** `bp status` — compact identity + services view; `StatusData` struct
+- **feat:** CEK hints persistence (`cek_hints.json`); identità portabile multi-device
+- **feat:** `bp flock` tier display; hint `bp invite join`
+- **feat:** bp-api route v0.3 (pause/resume/evict/invite); dashboard v0.3
+- **docs:** `wiki/17-rest-api.md`; CHANGELOG; README; AGENTS.md; CLAUDE.md
+- **tests:** 50+ architecture tests; CEK unit tests; integration test suite completa
 
 ### v0.2.1 (Marzo 2026)
 - **feat:** Web dashboard — `GET /` in `bp-api` restituisce una SPA HTML/JS embedded via `include_str!`; dark UI; sezioni Status, Peers, Files, Marketplace; auto-refresh 5s; zero dipendenze runtime

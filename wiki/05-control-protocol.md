@@ -22,12 +22,11 @@ pub enum ControlRequest {
     Pause         { service_id: String, eta_minutes: u64 },
     Resume        { service_id: String },
     Join          { network_id: String },  // internal/hidden
-    Leave         { network_id: String },
+    Leave         { network_id: String, force: bool },  // force=true auto-evicts services
     PutFile  { chunk_data: Vec<u8>, ph: Option<f64>, q_target: Option<f64>, network_id: String },
     GetFile  { chunk_id: String, network_id: String },
     ConnectRelay  { relay_addr: String },
     CreateInvite  { network_id: String, invitee_fingerprint: Option<String>, invite_password: String, ttl_hours: Option<u64> },
-    RedeemInvite  { token: String, invite_password: String },
 }
 ```
 
@@ -63,6 +62,9 @@ pub enum ControlRequest {
 
 // Abbandona network (richiede nessun servizio attivo)
 {"cmd":"leave","network_id":"lavoro"}
+
+// Abbandona network con auto-evict di tutti i servizi attivi
+{"cmd":"leave","network_id":"lavoro","force":true}
 ```
 
 ---
