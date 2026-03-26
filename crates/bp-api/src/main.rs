@@ -293,6 +293,8 @@ struct PutFileBody {
     ph: Option<f64>,
     /// Redundancy overhead (default: 1.0).
     q_target: Option<f64>,
+    /// Human-readable name for the file (shown by `bp ls`).
+    file_name: Option<String>,
 }
 
 fn default_network() -> String {
@@ -320,6 +322,7 @@ async fn put_file(State(state): State<AppState>, Json(body): Json<PutFileBody>) 
         network_id: body.network_id,
         ph: body.ph,
         q_target: body.q_target,
+        file_name: body.file_name,
     };
 
     let path = state.socket_path.as_ref();
