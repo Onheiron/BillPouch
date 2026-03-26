@@ -3,3 +3,6 @@
 *.key
 *.sock
 daemon.pid
+playground/data/**
+!playground/data/*/
+!playground/data/*/.gitkeep
