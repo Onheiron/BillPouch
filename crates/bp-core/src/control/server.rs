@@ -303,6 +303,7 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             };
 
             // Network QoS summary.
+            let qos_peer_count = state.qos.read().unwrap().peer_count();
             let network_qos = {
                 let qos = state.qos.read().unwrap();
                 let rep = state.reputation.read().unwrap();
@@ -336,7 +337,7 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 alias: state.identity.profile.alias.clone(),
                 local_services: services.all().into_iter().cloned().collect(),
                 networks: networks.clone(),
-                known_peers: ns.len(),
+                known_peers: ns.len().max(qos_peer_count),
                 version: env!("CARGO_PKG_VERSION").to_string(),
                 reputation_tier: rep_tier,
                 reputation_score: rep_score,
