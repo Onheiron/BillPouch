@@ -49,6 +49,7 @@ fn make_daemon_state() -> (Arc<DaemonState>, mpsc::Receiver<NetworkCommand>) {
         remote_fragment_index: Arc::new(RwLock::new(bp_core::network::RemoteFragmentIndex::new())),
         chunk_cek_hints: RwLock::new(std::collections::HashMap::new()),
         reputation: RwLock::new(ReputationStore::new()),
+        file_registry: RwLock::new(bp_core::storage::FileRegistry::default()),
     });
 
     (state, net_rx)
