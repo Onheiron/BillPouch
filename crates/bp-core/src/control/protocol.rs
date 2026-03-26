@@ -86,6 +86,10 @@ pub enum ControlRequest {
         q_target: Option<f64>,
         /// Network ID whose Pouch should hold the fragments.
         network_id: String,
+        /// Optional file name to record in the local file registry.
+        /// Displayed by `bp ls`.
+        #[serde(default)]
+        file_name: Option<String>,
     },
     /// Retrieve and decode a stored file chunk by its `chunk_id`.
     GetFile {
@@ -118,6 +122,23 @@ pub enum ControlRequest {
         invite_password: String,
         /// Token validity in hours (default: 24).
         ttl_hours: Option<u64>,
+    },
+    /// Return storage statistics for all local Pouch services.
+    ///
+    /// Includes per-Pouch quota, usage, tier, plus aggregate totals and
+    /// total bytes uploaded by this node's Bill services.
+    StorageInfo {
+        /// Filter to a specific network (empty string = all networks).
+        #[serde(default)]
+        network_id: String,
+    },
+    /// List files uploaded by this node.
+    ///
+    /// Returns entries from the local file registry populated by `PutFile`.
+    ListFiles {
+        /// Filter to a specific network (empty string = all networks).
+        #[serde(default)]
+        network_id: String,
     },
 }
 
@@ -178,6 +199,14 @@ pub struct StatusData {
     pub networks: Vec<String>,
     pub known_peers: usize,
     pub version: String,
+    /// This node's own reputation tier (R0–R4).
+    pub reputation_tier: String,
+    /// Continuous reputation score underlying the tier.
+    pub reputation_score: i64,
+    /// Storage stats for each active Pouch on this node.
+    pub pouch_stats: Vec<PouchStat>,
+    /// Summary of network-wide QoS (if any peers are known).
+    pub network_qos: Option<NetworkQosSummary>,
 }
 
 /// Returned by [`ControlRequest::PutFile`].
@@ -241,4 +270,69 @@ pub struct InviteData {
     pub expires_at: u64,
     /// Fingerprint of the inviter (for display).
     pub inviter_fingerprint: String,
+}
+
+// ── Storage / file-listing types ────────────────────────────────────────────
+
+/// Storage statistics for a single local Pouch service.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PouchStat {
+    pub service_id: String,
+    pub network_id: String,
+    /// Named storage tier (e.g. "T2 — Stone"), if declared at hatch time.
+    pub storage_tier: Option<String>,
+    /// Bytes offered to the network at bid time.
+    pub storage_bid_bytes: u64,
+    /// Bytes currently occupied by stored fragments.
+    pub storage_used_bytes: u64,
+    /// Bytes still available for new fragments.
+    pub available_bytes: u64,
+}
+
+/// High-level QoS summary for the connected network peers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkQosSummary {
+    /// Number of peers with known QoS data.
+    pub observed_peers: usize,
+    /// Average stability score across all observed peers (0.0–1.0).
+    pub avg_stability: f64,
+    /// Number of peers at each reputation tier.
+    pub tier_counts: std::collections::HashMap<String, usize>,
+}
+
+/// Returned by [`ControlRequest::StorageInfo`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StorageInfoData {
+    /// Per-Pouch breakdown.
+    pub pouches: Vec<PouchStat>,
+    /// Sum of all Pouch bids.
+    pub total_bid_bytes: u64,
+    /// Sum of all fragment bytes currently stored.
+    pub total_used_bytes: u64,
+    /// Total bytes still available across all Pouches.
+    pub total_available_bytes: u64,
+    /// Total number of files in the local file registry.
+    pub total_files_uploaded: usize,
+    /// Total original bytes of all uploaded files.
+    pub total_uploaded_bytes: u64,
+}
+
+/// A single file entry returned by [`ControlRequest::ListFiles`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileEntry {
+    pub file_name: String,
+    pub size_bytes: u64,
+    pub chunk_id: String,
+    pub network_id: String,
+    /// Unix timestamp (seconds) when the file was uploaded.
+    pub uploaded_at: u64,
+}
+
+/// Returned by [`ControlRequest::ListFiles`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListFilesData {
+    pub files: Vec<FileEntry>,
+    pub network_id: String,
+    pub total_files: usize,
+    pub total_bytes: u64,
 }

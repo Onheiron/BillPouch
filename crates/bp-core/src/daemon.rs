@@ -13,6 +13,7 @@ use crate::{
         ReputationStore, StorageManagerMap,
     },
     service::ServiceRegistry,
+    storage::FileRegistry,
 };
 use std::{
     collections::HashMap,
@@ -68,6 +69,11 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
         remote_fragment_index: Arc::clone(&remote_fragment_index),
         chunk_cek_hints: RwLock::new(load_cek_hints()),
         reputation: RwLock::new(ReputationStore::new()),
+        file_registry: RwLock::new(
+            config::file_registry_path()
+                .map(|p| FileRegistry::load(&p))
+                .unwrap_or_default(),
+        ),
     });
 
     // ── Build libp2p swarm ────────────────────────────────────────────────

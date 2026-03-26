@@ -91,6 +91,14 @@ pub fn cek_hints_path() -> BpResult<PathBuf> {
     Ok(base_dir()?.join("cek_hints.json"))
 }
 
+/// Path to the file registry (uploaded file catalogue).
+///
+/// JSON list of `StoredFileEntry` records written by `PutFile` so that
+/// `bp ls` can enumerate all files the user has uploaded.
+pub fn file_registry_path() -> BpResult<PathBuf> {
+    Ok(base_dir()?.join("file_registry.json"))
+}
+
 /// Ensure the base directory (and any subdirs) exist.
 pub fn ensure_dirs() -> BpResult<()> {
     std::fs::create_dir_all(base_dir()?).map_err(BpError::Io)

@@ -70,6 +70,39 @@ fn print_status(s: &StatusData) {
     }
     println!();
 
+    // ── Reputation ────────────────────────────────────────────────────────
+    println!("⭐ Reputation");
+    println!(
+        "   tier   : {}   score: {}",
+        s.reputation_tier, s.reputation_score
+    );
+    println!();
+
+    // ── Pouch storage stats ───────────────────────────────────────────────
+    if !s.pouch_stats.is_empty() {
+        println!("💾 Storage (Pouches)");
+        println!("─────────────────────────────────────────────────────");
+        for ps in &s.pouch_stats {
+            let tier_label = ps
+                .storage_tier
+                .as_deref()
+                .unwrap_or("(no tier)");
+            println!(
+                "   [{}]  net: {}  tier: {}",
+                &ps.service_id[..8],
+                ps.network_id,
+                tier_label,
+            );
+            println!(
+                "      bid: {}   used: {}   avail: {}",
+                fmt_bytes(ps.storage_bid_bytes),
+                fmt_bytes(ps.storage_used_bytes),
+                fmt_bytes(ps.available_bytes),
+            );
+        }
+        println!();
+    }
+
     // ── Networks & peers ──────────────────────────────────────────────────
     if s.networks.is_empty() {
         println!("🌐 Networks  (none — use `bp invite join <token>`)");
@@ -77,4 +110,28 @@ fn print_status(s: &StatusData) {
         println!("🌐 Networks  {}", s.networks.join(", "));
     }
     println!("📡 Known peers  {}", s.known_peers);
+
+    // ── Network QoS ───────────────────────────────────────────────────────
+    if let Some(qos) = &s.network_qos {
+        println!();
+        println!("📶 Network QoS  ({} observed peers)", qos.observed_peers);
+        println!("   avg stability : {:.3}", qos.avg_stability);
+        let mut tiers: Vec<(&String, &usize)> = qos.tier_counts.iter().collect();
+        tiers.sort_by_key(|(k, _)| k.as_str());
+        for (tier, count) in tiers {
+            println!("   {tier:>4} : {count} peer(s)");
+        }
+    }
+}
+
+fn fmt_bytes(b: u64) -> String {
+    if b >= 1_073_741_824 {
+        format!("{:.1} GiB", b as f64 / 1_073_741_824.0)
+    } else if b >= 1_048_576 {
+        format!("{:.1} MiB", b as f64 / 1_048_576.0)
+    } else if b >= 1024 {
+        format!("{:.1} KiB", b as f64 / 1024.0)
+    } else {
+        format!("{b} B")
+    }
 }

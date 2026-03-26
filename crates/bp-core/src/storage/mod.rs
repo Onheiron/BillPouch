@@ -20,12 +20,14 @@
 //! ```
 
 pub mod encryption;
+pub mod file_registry;
 pub mod fragment;
 pub mod manifest;
 pub mod meta;
 pub mod tier;
 
 pub use encryption::ChunkCipher;
+pub use file_registry::{FileRegistry, StoredFileEntry};
 pub use fragment::{FragmentIndex, FragmentMeta};
 pub use manifest::{ChunkManifest, FileManifest, FragmentLocation, NetworkMetaKey};
 pub use meta::PouchMeta;
