@@ -45,8 +45,8 @@ fn print_ls(d: &ListFilesData) {
     }
 
     println!(
-        "  {:<32}  {:>10}  {:<18}  {}",
-        "Name", "Size", "chunk_id", "Uploaded"
+        "  {:<32}  {:>10}  {:<18}  Uploaded",
+        "Name", "Size", "chunk_id"
     );
     println!("  {}", "─".repeat(78));
 
