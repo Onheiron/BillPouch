@@ -191,6 +191,11 @@ enum Cmd {
         /// (default: 1.0 = one extra "copy-equivalent" of fragments).
         #[arg(long, default_value_t = 1.0)]
         q_target: f64,
+
+        /// Human-readable name for the file (shown by `bp ls`).
+        /// Defaults to the file's original filename.
+        #[arg(long, short)]
+        name: Option<String>,
     },
 
     /// Retrieve and decode a stored chunk by its chunk_id.
@@ -203,6 +208,26 @@ enum Cmd {
 
         /// Network ID to search (default: "public").
         #[arg(long, short, default_value = DEFAULT_NETWORK)]
+        network: String,
+    },
+
+    /// List files uploaded by this node.
+    ///
+    /// Shows all files recorded in the local file registry (populated on
+    /// `bp put`).  Use `--network` to filter to a specific network.
+    Ls {
+        /// Filter to a specific network (default: show all networks).
+        #[arg(long, short, default_value = "")]
+        network: String,
+    },
+
+    /// Show storage quota and uploaded-file statistics for this node.
+    ///
+    /// Displays per-Pouch bid / used / available bytes, aggregate totals,
+    /// and counts for all files uploaded.  Use `--network` to filter.
+    Storage {
+        /// Filter to a specific network (default: show all networks).
+        #[arg(long, short, default_value = "")]
         network: String,
     },
 
@@ -403,8 +428,9 @@ async fn main() -> anyhow::Result<()> {
             network,
             ph,
             q_target,
+            name,
         }) => {
-            commands::put::put(file, network, ph, q_target).await?;
+            commands::put::put(file, network, ph, q_target, name).await?;
         }
 
         Some(Cmd::Get {
@@ -413,6 +439,14 @@ async fn main() -> anyhow::Result<()> {
             network,
         }) => {
             commands::get::get(chunk_id, network, output).await?;
+        }
+
+        Some(Cmd::Ls { network }) => {
+            commands::ls::ls(network).await?;
+        }
+
+        Some(Cmd::Storage { network }) => {
+            commands::storage::storage_info(network).await?;
         }
 
         Some(Cmd::Bootstrap { action }) => match action {

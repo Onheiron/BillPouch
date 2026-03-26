@@ -5,8 +5,8 @@
 use crate::{
     coding::{params as coding_params, rlnc},
     control::protocol::{
-        ControlRequest, ControlResponse, FlockData, GetFileData, HatchData, InviteData,
-        PutFileData, StatusData,
+        ControlRequest, ControlResponse, FileEntry, FlockData, GetFileData, HatchData, InviteData,
+        ListFilesData, NetworkQosSummary, PouchStat, PutFileData, StatusData, StorageInfoData,
     },
     error::BpResult,
     identity::Identity,
@@ -17,7 +17,7 @@ use crate::{
         StorageManagerMap,
     },
     service::{ServiceInfo, ServiceRegistry, ServiceStatus, ServiceType},
-    storage::{ChunkCipher, StorageManager},
+    storage::{ChunkCipher, FileRegistry, StorageManager},
 };
 use libp2p::{Multiaddr, PeerId};
 use std::{
@@ -159,6 +159,11 @@ pub struct DaemonState {
     ///
     /// Updated by the quality monitor and by eviction events.
     pub reputation: RwLock<ReputationStore>,
+    /// Local catalogue of files uploaded by this node's Bill services.
+    ///
+    /// Populated on each successful `PutFile`.
+    /// Persisted to `file_registry.json`.
+    pub file_registry: RwLock<FileRegistry>,
 }
 
 /// Accept connections on the Unix socket and dispatch requests.
@@ -240,14 +245,95 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             let services = state.services.read().unwrap();
             let networks = state.networks.read().unwrap();
             let ns = state.network_state.read().unwrap();
+            let own_peer = state.identity.peer_id.to_string();
+
+            // Own reputation tier and score.
+            let (rep_tier, rep_score) = {
+                let rep = state.reputation.read().unwrap();
+                match rep.get(&own_peer) {
+                    Some(r) => (r.tier.to_string(), r.reputation_score),
+                    None => (crate::network::ReputationTier::R1.to_string(), 0i64),
+                }
+            };
+
+            // Per-Pouch storage stats.
+            let pouch_stats: Vec<crate::control::protocol::PouchStat> = {
+                let managers = state.storage_managers.read().unwrap();
+                services
+                    .all()
+                    .iter()
+                    .filter(|s| s.service_type == ServiceType::Pouch)
+                    .map(|s| {
+                        let tier_label = s.metadata.get("tier")
+                            .and_then(|v| v.as_str())
+                            .map(|t| format!("{} — {}", t, match t {
+                                "T1" => "Pebble", "T2" => "Stone", "T3" => "Boulder",
+                                "T4" => "Rock", "T5" => "Monolith", _ => "?",
+                            }));
+                        if let Some(sm_lock) = managers.get(&s.id) {
+                            let sm = sm_lock.read().unwrap();
+                            crate::control::protocol::PouchStat {
+                                service_id: s.id.clone(),
+                                network_id: s.network_id.clone(),
+                                storage_tier: tier_label,
+                                storage_bid_bytes: sm.meta.storage_bytes_bid,
+                                storage_used_bytes: sm.meta.storage_bytes_used,
+                                available_bytes: sm.meta.available_bytes(),
+                            }
+                        } else {
+                            crate::control::protocol::PouchStat {
+                                service_id: s.id.clone(),
+                                network_id: s.network_id.clone(),
+                                storage_tier: tier_label,
+                                storage_bid_bytes: 0,
+                                storage_used_bytes: 0,
+                                available_bytes: 0,
+                            }
+                        }
+                    })
+                    .collect()
+            };
+
+            // Network QoS summary.
+            let network_qos = {
+                let qos = state.qos.read().unwrap();
+                let rep = state.reputation.read().unwrap();
+                let peer_count = qos.peer_count();
+                if peer_count == 0 {
+                    None
+                } else {
+                    let scores = qos.all_stability_scores();
+                    let avg_stability = if scores.is_empty() {
+                        0.0
+                    } else {
+                        scores.iter().sum::<f64>() / scores.len() as f64
+                    };
+                    let mut tier_counts: std::collections::HashMap<String, usize> =
+                        std::collections::HashMap::new();
+                    for peer_id in qos.peer_ids() {
+                        let tier = rep.tier(peer_id).to_string();
+                        *tier_counts.entry(tier).or_insert(0) += 1;
+                    }
+                    Some(NetworkQosSummary {
+                        observed_peers: peer_count,
+                        avg_stability,
+                        tier_counts,
+                    })
+                }
+            };
+
             let data = StatusData {
-                peer_id: state.identity.peer_id.to_string(),
+                peer_id: own_peer,
                 fingerprint: state.identity.fingerprint.clone(),
                 alias: state.identity.profile.alias.clone(),
                 local_services: services.all().into_iter().cloned().collect(),
                 networks: networks.clone(),
                 known_peers: ns.len(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
+                reputation_tier: rep_tier,
+                reputation_score: rep_score,
+                pouch_stats,
+                network_qos,
             };
             ControlResponse::ok(data)
         }
@@ -775,6 +861,7 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             ph,
             q_target,
             network_id,
+            file_name,
         } => {
             let ph = ph.unwrap_or(0.999);
             let q_target = q_target.unwrap_or(1.0);
@@ -972,6 +1059,20 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 chunk_id=%chunk_id, stored=%stored, distributed=%distributed,
                 total=%fragments.len(), "PutFile stored + distributed"
             );
+
+            // Record the upload in the local file registry so `bp ls` can list it.
+            if let Some(name) = file_name {
+                let entry = crate::storage::StoredFileEntry {
+                    file_name: name,
+                    size_bytes: chunk_data.len() as u64,
+                    chunk_id: chunk_id.clone(),
+                    network_id: network_id.clone(),
+                    uploaded_at: chrono::Utc::now().timestamp() as u64,
+                };
+                if let Ok(path) = crate::config::file_registry_path() {
+                    state.file_registry.write().unwrap().insert_and_save(entry, &path);
+                }
+            }
 
             ControlResponse::ok(PutFileData {
                 chunk_id: chunk_id.clone(),
@@ -1180,6 +1281,93 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 }
                 Err(e) => ControlResponse::err(format!("Decode failed: {e}")),
             }
+        }
+
+        // ── StorageInfo ───────────────────────────────────────────────────
+        ControlRequest::StorageInfo { network_id } => {
+            let managers = state.storage_managers.read().unwrap();
+            let services = state.services.read().unwrap();
+            let registry = state.file_registry.read().unwrap();
+
+            let pouches: Vec<PouchStat> = services
+                .all()
+                .iter()
+                .filter(|s| {
+                    s.service_type == ServiceType::Pouch
+                        && (network_id.is_empty() || s.network_id == network_id)
+                })
+                .map(|s| {
+                    let tier_label = s.metadata.get("tier")
+                        .and_then(|v| v.as_str())
+                        .map(|t| format!("{} — {}", t, match t {
+                            "T1" => "Pebble", "T2" => "Stone", "T3" => "Boulder",
+                            "T4" => "Rock", "T5" => "Monolith", _ => "?",
+                        }));
+                    if let Some(sm_lock) = managers.get(&s.id) {
+                        let sm = sm_lock.read().unwrap();
+                        PouchStat {
+                            service_id: s.id.clone(),
+                            network_id: s.network_id.clone(),
+                            storage_tier: tier_label,
+                            storage_bid_bytes: sm.meta.storage_bytes_bid,
+                            storage_used_bytes: sm.meta.storage_bytes_used,
+                            available_bytes: sm.meta.available_bytes(),
+                        }
+                    } else {
+                        PouchStat {
+                            service_id: s.id.clone(),
+                            network_id: s.network_id.clone(),
+                            storage_tier: tier_label,
+                            storage_bid_bytes: 0,
+                            storage_used_bytes: 0,
+                            available_bytes: 0,
+                        }
+                    }
+                })
+                .collect();
+
+            let total_bid_bytes: u64 = pouches.iter().map(|p| p.storage_bid_bytes).sum();
+            let total_used_bytes: u64 = pouches.iter().map(|p| p.storage_used_bytes).sum();
+            let total_available_bytes: u64 = pouches.iter().map(|p| p.available_bytes).sum();
+
+            let net_filter = if network_id.is_empty() { "" } else { &network_id };
+            let file_entries = registry.list(net_filter);
+            let total_files_uploaded = file_entries.len();
+            let total_uploaded_bytes: u64 = file_entries.iter().map(|e| e.size_bytes).sum();
+
+            ControlResponse::ok(StorageInfoData {
+                pouches,
+                total_bid_bytes,
+                total_used_bytes,
+                total_available_bytes,
+                total_files_uploaded,
+                total_uploaded_bytes,
+            })
+        }
+
+        // ── ListFiles ─────────────────────────────────────────────────────
+        ControlRequest::ListFiles { network_id } => {
+            let registry = state.file_registry.read().unwrap();
+            let net_filter = if network_id.is_empty() { "" } else { &network_id };
+            let entries: Vec<FileEntry> = registry
+                .list(net_filter)
+                .into_iter()
+                .map(|e| FileEntry {
+                    file_name: e.file_name.clone(),
+                    size_bytes: e.size_bytes,
+                    chunk_id: e.chunk_id.clone(),
+                    network_id: e.network_id.clone(),
+                    uploaded_at: e.uploaded_at,
+                })
+                .collect();
+            let total_bytes = entries.iter().map(|e| e.size_bytes).sum();
+            let total_files = entries.len();
+            ControlResponse::ok(ListFilesData {
+                files: entries,
+                network_id: network_id.clone(),
+                total_files,
+                total_bytes,
+            })
         }
     }
 }

@@ -10,7 +10,13 @@ use crate::client::ControlClient;
 ///
 /// `k` and `n` are computed by the daemon from live peer QoS data and the
 /// `ph` target recovery probability.
-pub async fn put(path: PathBuf, network: String, ph: f64, q_target: f64) -> anyhow::Result<()> {
+pub async fn put(
+    path: PathBuf,
+    network: String,
+    ph: f64,
+    q_target: f64,
+    name: Option<String>,
+) -> anyhow::Result<()> {
     if !Identity::exists()? {
         anyhow::bail!("Not logged in. Run `bp login` first.");
     }
@@ -29,6 +35,13 @@ pub async fn put(path: PathBuf, network: String, ph: f64, q_target: f64) -> anyh
 
     let file_bytes = chunk_data.len();
 
+    // If no name given, fall back to the file name from the path.
+    let file_name = name.or_else(|| {
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .map(|n| n.to_string())
+    });
+
     let mut client = ControlClient::connect().await?;
     let data = client
         .request(ControlRequest::PutFile {
@@ -36,6 +49,7 @@ pub async fn put(path: PathBuf, network: String, ph: f64, q_target: f64) -> anyh
             ph: Some(ph),
             q_target: Some(q_target),
             network_id: network.clone(),
+            file_name,
         })
         .await?;
 
