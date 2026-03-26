@@ -72,7 +72,11 @@ if [ -n "${SERVICES}" ]; then
     for svc in "${SVC_LIST[@]}"; do
         svc=$(echo "${svc}" | tr -d ' ')
         echo "[${NODE_NAME}] Hatching '${svc}'..."
-        bp hatch "${svc}" --network "${NETWORK}" || true
+        if [ "${svc}" = "pouch" ]; then
+            bp hatch "${svc}" --network "${NETWORK}" --tier "${STORAGE_TIER:-T1}" || true
+        else
+            bp hatch "${svc}" --network "${NETWORK}" || true
+        fi
         sleep 1
     done
 fi
