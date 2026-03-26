@@ -37,7 +37,7 @@ pub struct FileRegistry {
 }
 
 impl FileRegistry {
-    /// Create an empty registry (not persisted until [`save`] is called).
+    /// Create an empty registry (not persisted until [`insert_and_save`](Self::insert_and_save) is called).
     pub fn new() -> Self {
         Self::default()
     }
