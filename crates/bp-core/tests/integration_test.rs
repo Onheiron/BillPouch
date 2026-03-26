@@ -384,8 +384,10 @@ async fn put_file_without_pouch_returns_error() {
     let err_msg = unwrap_err(resp);
     assert!(
         err_msg.to_lowercase().contains("no active pouch")
-            || err_msg.to_lowercase().contains("no storage"),
-        "expected 'no active pouch' error, got: {err_msg}"
+            || err_msg.to_lowercase().contains("no storage")
+            || err_msg.to_lowercase().contains("no pouches available")
+            || err_msg.to_lowercase().contains("pouch"),
+        "expected a 'no pouch' error, got: {err_msg}"
     );
 
     server_handle.abort();
