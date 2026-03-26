@@ -538,6 +538,10 @@ fn protocollo_status_data_campi_obbligatori() {
         networks: vec!["public".into()],
         known_peers: 3,
         version: env!("CARGO_PKG_VERSION").into(),
+        reputation_tier: "R0".into(),
+        reputation_score: 0,
+        pouch_stats: vec![],
+        network_qos: None,
     };
 
     let json = serde_json::to_string(&data).unwrap();
@@ -1167,6 +1171,10 @@ fn protocollo_status_data_roundtrip() {
         networks: vec!["amici".into(), "lavoro".into()],
         known_peers: 5,
         version: "0.1.3".into(),
+        reputation_tier: "R0".into(),
+        reputation_score: 0,
+        pouch_stats: vec![],
+        network_qos: None,
     };
     let json = serde_json::to_string(&s).unwrap();
     let back: StatusData = serde_json::from_str(&json).unwrap();
@@ -1690,6 +1698,7 @@ fn make_in_memory_state() -> std::sync::Arc<bp_core::control::server::DaemonStat
         )),
         chunk_cek_hints: std::sync::RwLock::new(std::collections::HashMap::new()),
         reputation: std::sync::RwLock::new(bp_core::network::ReputationStore::new()),
+        file_registry: std::sync::RwLock::new(bp_core::storage::FileRegistry::default()),
     })
 }
 
