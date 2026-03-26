@@ -5,6 +5,27 @@ All notable changes to BillPouch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2](https://github.com/Onheiron/BillPouch/compare/billpouch-v0.3.1...billpouch-v0.3.2) (2026-03-26)
+
+
+### Features
+
+* bp storage, bp ls, enhanced bp status with reputation/QoS/per-Pouch stats ([9391404](https://github.com/Onheiron/BillPouch/commit/93914045a7b612a5b98f7a40f5c7bea0a7221bd8))
+* **playground:** per-node data volumes (T1=10GiB) with bind mounts for fragment inspection ([582542f](https://github.com/Onheiron/BillPouch/commit/582542f4b6fe5e70cae0c531406c4f85c4c96ccd))
+
+
+### Bug Fixes
+
+* add file_name to PutFileBody and PutFile request in bp-api ([dffed99](https://github.com/Onheiron/BillPouch/commit/dffed9905f784fb377650606de2acfa7b967a3f2))
+* add file_name: None to PutFile in integration tests ([f10e7f6](https://github.com/Onheiron/BillPouch/commit/f10e7f689470690d6970aebf3c8488ddfb0616e6))
+* add file_registry to DaemonState in integration test ([646ed77](https://github.com/Onheiron/BillPouch/commit/646ed77721cd5f2688bffb3c5e3b467b01225ed1))
+* bill/post can put/get without local pouch; fixed port per playground node; join gossip in interactive mode; extend mesh wait to 15s; drop duplicate elena pouch ([d2771e8](https://github.com/Onheiron/BillPouch/commit/d2771e8a766c3091aad4515ab3d400afd87b15b9))
+* broken rustdoc intra-doc link in FileRegistry::new ([d1649b4](https://github.com/Onheiron/BillPouch/commit/d1649b49b5ac94d12ec8fafdfeb8d6a9d66ed388))
+* clippy print_literal in ls.rs ([66aae28](https://github.com/Onheiron/BillPouch/commit/66aae280a0e11465816f27eb492d375886af97d3))
+* periodic NodeInfo re-announce every 60s to prevent gossip eviction; known_peers uses max(gossip,qos) ([0aa4b62](https://github.com/Onheiron/BillPouch/commit/0aa4b6259f8afc2cd17f3fe94b4c659ed5666658))
+* update architecture_test for new StatusData fields and file_registry in DaemonState ([1d510d5](https://github.com/Onheiron/BillPouch/commit/1d510d5ee89dd0f681f374e6b4f89524ca9a1219))
+* update put_file_without_pouch test to match new error message ([63e3bb2](https://github.com/Onheiron/BillPouch/commit/63e3bb2f5991d6d93d653950bbc3b27ea9af201c))
+
 ## [0.3.1](https://github.com/Onheiron/BillPouch/compare/billpouch-v0.3.0...billpouch-v0.3.1) (2026-03-25)
 
 
