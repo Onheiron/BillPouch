@@ -313,6 +313,7 @@ async fn put_file_get_file_roundtrip() {
             ph: Some(0.99),
             q_target: Some(1.0),
             network_id: "test-net".to_string(),
+            file_name: None,
         },
     )
     .await;
@@ -375,6 +376,7 @@ async fn put_file_without_pouch_returns_error() {
             ph: None,
             q_target: None,
             network_id: "test-net".to_string(),
+            file_name: None,
         },
     )
     .await;
@@ -474,6 +476,7 @@ async fn get_file_missing_cek_hint_returns_error() {
             ph: Some(0.99),
             q_target: Some(1.0),
             network_id: "test-net".to_string(),
+            file_name: None,
         },
     )
     .await;
