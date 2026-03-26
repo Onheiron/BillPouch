@@ -264,12 +264,20 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                     .iter()
                     .filter(|s| s.service_type == ServiceType::Pouch)
                     .map(|s| {
-                        let tier_label = s.metadata.get("tier")
-                            .and_then(|v| v.as_str())
-                            .map(|t| format!("{} — {}", t, match t {
-                                "T1" => "Pebble", "T2" => "Stone", "T3" => "Boulder",
-                                "T4" => "Rock", "T5" => "Monolith", _ => "?",
-                            }));
+                        let tier_label = s.metadata.get("tier").and_then(|v| v.as_str()).map(|t| {
+                            format!(
+                                "{} — {}",
+                                t,
+                                match t {
+                                    "T1" => "Pebble",
+                                    "T2" => "Stone",
+                                    "T3" => "Boulder",
+                                    "T4" => "Rock",
+                                    "T5" => "Monolith",
+                                    _ => "?",
+                                }
+                            )
+                        });
                         if let Some(sm_lock) = managers.get(&s.id) {
                             let sm = sm_lock.read().unwrap();
                             crate::control::protocol::PouchStat {
@@ -1070,7 +1078,11 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                     uploaded_at: chrono::Utc::now().timestamp() as u64,
                 };
                 if let Ok(path) = crate::config::file_registry_path() {
-                    state.file_registry.write().unwrap().insert_and_save(entry, &path);
+                    state
+                        .file_registry
+                        .write()
+                        .unwrap()
+                        .insert_and_save(entry, &path);
                 }
             }
 
@@ -1297,12 +1309,20 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                         && (network_id.is_empty() || s.network_id == network_id)
                 })
                 .map(|s| {
-                    let tier_label = s.metadata.get("tier")
-                        .and_then(|v| v.as_str())
-                        .map(|t| format!("{} — {}", t, match t {
-                            "T1" => "Pebble", "T2" => "Stone", "T3" => "Boulder",
-                            "T4" => "Rock", "T5" => "Monolith", _ => "?",
-                        }));
+                    let tier_label = s.metadata.get("tier").and_then(|v| v.as_str()).map(|t| {
+                        format!(
+                            "{} — {}",
+                            t,
+                            match t {
+                                "T1" => "Pebble",
+                                "T2" => "Stone",
+                                "T3" => "Boulder",
+                                "T4" => "Rock",
+                                "T5" => "Monolith",
+                                _ => "?",
+                            }
+                        )
+                    });
                     if let Some(sm_lock) = managers.get(&s.id) {
                         let sm = sm_lock.read().unwrap();
                         PouchStat {
@@ -1330,7 +1350,11 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             let total_used_bytes: u64 = pouches.iter().map(|p| p.storage_used_bytes).sum();
             let total_available_bytes: u64 = pouches.iter().map(|p| p.available_bytes).sum();
 
-            let net_filter = if network_id.is_empty() { "" } else { &network_id };
+            let net_filter = if network_id.is_empty() {
+                ""
+            } else {
+                &network_id
+            };
             let file_entries = registry.list(net_filter);
             let total_files_uploaded = file_entries.len();
             let total_uploaded_bytes: u64 = file_entries.iter().map(|e| e.size_bytes).sum();
@@ -1348,7 +1372,11 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
         // ── ListFiles ─────────────────────────────────────────────────────
         ControlRequest::ListFiles { network_id } => {
             let registry = state.file_registry.read().unwrap();
-            let net_filter = if network_id.is_empty() { "" } else { &network_id };
+            let net_filter = if network_id.is_empty() {
+                ""
+            } else {
+                &network_id
+            };
             let entries: Vec<FileEntry> = registry
                 .list(net_filter)
                 .into_iter()

@@ -63,7 +63,10 @@ fn print_storage(d: &StorageInfoData) {
     println!("─────────────────────────────────────────────────────");
     println!("   Total bid       : {}", fmt_bytes(d.total_bid_bytes));
     println!("   Total used      : {}", fmt_bytes(d.total_used_bytes));
-    println!("   Total available : {}", fmt_bytes(d.total_available_bytes));
+    println!(
+        "   Total available : {}",
+        fmt_bytes(d.total_available_bytes)
+    );
     println!();
 
     // ── Uploaded files ────────────────────────────────────────────────────

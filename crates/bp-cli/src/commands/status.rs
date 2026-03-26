@@ -83,10 +83,7 @@ fn print_status(s: &StatusData) {
         println!("💾 Storage (Pouches)");
         println!("─────────────────────────────────────────────────────");
         for ps in &s.pouch_stats {
-            let tier_label = ps
-                .storage_tier
-                .as_deref()
-                .unwrap_or("(no tier)");
+            let tier_label = ps.storage_tier.as_deref().unwrap_or("(no tier)");
             println!(
                 "   [{}]  net: {}  tier: {}",
                 &ps.service_id[..8],
