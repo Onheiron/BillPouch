@@ -124,6 +124,47 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
         }
     });
 
+    // ── Periodic NodeInfo re-announce — keep gossip state fresh ──────────
+    // announce_self is called once on Hatch; this loop re-broadcasts every
+    // 60 s so that evict_stale(120) never drops live peers from neighbours.
+    let reannounce_state = Arc::clone(&daemon_state);
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        interval.tick().await; // skip first tick (Hatch already announced)
+        loop {
+            interval.tick().await;
+            let services_snapshot: Vec<(String, crate::service::ServiceType, String)> = {
+                let svc = reannounce_state.services.read().unwrap();
+                svc.all()
+                    .iter()
+                    .map(|s| (s.id.clone(), s.service_type, s.network_id.clone()))
+                    .collect()
+            };
+            for (service_id, service_type, network_id) in services_snapshot {
+                let info = crate::network::state::NodeInfo {
+                    peer_id: reannounce_state.identity.peer_id.to_string(),
+                    user_fingerprint: reannounce_state.identity.fingerprint.clone(),
+                    user_alias: reannounce_state.identity.profile.alias.clone(),
+                    service_type,
+                    service_id,
+                    network_id: network_id.clone(),
+                    listen_addrs: vec![],
+                    announced_at: chrono::Utc::now().timestamp() as u64,
+                    metadata: std::collections::HashMap::new(),
+                };
+                if let Ok(payload) = serde_json::to_vec(&info) {
+                    let _ = reannounce_state
+                        .net_tx
+                        .send(crate::network::NetworkCommand::Announce {
+                            network_id,
+                            payload,
+                        })
+                        .await;
+                }
+            }
+        }
+    });
+
     // ── Network quality monitor — Ping all Pouch peers, update QoS ──────
     let monitor_state = Arc::clone(&network_state);
     let monitor_qos = Arc::clone(&daemon_state.qos);
