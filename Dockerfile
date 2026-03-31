@@ -1,5 +1,5 @@
 # ── Stage 1: chef — compute dependency recipe ───────────────────────────────
-FROM rust:1.86-bookworm AS chef
+FROM rust:1.88-bookworm AS chef
 RUN cargo install cargo-chef --locked
 WORKDIR /src
 
