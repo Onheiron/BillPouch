@@ -2,11 +2,38 @@
 
 use crate::client::ControlClient;
 use bp_core::control::protocol::{ControlRequest, StatusData};
+use std::io::Write as _;
 
 /// Query the daemon for identity + service status and pretty-print a compact
-/// summary.  Unlike `bp flock`, this does **not** show the full peer list —
-/// use `bp flock` when you need peer details.
+/// summary.  Triggers a gossip re-announce before reading so that `known_peers`
+/// reflects the live network state.
 pub async fn status() -> anyhow::Result<()> {
+    // ── Phase 1: gossip refresh with spinner ─────────────────────────────
+    {
+        let mut client = ControlClient::connect().await?;
+
+        // Spinner task — runs until the AnnounceNow response arrives.
+        let spinner = tokio::spawn(async {
+            let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+            let mut i: usize = 0;
+            loop {
+                let _ = print!("\r{}  Refreshing network state...", frames[i % frames.len()]);
+                let _ = std::io::stdout().flush();
+                i += 1;
+                tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
+            }
+        });
+
+        // Ask the daemon to re-announce all services and wait 2 s.
+        let _ = client.request(ControlRequest::AnnounceNow).await;
+
+        spinner.abort();
+        // Erase the spinner line.
+        print!("\r\x1b[K");
+        let _ = std::io::stdout().flush();
+    }
+
+    // ── Phase 2: fetch and display status ────────────────────────────────
     let mut client = ControlClient::connect().await?;
     let data = client.request(ControlRequest::Status).await?;
 

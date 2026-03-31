@@ -347,6 +347,33 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             ControlResponse::ok(data)
         }
 
+        // ── AnnounceNow ───────────────────────────────────────────────────
+        ControlRequest::AnnounceNow => {
+            // Re-broadcast NodeInfo for every running service, then pause
+            // 2 s to let gossipsub deliver the messages to peers.
+            let svcs: Vec<(String, ServiceType, String)> = {
+                state
+                    .services
+                    .read()
+                    .unwrap()
+                    .all()
+                    .iter()
+                    .filter(|s| s.status == ServiceStatus::Running)
+                    .map(|s| (s.id.clone(), s.service_type, s.network_id.clone()))
+                    .collect()
+            };
+            if svcs.is_empty() {
+                tracing::debug!("AnnounceNow: no running services, skipping");
+            } else {
+                for (id, stype, net) in &svcs {
+                    announce_self(state, id, *stype, net).await;
+                }
+                tracing::debug!("AnnounceNow: announced {} service(s), waiting 2s", svcs.len());
+                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+            }
+            ControlResponse::ok("announced")
+        }
+
         // ── Hatch ─────────────────────────────────────────────────────────
         ControlRequest::Hatch {
             service_type,
