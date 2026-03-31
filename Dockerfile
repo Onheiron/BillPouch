@@ -1,5 +1,6 @@
 # ── Stage 1: chef — compute dependency recipe ───────────────────────────────
-FROM rust:1.88-bookworm AS chef
+# rust:latest ensures cargo-chef's MSRV requirements are always satisfied
+FROM rust:latest AS chef
 RUN cargo install cargo-chef --locked
 WORKDIR /src
 
