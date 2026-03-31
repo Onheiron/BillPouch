@@ -69,6 +69,11 @@ pub enum ControlRequest {
     },
     /// Return info about this daemon (identity, services, networks).
     Status,
+    /// Announce all active services via gossip and wait 2 s for propagation.
+    ///
+    /// Used by `bp status` to ensure the peer list is fresh before
+    /// displaying it.  Returns `Ok("announced")` once the wait is done.
+    AnnounceNow,
     /// Ping — used to check if daemon is alive.
     Ping,
     /// Encode `chunk_data` with RLNC and store fragments in the local Pouch.
