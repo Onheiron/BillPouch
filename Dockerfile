@@ -1,6 +1,7 @@
 # ── Stage 1: chef — compute dependency recipe ───────────────────────────────
-# rust:latest ensures cargo-chef's MSRV requirements are always satisfied
-FROM rust:latest AS chef
+# rust:bookworm = latest stable Rust on Debian bookworm (glibc 2.36),
+# keeping the runtime debian:bookworm-slim ABI-compatible.
+FROM rust:bookworm AS chef
 RUN cargo install cargo-chef --locked
 WORKDIR /src
 
