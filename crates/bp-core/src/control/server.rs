@@ -247,12 +247,16 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             let ns = state.network_state.read().unwrap();
             let own_peer = state.identity.peer_id.to_string();
 
-            // Own reputation tier and score.
-            let (rep_tier, rep_score) = {
+            // Own reputation tier, score, and availability factor.
+            let (rep_tier, rep_score, avail_factor) = {
                 let rep = state.reputation.read().unwrap();
                 match rep.get(&own_peer) {
-                    Some(r) => (r.tier.to_string(), r.reputation_score),
-                    None => (crate::network::ReputationTier::R1.to_string(), 0i64),
+                    Some(r) => (r.tier.to_string(), r.reputation_score, r.tier.availability_factor()),
+                    None => (
+                        crate::network::ReputationTier::R1.to_string(),
+                        0i64,
+                        crate::network::ReputationTier::R1.availability_factor(),
+                    ),
                 }
             };
 
@@ -286,7 +290,9 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                                 storage_tier: tier_label,
                                 storage_bid_bytes: sm.meta.storage_bytes_bid,
                                 storage_used_bytes: sm.meta.storage_bytes_used,
-                                available_bytes: sm.meta.available_bytes(),
+                                available_bytes: ((sm.meta.available_bytes() as f64)
+                                    * avail_factor)
+                                    .round() as u64,
                             }
                         } else {
                             crate::control::protocol::PouchStat {
@@ -1332,6 +1338,16 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             let services = state.services.read().unwrap();
             let registry = state.file_registry.read().unwrap();
 
+            // Availability factor from own reputation tier.
+            let avail_factor = {
+                let own_peer = state.identity.peer_id.to_string();
+                let rep = state.reputation.read().unwrap();
+                match rep.get(&own_peer) {
+                    Some(r) => r.tier.availability_factor(),
+                    None => crate::network::ReputationTier::R1.availability_factor(),
+                }
+            };
+
             let pouches: Vec<PouchStat> = services
                 .all()
                 .iter()
@@ -1362,7 +1378,8 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                             storage_tier: tier_label,
                             storage_bid_bytes: sm.meta.storage_bytes_bid,
                             storage_used_bytes: sm.meta.storage_bytes_used,
-                            available_bytes: sm.meta.available_bytes(),
+                            available_bytes: ((sm.meta.available_bytes() as f64) * avail_factor)
+                                .round() as u64,
                         }
                     } else {
                         PouchStat {

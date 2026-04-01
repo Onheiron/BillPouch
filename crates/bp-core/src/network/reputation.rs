@@ -99,6 +99,27 @@ impl ReputationTier {
         }
     }
 
+    /// Weight `[0.0, 1.0]` applied to `(bid − used)` to obtain the
+    /// **effective available bytes** that the network can trust from a
+    /// node at this reputation tier.
+    ///
+    /// | Tier | Factor | Rationale                                  |
+    /// |------|--------|--------------------------------------------|
+    /// | R0   | 0.00   | Quarantined — no capacity trusted          |
+    /// | R1   | 0.10   | Fledgling — unproven, grant 10 %           |
+    /// | R2   | 0.70   | Reliable  — sustained track record        |
+    /// | R3   | 0.90   | Trusted   — high long-term reliability     |
+    /// | R4   | 1.00   | Pillar    — full trust                     |
+    pub fn availability_factor(self) -> f64 {
+        match self {
+            Self::R0 => 0.00,
+            Self::R1 => 0.10,
+            Self::R2 => 0.70,
+            Self::R3 => 0.90,
+            Self::R4 => 1.00,
+        }
+    }
+
     /// Returns `true` if this tier is trusted enough to receive fragments
     /// from senders with `sender_tier`.
     ///
