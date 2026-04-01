@@ -121,7 +121,7 @@ fn print_status(s: &StatusData) {
                 tier_label,
             );
             println!(
-                "      bid: {}   used: {}   avail: {}",
+                "      bid: {}   used: {}   avail (eff.): {}",
                 fmt_bytes(ps.storage_bid_bytes),
                 fmt_bytes(ps.storage_used_bytes),
                 fmt_bytes(ps.available_bytes),
