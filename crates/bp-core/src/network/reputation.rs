@@ -99,24 +99,34 @@ impl ReputationTier {
         }
     }
 
-    /// Weight `[0.0, 1.0]` applied to `(bid − used)` to obtain the
-    /// **effective available bytes** that the network can trust from a
-    /// node at this reputation tier.
+    /// Target QoS recovery probability `Ph` for this reputation tier.
     ///
-    /// | Tier | Factor | Rationale                                  |
-    /// |------|--------|--------------------------------------------|
-    /// | R0   | 0.00   | Quarantined — no capacity trusted          |
-    /// | R1   | 0.10   | Fledgling — unproven, grant 10 %           |
-    /// | R2   | 0.70   | Reliable  — sustained track record        |
-    /// | R3   | 0.90   | Trusted   — high long-term reliability     |
-    /// | R4   | 1.00   | Pillar    — full trust                     |
-    pub fn availability_factor(self) -> f64 {
+    /// Used as the `ph` argument to
+    /// [`crate::coding::params::compute_network_storage_factor`] when
+    /// computing the effective available storage of a Pouch node:
+    ///
+    /// ```text
+    /// effective_available = (bid − used) × k/N
+    /// ```
+    ///
+    /// where `k/N` is the maximum coding rate that the current network
+    /// of N Pouch peers can sustain while guaranteeing at least `Ph`
+    /// probability of full file recovery.
+    ///
+    /// | Tier | Ph    | Rationale                                     |
+    /// |------|-------|-----------------------------------------------|
+    /// | R0   | 0.00  | Quarantined — no availability guaranteed      |
+    /// | R1   | 0.70  | Fledgling   — lenient, network still forming  |
+    /// | R2   | 0.85  | Reliable    — solid sustained network         |
+    /// | R3   | 0.95  | Trusted     — high-reliability threshold      |
+    /// | R4   | 0.999 | Pillar      — near-certain recovery           |
+    pub fn qos_target_ph(self) -> f64 {
         match self {
-            Self::R0 => 0.00,
-            Self::R1 => 0.10,
-            Self::R2 => 0.70,
-            Self::R3 => 0.90,
-            Self::R4 => 1.00,
+            Self::R0 => 0.0,
+            Self::R1 => 0.70,
+            Self::R2 => 0.85,
+            Self::R3 => 0.95,
+            Self::R4 => 0.999,
         }
     }
 
