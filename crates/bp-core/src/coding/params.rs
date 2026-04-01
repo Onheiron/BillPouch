@@ -176,6 +176,48 @@ pub fn compute_coding_params(
     })
 }
 
+/// Compute the **network storage utilisation factor** `k / N`.
+///
+/// Given the per-peer stability scores and a per-tier target recovery
+/// probability `Ph`, this returns the largest fraction `k / N ∈ [0.0, 1.0]`
+/// such that:
+///
+/// ```text
+/// P(X ≥ k) ≥ Ph    where X ~ PoissonBinomial(p_1, …, p_N)
+/// ```
+///
+/// Interpretation: for every raw byte stored by a node, only `k/N` bytes
+/// correspond to recoverable file content (the rest is redundancy).
+///
+/// # Arguments
+///
+/// - `stabilities` — per-Pouch stability scores including the **own node**.
+///   Use `0.4` as the default for a new node with no QoS history.
+/// - `ph`          — target recovery probability (from
+///   [`crate::network::ReputationTier::qos_target_ph`]).
+///
+/// Returns `0.0` when the network is empty, too small, or too unreliable
+/// to satisfy `Ph`.
+pub fn compute_network_storage_factor(stabilities: &[f64], ph: f64) -> f64 {
+    let n = stabilities.len();
+    if n == 0 || !(0.0 < ph && ph < 1.0) {
+        return 0.0;
+    }
+    let mu: f64 = stabilities.iter().sum();
+    let sigma: f64 = stabilities
+        .iter()
+        .map(|&p| p * (1.0 - p))
+        .sum::<f64>()
+        .sqrt();
+    let z_ph = probit(ph);
+    let k_float = mu - z_ph * sigma + 0.5;
+    if k_float < 1.0 {
+        return 0.0;
+    }
+    let k = (k_float.floor() as usize).min(n);
+    k as f64 / n as f64
+}
+
 /// Recompute the **rolling effective recovery probability** `Pe` for a file
 /// that was uploaded with threshold `k`, given the current stability scores.
 ///

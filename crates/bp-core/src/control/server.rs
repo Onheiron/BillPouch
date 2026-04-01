@@ -247,21 +247,35 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             let ns = state.network_state.read().unwrap();
             let own_peer = state.identity.peer_id.to_string();
 
-            // Own reputation tier, score, and availability factor.
+            // Own reputation tier, score, and dynamic availability factor.
             let (rep_tier, rep_score, avail_factor) = {
-                let rep = state.reputation.read().unwrap();
-                match rep.get(&own_peer) {
-                    Some(r) => (
-                        r.tier.to_string(),
-                        r.reputation_score,
-                        r.tier.availability_factor(),
-                    ),
-                    None => (
-                        crate::network::ReputationTier::R1.to_string(),
-                        0i64,
-                        crate::network::ReputationTier::R1.availability_factor(),
-                    ),
-                }
+                let (tier_str, score, tier_enum) = {
+                    let rep = state.reputation.read().unwrap();
+                    match rep.get(&own_peer) {
+                        Some(r) => (r.tier.to_string(), r.reputation_score, r.tier),
+                        None => (
+                            crate::network::ReputationTier::R1.to_string(),
+                            0i64,
+                            crate::network::ReputationTier::R1,
+                        ),
+                    }
+                };
+                // k/N: fraction of raw bid usable as recoverable content.
+                // N = remote Pouch peers + own node (score 0.4 if unobserved).
+                let factor = if tier_enum == crate::network::ReputationTier::R0 {
+                    0.0_f64
+                } else {
+                    let ph = tier_enum.qos_target_ph();
+                    let qos = state.qos.read().unwrap();
+                    let own_score = qos
+                        .get(&own_peer)
+                        .map(|q| q.stability_score())
+                        .unwrap_or(0.4);
+                    let mut stabilities = qos.all_stability_scores();
+                    stabilities.push(own_score);
+                    crate::coding::params::compute_network_storage_factor(&stabilities, ph)
+                };
+                (tier_str, score, factor)
             };
 
             // Per-Pouch storage stats.
@@ -1342,13 +1356,28 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             let services = state.services.read().unwrap();
             let registry = state.file_registry.read().unwrap();
 
-            // Availability factor from own reputation tier.
+            // k/N availability factor: dynamic, from current network QoS.
             let avail_factor = {
                 let own_peer = state.identity.peer_id.to_string();
-                let rep = state.reputation.read().unwrap();
-                match rep.get(&own_peer) {
-                    Some(r) => r.tier.availability_factor(),
-                    None => crate::network::ReputationTier::R1.availability_factor(),
+                let tier_enum = {
+                    let rep = state.reputation.read().unwrap();
+                    match rep.get(&own_peer) {
+                        Some(r) => r.tier,
+                        None => crate::network::ReputationTier::R1,
+                    }
+                };
+                if tier_enum == crate::network::ReputationTier::R0 {
+                    0.0_f64
+                } else {
+                    let ph = tier_enum.qos_target_ph();
+                    let qos = state.qos.read().unwrap();
+                    let own_score = qos
+                        .get(&own_peer)
+                        .map(|q| q.stability_score())
+                        .unwrap_or(0.4);
+                    let mut stabilities = qos.all_stability_scores();
+                    stabilities.push(own_score);
+                    crate::coding::params::compute_network_storage_factor(&stabilities, ph)
                 }
             };
 
