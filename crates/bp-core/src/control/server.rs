@@ -368,7 +368,10 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 for (id, stype, net) in &svcs {
                     announce_self(state, id, *stype, net).await;
                 }
-                tracing::debug!("AnnounceNow: announced {} service(s), waiting 2s", svcs.len());
+                tracing::debug!(
+                    "AnnounceNow: announced {} service(s), waiting 2s",
+                    svcs.len()
+                );
                 tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
             }
             ControlResponse::ok("announced")
