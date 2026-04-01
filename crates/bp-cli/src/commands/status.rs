@@ -17,11 +17,11 @@ pub async fn status() -> anyhow::Result<()> {
             let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
             let mut i: usize = 0;
             loop {
-                let _ = print!(
+                print!(
                     "\r{}  Refreshing network state...",
                     frames[i % frames.len()]
                 );
-                let _ = std::io::stdout().flush();
+                std::io::stdout().flush().ok();
                 i += 1;
                 tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
             }
