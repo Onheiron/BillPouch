@@ -267,9 +267,10 @@ async function handleTool(
     case "bp_control": {
       const { container, request } = args as { container: string; request: object };
       const payload = JSON.stringify(request).replace(/'/g, "'\\''");
+      const sock = '$HOME/.local/share/billpouch/control.sock';
       const cmd =
         `docker exec ${container} bash -c ` +
-        `"echo '${payload}' | socat -T5 - UNIX-CONNECT:\\${HOME}/.local/share/billpouch/control.sock"`;
+        `"echo '${payload}' | socat -T5 - UNIX-CONNECT:${sock}"`;
       return result(await sh(cmd));
     }
 
@@ -320,7 +321,7 @@ async function handleTool(
       const wikiDir = workspacePath("wiki");
       if (!page) {
         const pages = readdirSync(wikiDir)
-          .filter((f) => f.endsWith(".md"))
+          .filter((f: string) => f.endsWith(".md"))
           .join("\n");
         return text(`Wiki pages:\n${pages}`);
       }
@@ -349,7 +350,7 @@ async function handleTool(
       if (!specName) {
         try {
           const files = readdirSync(specsDir)
-            .filter((f) => f.endsWith(".md"))
+            .filter((f: string) => f.endsWith(".md"))
             .join("\n");
           return text(`Specs:\n${files || "(none yet)"}`);
         } catch {
@@ -378,7 +379,7 @@ const server = new Server(
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
 
-server.setRequestHandler(CallToolRequestSchema, async (req) => {
+server.setRequestHandler(CallToolRequestSchema, async (req: { params: { name: string; arguments?: Record<string, unknown> } }) => {
   const { name, arguments: args = {} } = req.params;
   return handleTool(name, args as Record<string, unknown>);
 });
