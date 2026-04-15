@@ -1,3 +1,14 @@
 {
-    "claudeCodeChat.permissions.yoloMode": true
+    "claudeCodeChat.permissions.yoloMode": true,
+    "github.copilot.chat.codeGeneration.instructions": [
+        {
+            "text": "Questa macchina NON ha cargo installato. Non eseguire mai comandi cargo (build, test, fmt, clippy) in locale. Per verificare che il codice compili, committa e pusha: la CI su GitHub Actions fa tutto."
+        },
+        {
+            "text": "Quando fai un commit usa SEMPRE il tool git_commit_push del MCP server billpouch che fa add + commit + push in un colpo solo. Non fare mai solo git commit senza poi pushare immediatamente dopo."
+        },
+        {
+            "text": "Il MCP server 'billpouch' è disponibile con questi tool: docker_run, bp_cmd, bp_control, compose_up, compose_down, list_containers, git_commit_push, git_diff, read_wiki, write_spec, read_spec."
+        }
+    ]
 }
