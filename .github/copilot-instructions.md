@@ -167,3 +167,44 @@ StorageTier T1–T5, ReputationTier R0–R4, `bp status`, `bp pause/resume`, `bp
 `bp leave --force`, Proof-of-Storage, FragmentIndex gossip, REST API + web dashboard.
 
 See `wiki/12-status-roadmap.md` for the full feature list.
+
+---
+
+## MCP Server (local dev tooling)
+
+The repo includes a TypeScript MCP server at `mcp/` that exposes atomic tools
+for AI agents to interact with the workspace and Docker environment.
+
+**Setup** (once per machine):
+```bash
+cd mcp && npm install && npm run build
+```
+
+Configure VS Code to load it via `.vscode/mcp.json` (not committed — create locally):
+```json
+{
+  "servers": {
+    "billpouch": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${workspaceFolder}/mcp/dist/index.js"]
+    }
+  }
+}
+```
+
+**Available tools:**
+
+| Tool | Description |
+|------|-------------|
+| `docker_run(container, cmd)` | exec a shell command in a running container |
+| `bp_cmd(container, args[])` | run `bp <args>` in a container |
+| `bp_control(container, request)` | send JSON ControlRequest to daemon socket |
+| `compose_up(compose_file)` | docker compose up --build |
+| `compose_down(compose_file)` | docker compose down |
+| `list_containers()` | list running bp- containers |
+| `git_commit_push(message, tag?)` | git add -A + commit + push (always pushes) |
+| `git_diff(staged?)` | current working tree diff |
+| `read_wiki(page?)` | read a page from wiki/ |
+| `write_spec(name, content)` | write a feature spec to specs/ |
+| `read_spec(name?)` | list or read specs/ |
