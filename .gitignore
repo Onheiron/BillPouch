@@ -6,3 +6,14 @@ daemon.pid
 playground/data/**
 !playground/data/*/
 !playground/data/*/.gitkeep
+
+# Local VS Code config (machine-specific, not shared)
+.vscode/
+
+# MCP server build output and deps
+mcp/node_modules/
+mcp/dist/
+
+# Feature specs (optional: remove this line if you want specs in git)
+# specs/
+
