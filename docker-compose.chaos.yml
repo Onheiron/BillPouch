@@ -1,0 +1,58 @@
+## BillPouch — Chaos test cluster
+## Usage:
+##   docker compose -f docker-compose.chaos.yml up --build -d
+##   ./agents/chaos/run_chaos.sh [l1|l2|l3|all]
+##   docker compose -f docker-compose.chaos.yml down -v
+##
+## NET_ADMIN is required for L2 partition test (iptables rules).
+
+services:
+  chaos1:
+    build: .
+    container_name: bp-chaos1
+    hostname: bp-chaos1
+    environment:
+      NODE_NAME: "chaos-pouch-1"
+      NETWORK:   "chaostest"
+      RUST_LOG:  "bp_core=debug,bp_cli=info"
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+    networks:
+      - bp-chaos
+
+  chaos2:
+    build: .
+    container_name: bp-chaos2
+    hostname: bp-chaos2
+    environment:
+      NODE_NAME: "chaos-pouch-2"
+      NETWORK:   "chaostest"
+      RUST_LOG:  "bp_core=debug,bp_cli=info"
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+    networks:
+      - bp-chaos
+
+  chaos3:
+    build: .
+    container_name: bp-chaos3
+    hostname: bp-chaos3
+    environment:
+      NODE_NAME: "chaos-post"
+      NETWORK:   "chaostest"
+      RUST_LOG:  "bp_core=debug,bp_cli=info"
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+    networks:
+      - bp-chaos
+
+networks:
+  bp-chaos:
+    driver: bridge
+    # Use a /24 so iptables rules are predictable
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24

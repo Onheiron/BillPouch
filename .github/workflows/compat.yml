@@ -1,0 +1,136 @@
+name: Compatibility
+
+# Runs before every release to verify that a new binary can coexist
+# with nodes running the previous released version.
+#
+# Strategy:
+#   - Pull the latest released image from ghcr.io (v-1)
+#   - Build the current HEAD image (v-current)
+#   - Run a mixed cluster: 2 old nodes + 1 new node
+#   - Verify gossip, peer discovery, and basic operations work across versions
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      old_tag:
+        description: "Old release tag to compare against (e.g. v0.3.15)"
+        required: false
+        default: ""
+
+concurrency:
+  group: compat-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  compat:
+    name: Multi-version compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      REGISTRY: ghcr.io
+      IMAGE: ${{ github.repository }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Determine old tag
+        id: old_tag
+        run: |
+          INPUT_TAG="${{ github.event.inputs.old_tag }}"
+          if [ -n "$INPUT_TAG" ]; then
+            echo "tag=${INPUT_TAG}" >> "$GITHUB_OUTPUT"
+          else
+            # Auto-detect: previous tag in semver order
+            PREV=$(git tag --sort=-version:refname | grep -E '^v[0-9]+' | sed -n '2p')
+            echo "tag=${PREV:-latest}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull old image
+        run: |
+          OLD_TAG="${{ steps.old_tag.outputs.tag }}"
+          echo "Testing compatibility with ${OLD_TAG}"
+          docker pull "${REGISTRY}/${IMAGE}:${OLD_TAG}" \
+              || docker pull "${REGISTRY}/${IMAGE}:latest" \
+              || echo "WARNING: could not pull old image, using current build"
+          docker tag "${REGISTRY}/${IMAGE}:${OLD_TAG}" billpouch-old 2>/dev/null \
+              || docker tag "${REGISTRY}/${IMAGE}:latest" billpouch-old 2>/dev/null \
+              || true
+
+      - name: Build current HEAD image
+        run: docker build -t billpouch-new .
+
+      - name: Start mixed cluster (2 old + 1 new)
+        run: |
+          docker network create bp-compat || true
+
+          # Old node 1
+          docker run -d --name bp-old1 --hostname bp-old1 \
+            --network bp-compat \
+            -e NODE_NAME=old1 -e NETWORK=compat \
+            -e RUST_LOG=bp_core=info \
+            billpouch-old
+
+          # Old node 2
+          docker run -d --name bp-old2 --hostname bp-old2 \
+            --network bp-compat \
+            -e NODE_NAME=old2 -e NETWORK=compat \
+            -e RUST_LOG=bp_core=info \
+            billpouch-old
+
+          # New node (current HEAD)
+          docker run -d --name bp-new1 --hostname bp-new1 \
+            --network bp-compat \
+            -e NODE_NAME=new1 -e NETWORK=compat \
+            -e RUST_LOG=bp_core=info \
+            billpouch-new
+
+      - name: Wait for mesh formation
+        run: sleep 45
+
+      - name: Hatch services on all nodes
+        run: |
+          docker exec bp-old1 bp hatch pouch --network compat || true
+          docker exec bp-old2 bp hatch pouch --network compat || true
+          docker exec bp-new1 bp hatch bill  --network compat || true
+          sleep 15
+
+      - name: Verify cross-version peer discovery
+        run: |
+          chmod +x agents/lib/assert.sh
+          source agents/lib/assert.sh
+
+          for node in bp-old1 bp-old2 bp-new1; do
+            count=$(docker exec "$node" bp flock 2>&1 | grep -oP 'Known Peers\s+\(\K[0-9]+' || echo "0")
+            echo "${node}: ${count} peers"
+            if [ "$count" -lt 1 ]; then
+              echo "ERROR: ${node} sees 0 peers in mixed-version cluster"
+              exit 1
+            fi
+          done
+          echo "✓ Cross-version peer discovery works"
+
+      - name: Dump logs on failure
+        if: failure()
+        run: |
+          for node in bp-old1 bp-old2 bp-new1; do
+            echo "=== ${node} ==="
+            docker logs "$node" 2>&1 | tail -30
+          done
+
+      - name: Tear down
+        if: always()
+        run: |
+          docker rm -f bp-old1 bp-old2 bp-new1 2>/dev/null || true
+          docker network rm bp-compat 2>/dev/null || true

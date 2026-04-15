@@ -1,0 +1,70 @@
+## BillPouch — Acceptance test cluster (5 nodes)
+## Usage:
+##   docker compose -f docker-compose.acceptance.yml up --build -d
+##   ./agents/acceptance/scenarios.sh
+##   docker compose -f docker-compose.acceptance.yml down -v
+
+services:
+  # ── Bill: file I/O node (performs put/get) ────────────────────────────────
+  node-bill:
+    build: .
+    container_name: bp-bill
+    hostname: bp-bill
+    environment:
+      NODE_NAME: "marco-bill"
+      NETWORK:   "acceptance"
+      RUST_LOG:  "bp_core=info,bp_cli=info"
+    networks:
+      - bp-acceptance
+
+  # ── Pouch 1 ───────────────────────────────────────────────────────────────
+  node-pouch1:
+    build: .
+    container_name: bp-pouch1
+    hostname: bp-pouch1
+    environment:
+      NODE_NAME: "alice-pouch"
+      NETWORK:   "acceptance"
+      RUST_LOG:  "bp_core=info,bp_cli=info"
+    networks:
+      - bp-acceptance
+
+  # ── Pouch 2 ───────────────────────────────────────────────────────────────
+  node-pouch2:
+    build: .
+    container_name: bp-pouch2
+    hostname: bp-pouch2
+    environment:
+      NODE_NAME: "bob-pouch"
+      NETWORK:   "acceptance"
+      RUST_LOG:  "bp_core=info,bp_cli=info"
+    networks:
+      - bp-acceptance
+
+  # ── Pouch 3 ───────────────────────────────────────────────────────────────
+  node-pouch3:
+    build: .
+    container_name: bp-pouch3
+    hostname: bp-pouch3
+    environment:
+      NODE_NAME: "carol-pouch"
+      NETWORK:   "acceptance"
+      RUST_LOG:  "bp_core=info,bp_cli=info"
+    networks:
+      - bp-acceptance
+
+  # ── Post: relay node ──────────────────────────────────────────────────────
+  node-post:
+    build: .
+    container_name: bp-post
+    hostname: bp-post
+    environment:
+      NODE_NAME: "diana-post"
+      NETWORK:   "acceptance"
+      RUST_LOG:  "bp_core=info,bp_cli=info"
+    networks:
+      - bp-acceptance
+
+networks:
+  bp-acceptance:
+    driver: bridge
