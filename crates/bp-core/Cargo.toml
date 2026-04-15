@@ -41,5 +41,10 @@ argon2  = "0.5"
 chacha20poly1305 = "0.10"
 
 [dev-dependencies]
-tokio = { workspace = true }
-uuid  = { workspace = true }
+tokio     = { workspace = true }
+uuid      = { workspace = true }
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name    = "coding"
+harness = false

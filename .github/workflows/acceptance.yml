@@ -1,0 +1,54 @@
+name: Acceptance Tests
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # Nightly at 02:00 UTC
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: "Scenario to run (all | peer_discovery | put_get | ...)"
+        default: "all"
+
+concurrency:
+  group: acceptance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  acceptance:
+    name: Acceptance (${{ github.event.inputs.scenario || 'all' }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build and start cluster
+        run: docker compose -f docker-compose.acceptance.yml up --build -d
+
+      - name: Wait for initial node startup
+        run: sleep 15
+
+      - name: Run acceptance scenarios
+        run: |
+          chmod +x agents/lib/assert.sh agents/acceptance/scenarios.sh
+          ./agents/acceptance/scenarios.sh "${{ github.event.inputs.scenario || 'all' }}"
+
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.acceptance.yml logs --no-color
+
+      - name: Upload logs artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: acceptance-logs-${{ github.run_number }}
+          path: /tmp/bp_acceptance_*.bin
+          if-no-files-found: ignore
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker-compose.acceptance.yml down -v
