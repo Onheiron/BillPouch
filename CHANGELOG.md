@@ -5,6 +5,44 @@ All notable changes to BillPouch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2](https://github.com/Onheiron/BillPouch/compare/billpouch-v0.3.1...billpouch-v0.3.2) (2026-04-15)
+
+
+### Features
+
+* **agents:** autonomous CI agent ecosystem ([d77e14d](https://github.com/Onheiron/BillPouch/commit/d77e14dec503aca10aec8444229284f77d399028))
+* bp status refreshes gossip state before display (AnnounceNow + spinner) ([e5c9bba](https://github.com/Onheiron/BillPouch/commit/e5c9bba0e3470629d782b9e3f3521472543eaeb6))
+* bp storage, bp ls, enhanced bp status with reputation/QoS/per-Pouch stats ([9391404](https://github.com/Onheiron/BillPouch/commit/93914045a7b612a5b98f7a40f5c7bea0a7221bd8))
+* **mcp:** BillPouch MCP server for AI agent tooling ([d2503b9](https://github.com/Onheiron/BillPouch/commit/d2503b9390d8d91cefdea7bed9968f5f69b79bc5))
+* **playground:** per-node data volumes (T1=10GiB) with bind mounts for fragment inspection ([582542f](https://github.com/Onheiron/BillPouch/commit/582542f4b6fe5e70cae0c531406c4f85c4c96ccd))
+* **storage:** dynamic k/N-based effective available bytes ([a47506b](https://github.com/Onheiron/BillPouch/commit/a47506b2af01c1b7b7bf3115ad18c5c6df08870a))
+* **storage:** reputation-weighted effective available bytes ([0cbb3ce](https://github.com/Onheiron/BillPouch/commit/0cbb3ce9b1de087c9e197bf1bd6f81f6aa74a03a))
+
+
+### Bug Fixes
+
+* add file_name to PutFileBody and PutFile request in bp-api ([dffed99](https://github.com/Onheiron/BillPouch/commit/dffed9905f784fb377650606de2acfa7b967a3f2))
+* add file_name: None to PutFile in integration tests ([f10e7f6](https://github.com/Onheiron/BillPouch/commit/f10e7f689470690d6970aebf3c8488ddfb0616e6))
+* add file_registry to DaemonState in integration test ([646ed77](https://github.com/Onheiron/BillPouch/commit/646ed77721cd5f2688bffb3c5e3b467b01225ed1))
+* bill/post can put/get without local pouch; fixed port per playground node; join gossip in interactive mode; extend mesh wait to 15s; drop duplicate elena pouch ([d2771e8](https://github.com/Onheiron/BillPouch/commit/d2771e8a766c3091aad4515ab3d400afd87b15b9))
+* broken rustdoc intra-doc link in FileRegistry::new ([d1649b4](https://github.com/Onheiron/BillPouch/commit/d1649b49b5ac94d12ec8fafdfeb8d6a9d66ed388))
+* bump to rust:1.86 for cargo-chef compatibility ([2759ff1](https://github.com/Onheiron/BillPouch/commit/2759ff1435a1310d9f91289a32dda887df87212a))
+* bump to rust:1.88 for cargo-chef compatibility (cargo-platform 0.3.2) ([2b1c745](https://github.com/Onheiron/BillPouch/commit/2b1c745bced2f0a893e8b9f455092c6fd91352f0))
+* clippy print_literal in ls.rs ([66aae28](https://github.com/Onheiron/BillPouch/commit/66aae280a0e11465816f27eb492d375886af97d3))
+* gossip re-announce burst at 10/20/30s then every 30s steady-state ([6f5aeb0](https://github.com/Onheiron/BillPouch/commit/6f5aeb04703cb6c7d9602bbb3cf57a63b88feaa7))
+* **mcp:** fix TypeScript compilation errors in MCP server ([aa4e901](https://github.com/Onheiron/BillPouch/commit/aa4e90159d9d680f433035bbdad9f4b0208c5afa))
+* periodic NodeInfo re-announce every 60s to prevent gossip eviction; known_peers uses max(gossip,qos) ([0aa4b62](https://github.com/Onheiron/BillPouch/commit/0aa4b6259f8afc2cd17f3fe94b4c659ed5666658))
+* remove let _ = print!() to satisfy clippy::let_unit_value ([5fdea53](https://github.com/Onheiron/BillPouch/commit/5fdea5329cdec42602c6a8f4b66b9314f87dcefe))
+* update architecture_test for new StatusData fields and file_registry in DaemonState ([1d510d5](https://github.com/Onheiron/BillPouch/commit/1d510d5ee89dd0f681f374e6b4f89524ca9a1219))
+* update put_file_without_pouch test to match new error message ([63e3bb2](https://github.com/Onheiron/BillPouch/commit/63e3bb2f5991d6d93d653950bbc3b27ea9af201c))
+* use rust:bookworm to match runtime glibc (2.36) and avoid MSRV chase ([561d724](https://github.com/Onheiron/BillPouch/commit/561d72440bfde9b23084665954f4ee1c4f8931ee))
+* use rust:latest in chef stage to avoid recurring MSRV chase with cargo-chef ([297f078](https://github.com/Onheiron/BillPouch/commit/297f0789f430841af3a496ba08d5ff78a8f20591))
+
+
+### Performance Improvements
+
+* cargo-chef dependency caching + GHA layer cache in Docker build ([66bc506](https://github.com/Onheiron/BillPouch/commit/66bc506b9f8e35a97b75bb4fd484022e00ca8d8d))
+
 ## [0.3.1](https://github.com/Onheiron/BillPouch/compare/billpouch-v0.3.0...billpouch-v0.3.1) (2026-03-25)
 
 
