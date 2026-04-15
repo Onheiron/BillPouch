@@ -208,3 +208,11 @@ Configure VS Code to load it via `.vscode/mcp.json` (not committed — create lo
 | `read_wiki(page?)` | read a page from wiki/ |
 | `write_spec(name, content)` | write a feature spec to specs/ |
 | `read_spec(name?)` | list or read specs/ |
+
+---
+
+## Environment rules
+
+- **No `cargo` locally**: This machine has no Rust/cargo installed. Never run `cargo build`, `cargo test`, `cargo fmt`, or `cargo clippy`. Push to git and let GitHub Actions CI handle compilation and tests.
+- **Always push after commit**: Use the `git_commit_push` MCP tool which does `add + commit + push` atomically. Never commit without immediately pushing afterwards.
+- **No local Docker builds**: Never run `docker build` locally to update the playground image. The correct flow is: push a `vX.Y.Z` tag via `git_commit_push` → CI workflow `docker.yml` builds and pushes `onheirongithub/billpouch:latest` to Docker Hub (~10 min) → then `docker compose -f docker-compose.playground.yml pull && docker compose -f docker-compose.playground.yml up -d`.
