@@ -89,10 +89,7 @@ fn print_status(s: &StatusData) {
     println!();
 
     println!("⭐ Reputation");
-    println!(
-        "   tier   : {}   score: {}",
-        s.reputation_tier, s.reputation_score
-    );
+    println!("   tier   : {}", s.reputation_tier);
     println!();
 
     if !s.pouch_stats.is_empty() {

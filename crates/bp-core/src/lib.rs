@@ -1,3 +1,4 @@
+pub mod chain;
 pub mod coding;
 pub mod config;
 pub mod consensus;

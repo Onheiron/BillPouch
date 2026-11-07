@@ -1,9 +1,10 @@
 use crate::{
+    chain::{observe, ObservationLog},
     coding::rlnc,
     coding::rlnc::EncodedFragment,
     network::{
-        qos::QosRegistry, reputation::ReputationStore, state::NetworkState, FragmentResponse,
-        NetworkCommand, OutgoingAssignments, OutgoingFragment, FAULT_DEGRADED, FAULT_SUSPECTED,
+        qos::QosRegistry, state::NetworkState, FragmentResponse, NetworkCommand,
+        OutgoingAssignments, OutgoingFragment, FAULT_DEGRADED, FAULT_SUSPECTED,
     },
     service::ServiceType,
 };
@@ -23,7 +24,7 @@ const POS_TIMEOUT_SECS: u64 = 10;
 pub async fn run_quality_monitor(
     network_state: Arc<RwLock<NetworkState>>,
     qos: Arc<RwLock<QosRegistry>>,
-    reputation: Arc<RwLock<ReputationStore>>,
+    observations: ObservationLog,
     net_tx: mpsc::Sender<NetworkCommand>,
     outgoing_assignments: OutgoingAssignments,
 ) {
@@ -45,7 +46,7 @@ pub async fn run_quality_monitor(
                 run_ping_round(&network_state, &qos, &net_tx).await;
             }
             _ = pos_interval.tick() => {
-                run_pos_round(&outgoing_assignments, &network_state, &qos, &reputation, &net_tx).await;
+                run_pos_round(&outgoing_assignments, &network_state, &qos, &observations, &net_tx).await;
             }
         }
     }
@@ -107,7 +108,7 @@ async fn run_pos_round(
     outgoing_assignments: &OutgoingAssignments,
     network_state: &Arc<RwLock<NetworkState>>,
     qos: &Arc<RwLock<QosRegistry>>,
-    reputation: &Arc<RwLock<ReputationStore>>,
+    observations: &ObservationLog,
     net_tx: &mpsc::Sender<NetworkCommand>,
 ) {
     let challenges: Vec<(String, PeerId, String, String)> = {
@@ -155,7 +156,7 @@ async fn run_pos_round(
     let mut handles = Vec::with_capacity(challenges.len());
     for (peer_id_str, peer_id, chunk_id, fragment_id) in challenges.iter().cloned() {
         let qos = Arc::clone(qos);
-        let reputation = Arc::clone(reputation);
+        let observations = Arc::clone(observations);
         let net_tx = net_tx.clone();
         let handle = tokio::spawn(async move {
             let passed = pos_one_peer(
@@ -168,7 +169,7 @@ async fn run_pos_round(
             )
             .await;
             if let Some(passed) = passed {
-                record_reputation(&peer_id_str, passed, &qos, &reputation);
+                observe(&observations, &peer_id_str, passed, crate::chain::now_ms());
             }
         });
         handles.push(handle);
@@ -413,23 +414,6 @@ async fn pos_one_peer(
 fn record_pos_failure(peer_id_str: &str, qos: &Arc<RwLock<QosRegistry>>) {
     if let Ok(mut qos_guard) = qos.write() {
         qos_guard.entry(peer_id_str).record_pos_failure();
-    }
-}
-
-fn record_reputation(
-    peer_id_str: &str,
-    passed: bool,
-    qos: &Arc<RwLock<QosRegistry>>,
-    reputation: &Arc<RwLock<ReputationStore>>,
-) {
-    let fault = qos.read().map(|g| g.fault_score(peer_id_str)).unwrap_or(0);
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    if let Ok(mut rep) = reputation.write() {
-        rep.get_or_create(peer_id_str, now)
-            .record_pos_challenge(passed, fault, now);
     }
 }
 

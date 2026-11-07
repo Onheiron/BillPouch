@@ -105,6 +105,7 @@ pub struct Engine {
     fired: BTreeSet<(u32, &'static str)>,
     proposed_in: Option<u32>,
     last_commit: Option<Commit>,
+    committed: Vec<Commit>,
     last_rebroadcast: u64,
     outbox: Vec<ConsensusMsg>,
 }
@@ -126,6 +127,7 @@ impl Engine {
             fired: BTreeSet::new(),
             proposed_in: None,
             last_commit: None,
+            committed: Vec::new(),
             last_rebroadcast: 0,
             outbox: Vec::new(),
         }
@@ -133,6 +135,10 @@ impl Engine {
 
     pub fn drain(&mut self) -> Vec<ConsensusMsg> {
         std::mem::take(&mut self.outbox)
+    }
+
+    pub fn take_commits(&mut self) -> Vec<Commit> {
+        std::mem::take(&mut self.committed)
     }
 
     pub fn last_commit(&self) -> Option<&Commit> {
@@ -564,6 +570,7 @@ impl Engine {
         self.outbox.push(ConsensusMsg::Commit {
             commit: Box::new(commit.clone()),
         });
+        self.committed.push(commit.clone());
         self.last_commit = Some(commit);
         self.round = 0;
         self.step = Step::Propose;
@@ -620,7 +627,7 @@ mod tests {
     use super::*;
     use crate::{
         ledger::{Op, SignedOp},
-        membership::Registry,
+        membership::{genesis, invite_entry},
     };
 
     type Tamper = Box<dyn FnMut(usize, usize, ConsensusMsg) -> Option<ConsensusMsg>>;
@@ -638,9 +645,8 @@ mod tests {
         fn new(n: usize) -> Self {
             let people: Vec<Identity> =
                 (0..n).map(|_| Identity::in_memory(None).unwrap()).collect();
-            let (mut registry, _) = Registry::create(&people[0], "amici").unwrap();
-            let mut ledger =
-                Ledger::new(registry.genesis().unwrap().clone(), &people[0].cert).unwrap();
+            let (root, key) = genesis(&people[0], "amici").unwrap();
+            let mut ledger = Ledger::new(root.clone(), &people[0].cert).unwrap();
             let start = ledger.time;
             let apply = |ledger: &mut Ledger, time: u64, ops: Vec<SignedOp>| {
                 let block = Block {
@@ -653,8 +659,7 @@ mod tests {
                 ledger.apply(&block).unwrap();
             };
             for p in &people[1..] {
-                let entry = registry.entry_for(&people[0], &p.user_key).unwrap();
-                registry.add_entry(entry.clone());
+                let entry = invite_entry(&people[0], &root, &key, &p.user_key).unwrap();
                 apply(
                     &mut ledger,
                     start,

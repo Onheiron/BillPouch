@@ -13,10 +13,11 @@ pub use fragment_gossip::{FragmentIndexAnnouncement, FragmentPointer, RemoteFrag
 pub use kad_store::KadPeers;
 pub use qos::{PeerQos, QosRegistry, FAULT_BLACKLISTED, FAULT_DEGRADED, FAULT_SUSPECTED};
 pub use quality_monitor::run_quality_monitor;
-pub use reputation::{ReputationRecord, ReputationStore, ReputationTier};
+pub use reputation::ReputationTier;
 pub use state::{NetworkState, NodeInfo};
 
 use crate::{
+    chain::{now_ms, Chains, ObservationLog},
     error::{BpError, BpResult},
     storage::StorageManager,
 };
@@ -27,6 +28,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::sync::mpsc;
+
+const CONSENSUS_TICK_MS: u64 = 200;
 
 pub type StorageManagerMap = Arc<RwLock<HashMap<String, Arc<RwLock<StorageManager>>>>>;
 
@@ -43,9 +46,7 @@ pub type OutgoingAssignments = Arc<RwLock<HashMap<String, Vec<OutgoingFragment>>
 pub enum Gossip {
     Node(Box<NodeInfo>),
     Index(fragment_gossip::FragmentIndexAnnouncement),
-    Members {
-        entries: Vec<crate::membership::Entry>,
-    },
+    Consensus { msg: crate::consensus::ConsensusMsg },
 }
 
 #[derive(Debug)]
@@ -122,7 +123,9 @@ pub async fn run_network_loop(
     storage_managers: StorageManagerMap,
     outgoing_assignments: OutgoingAssignments,
     remote_fragment_index: Arc<RwLock<fragment_gossip::RemoteFragmentIndex>>,
-    memberships: crate::membership::Memberships,
+    chains: Chains,
+    identity: crate::identity::Identity,
+    observations: ObservationLog,
 ) -> BpResult<()> {
     swarm
         .listen_on(listen_addr.clone())
@@ -147,6 +150,8 @@ pub async fn run_network_loop(
         request_response::OutboundRequestId,
         tokio::sync::oneshot::Sender<bool>,
     > = HashMap::new();
+
+    let mut pending_syncs: HashMap<request_response::OutboundRequestId, String> = HashMap::new();
 
     let mut local_kad_peers: kad_store::KadPeers = crate::config::kad_peers_path()
         .map(|p| kad_store::KadPeers::load(&p))
@@ -173,11 +178,12 @@ pub async fn run_network_loop(
     const KAD_SAVE_INTERVAL_SECS: u64 = 600;
     let mut kad_save_interval = tokio::time::interval(Duration::from_secs(KAD_SAVE_INTERVAL_SECS));
     kad_save_interval.reset();
+    let mut consensus_interval = tokio::time::interval(Duration::from_millis(CONSENSUS_TICK_MS));
 
     loop {
         tokio::select! {
             event = swarm.select_next_some() => {
-                handle_swarm_event(event, &mut swarm, &state, &networks, &topics, &memberships, &storage_managers, &mut pending_fetches, &mut pending_pings, &mut pending_pos, &remote_fragment_index, &mut local_kad_peers).await;
+                handle_swarm_event(event, &mut swarm, &state, &networks, &topics, &chains, &identity, &storage_managers, &mut pending_fetches, &mut pending_pings, &mut pending_pos, &mut pending_syncs, &remote_fragment_index, &mut local_kad_peers).await;
             }
             cmd = cmd_rx.recv() => {
                 match cmd {
@@ -302,6 +308,25 @@ pub async fn run_network_loop(
             _ = kad_save_interval.tick() => {
                 save_kad_peers(&local_kad_peers);
             }
+            _ = consensus_interval.tick() => {
+                let now = now_ms();
+                let outgoing: Vec<(String, Vec<crate::consensus::ConsensusMsg>)> = match chains.write() {
+                    Ok(mut all) => networks
+                        .keys()
+                        .filter_map(|name| {
+                            let chain = all.get_mut(name)?;
+                            chain.tick(&identity, &observations, now);
+                            Some((name.clone(), chain.outbox()))
+                        })
+                        .collect(),
+                    Err(_) => Vec::new(),
+                };
+                for (name, msgs) in outgoing {
+                    for msg in msgs {
+                        publish(&mut swarm, &networks, &name, &Gossip::Consensus { msg });
+                    }
+                }
+            }
         }
     }
 
@@ -322,7 +347,8 @@ async fn handle_swarm_event(
     state: &Arc<RwLock<NetworkState>>,
     networks: &HashMap<String, ([u8; 32], gossipsub::IdentTopic)>,
     topics: &HashMap<gossipsub::TopicHash, String>,
-    memberships: &crate::membership::Memberships,
+    chains: &Chains,
+    identity: &crate::identity::Identity,
     storage_managers: &StorageManagerMap,
     pending_fetches: &mut HashMap<
         request_response::OutboundRequestId,
@@ -336,6 +362,7 @@ async fn handle_swarm_event(
         request_response::OutboundRequestId,
         tokio::sync::oneshot::Sender<bool>,
     >,
+    pending_syncs: &mut HashMap<request_response::OutboundRequestId, String>,
     remote_fragment_index: &Arc<RwLock<fragment_gossip::RemoteFragmentIndex>>,
     known_peers: &mut kad_store::KadPeers,
 ) {
@@ -360,16 +387,28 @@ async fn handle_swarm_event(
                 tracing::warn!(peer=%propagation_source, "Dropped undecryptable gossip");
                 return;
             };
-            handle_gossip(
+            let behind = handle_gossip(
                 gossip,
                 network_id,
                 message.source.as_ref(),
                 swarm,
                 networks,
                 state,
-                memberships,
+                chains,
                 remote_fragment_index,
             );
+            if let Some(from) = behind {
+                let req = FragmentRequest::Commits {
+                    network: from.0,
+                    from: from.1,
+                    cert: identity.cert.clone(),
+                };
+                let req_id = swarm
+                    .behaviour_mut()
+                    .fragment_exchange
+                    .send_request(&propagation_source, req);
+                pending_syncs.insert(req_id, network_id.clone());
+            }
         }
 
         SwarmEvent::Behaviour(behaviour::BillPouchBehaviourEvent::Mdns(
@@ -464,7 +503,14 @@ async fn handle_swarm_event(
                 .read()
                 .map(|s| s.knows(&peer.to_string()))
                 .unwrap_or(false);
-            let response = if known {
+            let response = if let FragmentRequest::Commits {
+                network,
+                from,
+                cert,
+            } = &request
+            {
+                serve_commits(chains, &peer, network, *from, cert)
+            } else if known {
                 serve_fragment_request(&request, storage_managers)
             } else {
                 tracing::warn!(peer=%peer, "Refused fragment request from a non-member");
@@ -515,6 +561,23 @@ async fn handle_swarm_event(
                     return;
                 }
             }
+            if let Some(network) = pending_syncs.remove(&request_id) {
+                if let FragmentResponse::Commits { commits } = response {
+                    let msgs = chains
+                        .write()
+                        .ok()
+                        .and_then(|mut all| {
+                            let chain = all.get_mut(&network)?;
+                            chain.apply_synced(commits, now_ms());
+                            Some(chain.outbox())
+                        })
+                        .unwrap_or_default();
+                    for msg in msgs {
+                        publish(swarm, networks, &network, &Gossip::Consensus { msg });
+                    }
+                }
+                return;
+            }
             if let Some(tx) = pending_fetches.remove(&request_id) {
                 let _ = tx.send(response);
             } else {
@@ -530,6 +593,7 @@ async fn handle_swarm_event(
             tracing::warn!("Fragment request failed: {:?}", error);
             pending_fetches.remove(&request_id);
             pending_pings.remove(&request_id);
+            pending_syncs.remove(&request_id);
             if let Some(tx) = pending_pos.remove(&request_id) {
                 let _ = tx.send(false);
             }
@@ -553,15 +617,14 @@ fn publish(
         .map_err(BpError::from)
         .and_then(|plain| crate::membership::seal(key, &plain));
     match sealed {
-        Ok(payload) => {
-            if let Err(e) = swarm
-                .behaviour_mut()
-                .gossipsub
-                .publish(topic.clone(), payload)
-            {
-                tracing::warn!("Gossip publish failed: {}", e);
-            }
-        }
+        Ok(payload) => match swarm
+            .behaviour_mut()
+            .gossipsub
+            .publish(topic.clone(), payload)
+        {
+            Ok(_) | Err(gossipsub::PublishError::InsufficientPeers) => {}
+            Err(e) => tracing::warn!("Gossip publish failed: {}", e),
+        },
         Err(e) => tracing::warn!("Cannot seal gossip: {e}"),
     }
 }
@@ -574,16 +637,16 @@ fn handle_gossip(
     swarm: &mut Swarm<BillPouchBehaviour>,
     networks: &HashMap<String, ([u8; 32], gossipsub::IdentTopic)>,
     state: &Arc<RwLock<NetworkState>>,
-    memberships: &crate::membership::Memberships,
+    chains: &Chains,
     remote_fragment_index: &Arc<RwLock<fragment_gossip::RemoteFragmentIndex>>,
-) {
+) -> Option<(String, u64)> {
     match gossip {
         Gossip::Node(info) => {
-            let member = memberships
+            let member = chains
                 .read()
-                .map(|m| {
-                    m.get(network_id)
-                        .is_some_and(|r| r.is_member(&info.user_fingerprint))
+                .map(|all| {
+                    all.get(network_id)
+                        .is_some_and(|c| c.is_member(&info.user_fingerprint))
                 })
                 .unwrap_or(false);
             if info.network_id == network_id && member && info.is_authentic(publisher) {
@@ -591,8 +654,9 @@ fn handle_gossip(
                     st.upsert(*info);
                 }
             } else {
-                tracing::warn!(claimed=%info.peer_id, "Dropped NodeInfo from a non-member or with an invalid certificate");
+                tracing::debug!(claimed=%info.peer_id, "Dropped NodeInfo from a non-member or with an invalid certificate");
             }
+            None
         }
         Gossip::Index(ann) => {
             let known = publisher
@@ -603,35 +667,47 @@ fn handle_gossip(
                     idx.upsert(ann);
                 }
             }
+            None
         }
-        Gossip::Members { entries } => {
-            let Ok(received) = crate::membership::Registry::from_entries(entries) else {
-                return;
+        Gossip::Consensus { msg } => {
+            let (behind, msgs) = {
+                let mut all = chains.write().ok()?;
+                let chain = all.get_mut(network_id)?;
+                let behind = chain
+                    .handle(msg, now_ms())
+                    .then(|| (chain.id(), chain.height()));
+                (behind, chain.outbox())
             };
-            let reply = {
-                let Ok(mut all) = memberships.write() else {
-                    return;
-                };
-                let Some(local) = all.get_mut(network_id) else {
-                    return;
-                };
-                match local.merge(&received) {
-                    Ok(changed) => {
-                        if changed {
-                            if let Err(e) = local.save() {
-                                tracing::warn!("Cannot save registry: {e}");
-                            }
-                        }
-                        let theirs_is_missing =
-                            local.entries().count() > received.entries().count();
-                        theirs_is_missing.then(|| local.entries().cloned().collect())
-                    }
-                    Err(_) => None,
-                }
-            };
-            if let Some(entries) = reply {
-                publish(swarm, networks, network_id, &Gossip::Members { entries });
+            for msg in msgs {
+                publish(swarm, networks, network_id, &Gossip::Consensus { msg });
             }
+            behind
+        }
+    }
+}
+
+fn serve_commits(
+    chains: &Chains,
+    peer: &PeerId,
+    network: &str,
+    from: u64,
+    cert: &crate::identity::DeviceCert,
+) -> FragmentResponse {
+    let Ok(device) = cert.verify() else {
+        return FragmentResponse::NotFound;
+    };
+    let Ok(all) = chains.read() else {
+        return FragmentResponse::NotFound;
+    };
+    match all.values().find(|c| c.id() == network) {
+        Some(chain) if device.peer_id == *peer && chain.is_member(&device.fingerprint) => {
+            FragmentResponse::Commits {
+                commits: chain.commits_from(from),
+            }
+        }
+        _ => {
+            tracing::warn!(peer=%peer, "Refused ledger sync to a non-member");
+            FragmentResponse::NotFound
         }
     }
 }
@@ -689,6 +765,7 @@ fn serve_fragment_request(
             }
         }
         FragmentRequest::Ping { nonce } => FragmentResponse::Pong { nonce: *nonce },
+        FragmentRequest::Commits { .. } => FragmentResponse::NotFound,
         FragmentRequest::ProofOfStorage {
             chunk_id,
             fragment_id,
@@ -729,12 +806,16 @@ fn serve_fragment_request(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{identity::Identity, membership::Registry};
+    use crate::{
+        identity::Identity,
+        ledger::{Op, SignedOp},
+        membership::genesis,
+    };
 
     #[test]
     fn every_gossip_variant_survives_sealing() {
         let id = Identity::in_memory(None).unwrap();
-        let (registry, key) = Registry::create(&id, "amici").unwrap();
+        let (_, key) = genesis(&id, "amici").unwrap();
         let messages = [
             Gossip::Node(Box::new(NodeInfo {
                 peer_id: id.peer_id.to_string(),
@@ -754,8 +835,16 @@ mod tests {
                 announced_at: 0,
                 pointers: vec![],
             }),
-            Gossip::Members {
-                entries: registry.entries().cloned().collect(),
+            Gossip::Consensus {
+                msg: crate::consensus::ConsensusMsg::Op {
+                    op: SignedOp::sign(
+                        &id,
+                        Op::RegisterDevice {
+                            cert: id.cert.clone(),
+                        },
+                    )
+                    .unwrap(),
+                },
             },
         ];
         for message in messages {

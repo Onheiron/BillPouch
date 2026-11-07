@@ -22,15 +22,15 @@ started automatically when missing.
 | `bp pause <service_id> --eta <minutes>` | Announce planned maintenance |
 | `bp resume <service_id>` | Back from maintenance |
 | `bp farewell <service_id>` | Stop a service |
-| `bp farewell <service_id> --evict` | Stop a Pouch for good: delete its fragments, gossip `evicting`, reputation R0 for 30 days |
+| `bp farewell <service_id> --evict` | Stop a Pouch for good: delete its fragments and gossip `evicting` |
 
 ## Networks
 
 | Command | Description |
 |---------|-------------|
 | `bp network create <name>` | Create a network; you are its first member and its creator |
-| `bp invite <network> "<ssh public key>"` | Add someone to the registry and print (on stdout) the token they join with. Requires the `invite` capability: today only the creator has it |
-| `bp join <token>` | Join with a token; it only works for the key it was made for |
+| `bp invite <network> "<ssh public key>"` | Submit the invitation to the network, wait until it is committed and print (on stdout) the token they join with. Requires the `invite` capability (R2+, or the creator while nobody is R2) |
+| `bp join <token>` | Join with a token (it only works for the key it was made for) and wait until the ledger is synced from a member |
 | `bp leave <network_id>` | Leave a network; refuses while services are running on it and prints the commands to stop them |
 | `bp leave <network_id> --force` | Evict Pouches and stop other services on the network, then leave. Files are not fetched first: `bp get` anything you need before |
 

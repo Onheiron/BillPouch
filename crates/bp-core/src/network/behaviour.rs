@@ -23,16 +23,32 @@ pub enum FragmentRequest {
         fragment_id: String,
         nonce: u64,
     },
+    Commits {
+        network: String,
+        from: u64,
+        cert: crate::identity::DeviceCert,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FragmentResponse {
-    FoundMany { fragments: Vec<(String, Vec<u8>)> },
+    FoundMany {
+        fragments: Vec<(String, Vec<u8>)>,
+    },
     NotFound,
     Stored,
-    StoreFailed { reason: String },
-    Pong { nonce: u64 },
-    ProofOfStorageOk { proof: [u8; 32] },
+    StoreFailed {
+        reason: String,
+    },
+    Pong {
+        nonce: u64,
+    },
+    ProofOfStorageOk {
+        proof: [u8; 32],
+    },
+    Commits {
+        commits: Vec<crate::consensus::Commit>,
+    },
 }
 
 #[derive(NetworkBehaviour)]

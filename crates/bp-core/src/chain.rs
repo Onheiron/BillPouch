@@ -1,0 +1,404 @@
+use crate::{
+    config,
+    consensus::{epoch_of, Commit, ConsensusMsg, Engine},
+    error::{BpError, BpResult},
+    identity::{DeviceCert, Identity},
+    ledger::{Ledger, Observation, Op, SignedOp, EPOCH_SECS, MAX_CHALLENGES_PER_DEVICE_PER_EPOCH},
+    membership::{genesis, invite_entry, Entry, Invite},
+    network::ReputationTier,
+};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
+
+pub const SYNC_BATCH: usize = 100;
+const RESUBMIT_MS: u64 = 60_000;
+const SYNC_RETRY_MS: u64 = 5_000;
+const REPORT_AT: f64 = 0.9;
+
+pub type Chains = Arc<RwLock<HashMap<String, Chain>>>;
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Tally {
+    pub epoch: u64,
+    pub sent: u32,
+    pub passed: u32,
+}
+
+pub type ObservationLog = Arc<RwLock<HashMap<String, Tally>>>;
+
+pub fn observe(log: &ObservationLog, device: &str, passed: bool, now_ms: u64) {
+    let epoch = epoch_of(now_ms);
+    if let Ok(mut log) = log.write() {
+        let tally = log.entry(device.to_string()).or_default();
+        if tally.epoch != epoch {
+            *tally = Tally {
+                epoch,
+                ..Tally::default()
+            };
+        }
+        tally.sent += 1;
+        tally.passed += u32::from(passed);
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct Stored {
+    genesis: Entry,
+    creator_device: DeviceCert,
+    own_entry: Entry,
+    commits: Vec<Commit>,
+}
+
+pub struct Chain {
+    pub name: String,
+    pub key: [u8; 32],
+    pub engine: Engine,
+    genesis: Entry,
+    creator_device: DeviceCert,
+    own_entry: Entry,
+    commits: Vec<Commit>,
+    device_submitted_ms: u64,
+    reported_epoch: Option<u64>,
+    sync_requested_ms: u64,
+    persistent: bool,
+}
+
+impl Chain {
+    pub fn create(identity: &Identity, name: &str) -> BpResult<Self> {
+        let (root, key) = genesis(identity, name)?;
+        Self::build(identity, root.clone(), identity.cert.clone(), root, key)
+    }
+
+    pub fn from_invite(identity: &Identity, invite: Invite) -> BpResult<Self> {
+        let key = invite.entry.unwrap_key(identity)?;
+        Self::build(
+            identity,
+            invite.genesis,
+            invite.creator_device,
+            invite.entry,
+            key,
+        )
+    }
+
+    fn build(
+        identity: &Identity,
+        genesis: Entry,
+        creator_device: DeviceCert,
+        own_entry: Entry,
+        key: [u8; 32],
+    ) -> BpResult<Self> {
+        let ledger = Ledger::new(genesis.clone(), &creator_device)?;
+        Ok(Self {
+            name: genesis.body.network.clone(),
+            key,
+            engine: Engine::new(identity, ledger),
+            genesis,
+            creator_device,
+            own_entry,
+            commits: Vec::new(),
+            device_submitted_ms: 0,
+            reported_epoch: None,
+            sync_requested_ms: 0,
+            persistent: false,
+        })
+    }
+
+    pub fn id(&self) -> String {
+        self.genesis.id()
+    }
+
+    pub fn ledger(&self) -> &Ledger {
+        &self.engine.ledger
+    }
+
+    pub fn height(&self) -> u64 {
+        self.engine.ledger.height
+    }
+
+    pub fn is_member(&self, user: &str) -> bool {
+        self.engine.ledger.is_member(user)
+    }
+
+    pub fn tier(&self, user: &str) -> Option<ReputationTier> {
+        self.engine.ledger.snapshot.tier(user)
+    }
+
+    pub fn device_tier(&self, device: &str) -> Option<ReputationTier> {
+        self.tier(self.engine.ledger.device_owner(device)?)
+    }
+
+    pub fn invite(
+        &mut self,
+        identity: &Identity,
+        member_key: &str,
+        now_ms: u64,
+    ) -> BpResult<Invite> {
+        let entry = invite_entry(identity, &self.genesis, &self.key, member_key)?;
+        let op = SignedOp::sign(
+            identity,
+            Op::AddMember {
+                entry: entry.clone(),
+            },
+        )?;
+        self.engine.submit(op, now_ms)?;
+        self.record();
+        Ok(Invite {
+            genesis: self.genesis.clone(),
+            creator_device: self.creator_device.clone(),
+            entry,
+        })
+    }
+
+    pub fn handle(&mut self, msg: ConsensusMsg, now_ms: u64) -> bool {
+        let behind = matches!(&msg, ConsensusMsg::Commit { commit } if commit.block.height > self.height() + 1);
+        self.engine.handle(msg, now_ms);
+        self.record();
+        behind && self.want_sync(now_ms)
+    }
+
+    pub fn tick(&mut self, identity: &Identity, log: &ObservationLog, now_ms: u64) {
+        self.register_device(identity, now_ms);
+        self.report(identity, log, now_ms);
+        self.engine.tick(now_ms);
+        self.record();
+    }
+
+    pub fn outbox(&mut self) -> Vec<ConsensusMsg> {
+        self.engine.drain()
+    }
+
+    pub fn commits_from(&self, from: u64) -> Vec<Commit> {
+        self.commits
+            .iter()
+            .skip(from as usize)
+            .take(SYNC_BATCH)
+            .cloned()
+            .collect()
+    }
+
+    pub fn apply_synced(&mut self, commits: Vec<Commit>, now_ms: u64) {
+        for commit in commits {
+            if commit.block.height == self.height() + 1 {
+                self.engine.handle(
+                    ConsensusMsg::Commit {
+                        commit: Box::new(commit),
+                    },
+                    now_ms,
+                );
+            }
+        }
+        self.record();
+        self.sync_requested_ms = 0;
+    }
+
+    fn want_sync(&mut self, now_ms: u64) -> bool {
+        if now_ms < self.sync_requested_ms + SYNC_RETRY_MS {
+            return false;
+        }
+        self.sync_requested_ms = now_ms;
+        true
+    }
+
+    fn record(&mut self) {
+        let new = self.engine.take_commits();
+        if new.is_empty() {
+            return;
+        }
+        self.commits.extend(new);
+        if !self.persistent {
+            return;
+        }
+        if let Err(e) = self.save() {
+            tracing::warn!(network = %self.name, "cannot save ledger: {e}");
+        }
+    }
+
+    fn register_device(&mut self, identity: &Identity, now_ms: u64) {
+        let ledger = &self.engine.ledger;
+        let device = identity.peer_id.to_string();
+        if !ledger.is_member(&identity.fingerprint)
+            || ledger.devices.contains_key(&device)
+            || now_ms < self.device_submitted_ms + RESUBMIT_MS
+        {
+            return;
+        }
+        self.device_submitted_ms = now_ms;
+        let op = SignedOp::sign(
+            identity,
+            Op::RegisterDevice {
+                cert: identity.cert.clone(),
+            },
+        );
+        if let Err(e) = op.and_then(|op| self.engine.submit(op, now_ms)) {
+            tracing::warn!(network = %self.name, "cannot register this device: {e}");
+        }
+    }
+
+    fn report(&mut self, identity: &Identity, log: &ObservationLog, now_ms: u64) {
+        let epoch = epoch_of(now_ms);
+        let into_epoch = (now_ms / 1000 % EPOCH_SECS) as f64 / EPOCH_SECS as f64;
+        let ledger = &self.engine.ledger;
+        if into_epoch < REPORT_AT
+            || self.reported_epoch == Some(epoch)
+            || !ledger.is_member(&identity.fingerprint)
+            || ledger
+                .reported
+                .contains(&(identity.fingerprint.clone(), epoch))
+        {
+            return;
+        }
+        self.reported_epoch = Some(epoch);
+        let results: Vec<Observation> = log
+            .read()
+            .map(|log| {
+                log.iter()
+                    .filter(|(_, t)| t.epoch == epoch && t.sent > 0)
+                    .filter_map(|(device, t)| {
+                        let user = ledger.device_owner(device)?;
+                        (user != identity.fingerprint && ledger.is_member(user)).then(|| {
+                            let sent = t.sent.min(MAX_CHALLENGES_PER_DEVICE_PER_EPOCH);
+                            Observation {
+                                device: device.clone(),
+                                user: user.to_string(),
+                                sent,
+                                passed: t.passed.min(sent),
+                            }
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        if results.is_empty() {
+            return;
+        }
+        let op = SignedOp::sign(identity, Op::Observations { epoch, results });
+        if let Err(e) = op.and_then(|op| self.engine.submit(op, now_ms)) {
+            tracing::warn!(network = %self.name, "cannot report observations: {e}");
+        }
+    }
+
+    pub fn save(&mut self) -> BpResult<()> {
+        self.persistent = true;
+        let dir = config::networks_dir()?;
+        std::fs::create_dir_all(&dir)?;
+        let stored = Stored {
+            genesis: self.genesis.clone(),
+            creator_device: self.creator_device.clone(),
+            own_entry: self.own_entry.clone(),
+            commits: self.commits.clone(),
+        };
+        std::fs::write(
+            dir.join(format!("{}.json", self.name)),
+            serde_json::to_vec(&stored)?,
+        )?;
+        Ok(())
+    }
+
+    fn restore(identity: &Identity, stored: Stored, now_ms: u64) -> BpResult<Self> {
+        let key = stored.own_entry.unwrap_key(identity)?;
+        let mut chain = Self::build(
+            identity,
+            stored.genesis,
+            stored.creator_device,
+            stored.own_entry,
+            key,
+        )?;
+        let total = stored.commits.len();
+        chain.apply_synced(stored.commits, now_ms);
+        chain.engine.drain();
+        chain.persistent = true;
+        if chain.commits.len() != total {
+            return Err(BpError::InvalidInput(format!(
+                "ledger of '{}' does not replay past height {}",
+                chain.name,
+                chain.height()
+            )));
+        }
+        Ok(chain)
+    }
+
+    pub fn load_all(identity: &Identity, now_ms: u64) -> BpResult<HashMap<String, Chain>> {
+        let dir = config::networks_dir()?;
+        let mut all = HashMap::new();
+        if !dir.exists() {
+            return Ok(all);
+        }
+        for entry in std::fs::read_dir(dir)? {
+            let stored: Stored = serde_json::from_slice(&std::fs::read(entry?.path())?)?;
+            let chain = Self::restore(identity, stored, now_ms)?;
+            all.insert(chain.name.clone(), chain);
+        }
+        Ok(all)
+    }
+}
+
+pub fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn deliver(from: &mut Chain, to: &mut Chain, now: u64) {
+        for msg in from.outbox() {
+            to.handle(msg, now);
+        }
+    }
+
+    #[test]
+    fn invite_commits_and_the_invitee_catches_up_and_registers_its_device() {
+        let carlo = Identity::in_memory(None).unwrap();
+        let marco = Identity::in_memory(None).unwrap();
+        let log = ObservationLog::default();
+        let mut a = Chain::create(&carlo, "amici").unwrap();
+        let now = a.ledger().time * 1000 + 1000;
+        let invite = a.invite(&carlo, &marco.user_key, now).unwrap();
+        assert!(a.is_member(&marco.fingerprint));
+        assert_eq!(a.commits.len(), 1);
+
+        let mut b = Chain::from_invite(&marco, invite).unwrap();
+        assert!(!b.is_member(&marco.fingerprint));
+        b.apply_synced(a.commits_from(0), now);
+        assert!(b.is_member(&marco.fingerprint));
+
+        b.tick(&marco, &log, now);
+        deliver(&mut b, &mut a, now);
+        a.tick(&carlo, &log, now);
+        deliver(&mut a, &mut b, now);
+        let device = marco.peer_id.to_string();
+        assert!(a.ledger().devices.contains_key(&device));
+        assert!(b.ledger().devices.contains_key(&device));
+        assert_eq!(a.ledger().head, b.ledger().head);
+    }
+
+    #[test]
+    fn observations_are_reported_near_the_end_of_the_epoch() {
+        let carlo = Identity::in_memory(None).unwrap();
+        let marco = Identity::in_memory(None).unwrap();
+        let log = ObservationLog::default();
+        let mut a = Chain::create(&carlo, "amici").unwrap();
+        let start = a.ledger().time * 1000;
+        let invite = a.invite(&carlo, &marco.user_key, start).unwrap();
+        let mut b = Chain::from_invite(&marco, invite).unwrap();
+        b.apply_synced(a.commits_from(0), start);
+        b.tick(&marco, &log, start);
+        deliver(&mut b, &mut a, start);
+        a.tick(&carlo, &log, start);
+
+        let epoch_start = (epoch_of(start) + 1) * EPOCH_SECS * 1000;
+        let device = marco.peer_id.to_string();
+        for i in 0..10 {
+            observe(&log, &device, i != 0, epoch_start + 1);
+        }
+        a.tick(&carlo, &log, epoch_start + 1000);
+        assert_eq!(a.ledger().members[&marco.fingerprint].sent, 0);
+        a.tick(&carlo, &log, epoch_start + EPOCH_SECS * 950);
+        let member = &a.ledger().members[&marco.fingerprint];
+        assert_eq!((member.sent, member.passed), (10, 9));
+    }
+}
