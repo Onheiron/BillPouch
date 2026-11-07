@@ -3,6 +3,20 @@ use bp_core::network::state::{NetworkState, NodeInfo};
 use bp_core::service::*;
 use std::collections::HashMap;
 
+fn memberships_for(
+    identity: &bp_core::identity::Identity,
+    names: &[&str],
+) -> bp_core::membership::Memberships {
+    let registries = names
+        .iter()
+        .map(|n| {
+            let (registry, _) = bp_core::membership::Registry::create(identity, n).unwrap();
+            (n.to_string(), registry)
+        })
+        .collect();
+    std::sync::Arc::new(std::sync::RwLock::new(registries))
+}
+
 fn test_cert() -> bp_core::identity::DeviceCert {
     bp_core::identity::Identity::in_memory(None).unwrap().cert
 }
@@ -689,6 +703,18 @@ fn make_in_memory_state() -> std::sync::Arc<bp_core::control::server::DaemonStat
     let identity = bp_core::identity::Identity::in_memory(Some("test-server".into())).unwrap();
     let (net_tx, _net_rx) = tokio::sync::mpsc::channel(64);
     std::sync::Arc::new(bp_core::control::server::DaemonState {
+        memberships: memberships_for(
+            &identity,
+            &[
+                "test-net",
+                "rete",
+                "bye-net",
+                "my-network",
+                "test",
+                "amici",
+                "lavoro",
+            ],
+        ),
         identity,
         services: std::sync::RwLock::new(ServiceRegistry::new()),
         network_state: std::sync::Arc::new(std::sync::RwLock::new(NetworkState::new())),
@@ -792,6 +818,25 @@ async fn dispatch_hatch_nuovo_servizio() {
 
 #[tokio::test]
 #[cfg(unix)]
+async fn dispatch_hatch_requires_membership() {
+    let (sp, _s) = start_test_server().await;
+    let resp = send_cmd(
+        &sp,
+        &ControlRequest::Hatch {
+            service_type: ServiceType::Bill,
+            network_id: "not-a-member".into(),
+            metadata: HashMap::new(),
+        },
+    )
+    .await;
+    match resp {
+        ControlResponse::Error { message } => assert!(message.contains("not-a-member")),
+        other => panic!("expected an error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+#[cfg(unix)]
 async fn dispatch_hatch_stessa_rete_due_volte_copre_already_joined() {
     let (sp, _s) = start_test_server().await;
     send_cmd(
@@ -867,52 +912,14 @@ async fn dispatch_flock_ritorna_struttura_corretta() {
 
 #[tokio::test]
 #[cfg(unix)]
-async fn dispatch_join_nuova_rete() {
-    let (sp, _s) = start_test_server().await;
-    let resp = send_cmd(
-        &sp,
-        &ControlRequest::Join {
-            network_id: "nuova-rete".into(),
-        },
-    )
-    .await;
-    match resp {
-        ControlResponse::Ok { data: Some(v) } => {
-            assert_eq!(v["network_id"], "nuova-rete");
-        }
-        _ => panic!("Expected Ok"),
-    }
-}
-
-#[tokio::test]
-#[cfg(unix)]
-async fn dispatch_join_rete_gia_raggiunta_ritorna_errore() {
-    let (sp, _s) = start_test_server().await;
-    send_cmd(
-        &sp,
-        &ControlRequest::Join {
-            network_id: "rete".into(),
-        },
-    )
-    .await;
-    let resp = send_cmd(
-        &sp,
-        &ControlRequest::Join {
-            network_id: "rete".into(),
-        },
-    )
-    .await;
-    assert!(matches!(resp, ControlResponse::Error { .. }));
-}
-
-#[tokio::test]
-#[cfg(unix)]
 async fn dispatch_leave_rete_raggiunta() {
     let (sp, _s) = start_test_server().await;
     send_cmd(
         &sp,
-        &ControlRequest::Join {
+        &ControlRequest::Hatch {
+            service_type: ServiceType::Post,
             network_id: "bye-net".into(),
+            metadata: HashMap::new(),
         },
     )
     .await;
@@ -1042,6 +1049,7 @@ async fn network_loop_accetta_e_processa_comandi() {
         storage_managers,
         outgoing,
         frag_idx,
+        std::sync::Arc::new(std::sync::RwLock::new(HashMap::new())),
     ));
 
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -1049,11 +1057,13 @@ async fn network_loop_accetta_e_processa_comandi() {
     let _ = cmd_tx
         .send(NetworkCommand::JoinNetwork {
             network_id: "test-net".into(),
+            key: [7; 32],
         })
         .await;
     let _ = cmd_tx
         .send(NetworkCommand::JoinNetwork {
             network_id: "test-net".into(),
+            key: [7; 32],
         })
         .await;
 
@@ -1069,14 +1079,12 @@ async fn network_loop_accetta_e_processa_comandi() {
         announced_at: 0,
         metadata: HashMap::new(),
     };
-    if let Ok(payload) = serde_json::to_vec(&node_info) {
-        let _ = cmd_tx
-            .send(NetworkCommand::Announce {
-                network_id: "test-net".into(),
-                payload,
-            })
-            .await;
-    }
+    let _ = cmd_tx
+        .send(NetworkCommand::Publish {
+            network_id: "test-net".into(),
+            message: bp_core::network::Gossip::Node(Box::new(node_info)),
+        })
+        .await;
 
     let ann = FragmentIndexAnnouncement {
         network_id: "test-net".into(),
@@ -1084,14 +1092,12 @@ async fn network_loop_accetta_e_processa_comandi() {
         announced_at: 0,
         pointers: vec![],
     };
-    if let Ok(payload) = serde_json::to_vec(&ann) {
-        let _ = cmd_tx
-            .send(NetworkCommand::AnnounceIndex {
-                network_id: "test-net".into(),
-                payload,
-            })
-            .await;
-    }
+    let _ = cmd_tx
+        .send(NetworkCommand::Publish {
+            network_id: "test-net".into(),
+            message: bp_core::network::Gossip::Index(ann),
+        })
+        .await;
 
     let _ = cmd_tx
         .send(NetworkCommand::LeaveNetwork {

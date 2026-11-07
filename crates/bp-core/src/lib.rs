@@ -4,7 +4,7 @@ pub mod control;
 pub mod daemon;
 pub mod error;
 pub mod identity;
-pub mod invite;
+pub mod membership;
 pub mod network;
 pub mod service;
 pub mod storage;

@@ -14,7 +14,7 @@ cargo test --workspace
 
 | Where | What |
 |-------|------|
-| `#[cfg(test)]` in `bp-core/src` | Unit tests: GF(2⁸), RLNC, coding params, QoS, reputation, storage, encryption, invites |
+| `#[cfg(test)]` in `bp-core/src` | Unit tests: GF(2⁸), RLNC, coding params, QoS, reputation, storage, encryption, identity, member registry |
 | `bp-core/tests/architecture_test.rs` | Identity on disk, registry, gossip state, swarm build, control server over a real Unix socket, network loop |
 | `bp-core/tests/integration_test.rs` | `put_file` / `get_file` through the control server |
 | `bp-cli` | `Cli::command().debug_assert()` catches clap definition errors |
@@ -25,8 +25,10 @@ Tests that change `HOME`/`XDG_DATA_HOME` hold a `static ENV_LOCK: Mutex<()>`.
 ## Docker
 
 One image (`Dockerfile`, entrypoint `docker/entrypoint.sh`) serves both setups.
-The entrypoint logs in, starts the daemon, joins `$NETWORK`, hatches `$SERVICES`
-and either waits or (`INTERACTIVE=true`) opens a shell.
+The entrypoint logs in and writes its public key to the shared `/shared` volume.
+The `FOUNDER=true` node creates `$NETWORK` and writes a join token for every key
+that shows up; the others wait for their token and join. Then each node hatches
+`$SERVICES` and either waits or (`INTERACTIVE=true`) opens a shell.
 
 ```bash
 # Smoke test (what CI runs)

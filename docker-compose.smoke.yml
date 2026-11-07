@@ -5,8 +5,11 @@ services:
     hostname: bp-pouch
     environment:
       NODE_NAME: "carlo-pouch"
+      FOUNDER: "true"
       NETWORK: "smoketest"
       RUST_LOG: "bp_core=debug,bp_cli=info"
+    volumes:
+      - shared:/shared
     networks:
       - bp-lan
 
@@ -18,6 +21,8 @@ services:
       NODE_NAME: "marco-bill"
       NETWORK: "smoketest"
       RUST_LOG: "bp_core=debug,bp_cli=info"
+    volumes:
+      - shared:/shared
     networks:
       - bp-lan
 
@@ -29,9 +34,14 @@ services:
       NODE_NAME: "lucia-post"
       NETWORK: "smoketest"
       RUST_LOG: "bp_core=debug,bp_cli=info"
+    volumes:
+      - shared:/shared
     networks:
       - bp-lan
 
 networks:
   bp-lan:
     driver: bridge
+
+volumes:
+  shared:

@@ -22,7 +22,8 @@ use crate::{
 };
 use futures::StreamExt;
 use libp2p::{gossipsub, request_response, swarm::SwarmEvent, Multiaddr, PeerId, Swarm};
-use std::collections::{HashMap, HashSet};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -37,21 +38,28 @@ pub struct OutgoingFragment {
 
 pub type OutgoingAssignments = Arc<RwLock<HashMap<String, Vec<OutgoingFragment>>>>;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Gossip {
+    Node(Box<NodeInfo>),
+    Index(fragment_gossip::FragmentIndexAnnouncement),
+    Members {
+        entries: Vec<crate::membership::Entry>,
+    },
+}
+
 #[derive(Debug)]
 pub enum NetworkCommand {
     JoinNetwork {
         network_id: String,
+        key: [u8; 32],
     },
     LeaveNetwork {
         network_id: String,
     },
-    Announce {
+    Publish {
         network_id: String,
-        payload: Vec<u8>,
-    },
-    AnnounceIndex {
-        network_id: String,
-        payload: Vec<u8>,
+        message: Gossip,
     },
     Dial {
         addr: Multiaddr,
@@ -114,6 +122,7 @@ pub async fn run_network_loop(
     storage_managers: StorageManagerMap,
     outgoing_assignments: OutgoingAssignments,
     remote_fragment_index: Arc<RwLock<fragment_gossip::RemoteFragmentIndex>>,
+    memberships: crate::membership::Memberships,
 ) -> BpResult<()> {
     swarm
         .listen_on(listen_addr.clone())
@@ -121,7 +130,8 @@ pub async fn run_network_loop(
 
     tracing::info!("Network listening on {}", listen_addr);
 
-    let mut subscribed_networks: HashSet<String> = HashSet::new();
+    let mut networks: HashMap<String, ([u8; 32], gossipsub::IdentTopic)> = HashMap::new();
+    let mut topics: HashMap<gossipsub::TopicHash, String> = HashMap::new();
 
     let mut pending_fetches: HashMap<
         request_response::OutboundRequestId,
@@ -167,7 +177,7 @@ pub async fn run_network_loop(
     loop {
         tokio::select! {
             event = swarm.select_next_some() => {
-                handle_swarm_event(event, &mut swarm, &state, &mut subscribed_networks, &storage_managers, &mut pending_fetches, &mut pending_pings, &mut pending_pos, &remote_fragment_index, &mut local_kad_peers).await;
+                handle_swarm_event(event, &mut swarm, &state, &networks, &topics, &memberships, &storage_managers, &mut pending_fetches, &mut pending_pings, &mut pending_pos, &remote_fragment_index, &mut local_kad_peers).await;
             }
             cmd = cmd_rx.recv() => {
                 match cmd {
@@ -176,46 +186,24 @@ pub async fn run_network_loop(
                         save_kad_peers(&local_kad_peers);
                         break;
                     }
-                    Some(NetworkCommand::JoinNetwork { network_id }) => {
-                        if !subscribed_networks.contains(&network_id) {
-                            let topic = gossipsub::IdentTopic::new(NodeInfo::topic_name(&network_id));
-                            if let Err(e) = swarm.behaviour_mut().gossipsub.subscribe(&topic) {
-                                tracing::warn!("Failed to subscribe to {}: {}", network_id, e);
-                            } else {
-                                subscribed_networks.insert(network_id.clone());
-                                tracing::info!("Joined network gossip: {}", network_id);
-                            }
-                            let idx_topic = gossipsub::IdentTopic::new(
-                                fragment_gossip::FragmentIndexAnnouncement::topic_name(&network_id),
-                            );
-                            if let Err(e) = swarm.behaviour_mut().gossipsub.subscribe(&idx_topic) {
-                                tracing::warn!("Failed to subscribe to index topic {}: {}", network_id, e);
-                            }
+                    Some(NetworkCommand::JoinNetwork { network_id, key }) => {
+                        let topic = gossipsub::IdentTopic::new(crate::membership::gossip_topic(&key));
+                        if let Err(e) = swarm.behaviour_mut().gossipsub.subscribe(&topic) {
+                            tracing::warn!("Failed to subscribe to {}: {}", network_id, e);
+                        } else {
+                            tracing::info!("Joined network gossip: {}", network_id);
                         }
+                        topics.insert(topic.hash(), network_id.clone());
+                        networks.insert(network_id, (key, topic));
                     }
                     Some(NetworkCommand::LeaveNetwork { network_id }) => {
-                        let topic = gossipsub::IdentTopic::new(NodeInfo::topic_name(&network_id));
-                        let _ = swarm.behaviour_mut().gossipsub.unsubscribe(&topic);
-                        let idx_topic = gossipsub::IdentTopic::new(
-                            fragment_gossip::FragmentIndexAnnouncement::topic_name(&network_id),
-                        );
-                        let _ = swarm.behaviour_mut().gossipsub.unsubscribe(&idx_topic);
-
-                        subscribed_networks.remove(&network_id);
-                    }
-                    Some(NetworkCommand::Announce { network_id, payload }) => {
-                        let topic = gossipsub::IdentTopic::new(NodeInfo::topic_name(&network_id));
-                        if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic, payload) {
-                            tracing::warn!("Gossip publish failed: {}", e);
+                        if let Some((_, topic)) = networks.remove(&network_id) {
+                            let _ = swarm.behaviour_mut().gossipsub.unsubscribe(&topic);
+                            topics.remove(&topic.hash());
                         }
                     }
-                    Some(NetworkCommand::AnnounceIndex { network_id, payload }) => {
-                        let topic = gossipsub::IdentTopic::new(
-                            fragment_gossip::FragmentIndexAnnouncement::topic_name(&network_id),
-                        );
-                        if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic, payload) {
-                            tracing::warn!("FragmentIndex gossip publish failed: {}", e);
-                        }
+                    Some(NetworkCommand::Publish { network_id, message }) => {
+                        publish(&mut swarm, &networks, &network_id, &message);
                     }
                     Some(NetworkCommand::Dial { addr }) => {
                         if let Err(e) = swarm.dial(addr.clone()) {
@@ -332,7 +320,9 @@ async fn handle_swarm_event(
     event: SwarmEvent<behaviour::BillPouchBehaviourEvent>,
     swarm: &mut Swarm<BillPouchBehaviour>,
     state: &Arc<RwLock<NetworkState>>,
-    _subscribed: &mut HashSet<String>,
+    networks: &HashMap<String, ([u8; 32], gossipsub::IdentTopic)>,
+    topics: &HashMap<gossipsub::TopicHash, String>,
+    memberships: &crate::membership::Memberships,
     storage_managers: &StorageManagerMap,
     pending_fetches: &mut HashMap<
         request_response::OutboundRequestId,
@@ -356,46 +346,31 @@ async fn handle_swarm_event(
                 message,
                 ..
             },
-        )) => match serde_json::from_slice::<NodeInfo>(&message.data) {
-            Ok(node_info) if node_info.is_authentic(message.source.as_ref()) => {
-                tracing::debug!(
-                    peer=%propagation_source,
-                    fingerprint=%node_info.user_fingerprint,
-                    svc=%node_info.service_type,
-                    "Gossip NodeInfo received"
-                );
-                if let Ok(mut st) = state.write() {
-                    st.upsert(node_info);
-                }
-            }
-            Ok(node_info) => {
-                tracing::warn!(
-                    peer=%propagation_source,
-                    claimed=%node_info.peer_id,
-                    "Dropped NodeInfo with an invalid device certificate"
-                );
-            }
-            Err(_) => {
-                match serde_json::from_slice::<fragment_gossip::FragmentIndexAnnouncement>(
-                    &message.data,
-                ) {
-                    Ok(ann) => {
-                        tracing::debug!(
-                            peer = %propagation_source,
-                            chunk = %ann.chunk_id,
-                            ptrs = ann.pointers.len(),
-                            "Gossip FragmentIndex received"
-                        );
-                        if let Ok(mut idx) = remote_fragment_index.write() {
-                            idx.upsert(ann);
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to deserialize gossip message: {}", e);
-                    }
-                }
-            }
-        },
+        )) => {
+            let Some(network_id) = topics.get(&message.topic) else {
+                return;
+            };
+            let Some((key, _)) = networks.get(network_id) else {
+                return;
+            };
+            let Some(gossip) = crate::membership::open(key, &message.data)
+                .ok()
+                .and_then(|plain| serde_json::from_slice::<Gossip>(&plain).ok())
+            else {
+                tracing::warn!(peer=%propagation_source, "Dropped undecryptable gossip");
+                return;
+            };
+            handle_gossip(
+                gossip,
+                network_id,
+                message.source.as_ref(),
+                swarm,
+                networks,
+                state,
+                memberships,
+                remote_fragment_index,
+            );
+        }
 
         SwarmEvent::Behaviour(behaviour::BillPouchBehaviourEvent::Mdns(
             libp2p::mdns::Event::Discovered(list),
@@ -485,7 +460,16 @@ async fn handle_swarm_event(
                     },
             },
         )) => {
-            let response = serve_fragment_request(&request, storage_managers);
+            let known = state
+                .read()
+                .map(|s| s.knows(&peer.to_string()))
+                .unwrap_or(false);
+            let response = if known {
+                serve_fragment_request(&request, storage_managers)
+            } else {
+                tracing::warn!(peer=%peer, "Refused fragment request from a non-member");
+                FragmentResponse::NotFound
+            };
             if let Err(e) = swarm
                 .behaviour_mut()
                 .fragment_exchange
@@ -552,6 +536,103 @@ async fn handle_swarm_event(
         }
 
         _ => {}
+    }
+}
+
+fn publish(
+    swarm: &mut Swarm<BillPouchBehaviour>,
+    networks: &HashMap<String, ([u8; 32], gossipsub::IdentTopic)>,
+    network_id: &str,
+    message: &Gossip,
+) {
+    let Some((key, topic)) = networks.get(network_id) else {
+        tracing::warn!(network=%network_id, "Publish to a network we have not joined");
+        return;
+    };
+    let sealed = serde_json::to_vec(message)
+        .map_err(BpError::from)
+        .and_then(|plain| crate::membership::seal(key, &plain));
+    match sealed {
+        Ok(payload) => {
+            if let Err(e) = swarm
+                .behaviour_mut()
+                .gossipsub
+                .publish(topic.clone(), payload)
+            {
+                tracing::warn!("Gossip publish failed: {}", e);
+            }
+        }
+        Err(e) => tracing::warn!("Cannot seal gossip: {e}"),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_gossip(
+    gossip: Gossip,
+    network_id: &str,
+    publisher: Option<&PeerId>,
+    swarm: &mut Swarm<BillPouchBehaviour>,
+    networks: &HashMap<String, ([u8; 32], gossipsub::IdentTopic)>,
+    state: &Arc<RwLock<NetworkState>>,
+    memberships: &crate::membership::Memberships,
+    remote_fragment_index: &Arc<RwLock<fragment_gossip::RemoteFragmentIndex>>,
+) {
+    match gossip {
+        Gossip::Node(info) => {
+            let member = memberships
+                .read()
+                .map(|m| {
+                    m.get(network_id)
+                        .is_some_and(|r| r.is_member(&info.user_fingerprint))
+                })
+                .unwrap_or(false);
+            if info.network_id == network_id && member && info.is_authentic(publisher) {
+                if let Ok(mut st) = state.write() {
+                    st.upsert(*info);
+                }
+            } else {
+                tracing::warn!(claimed=%info.peer_id, "Dropped NodeInfo from a non-member or with an invalid certificate");
+            }
+        }
+        Gossip::Index(ann) => {
+            let known = publisher
+                .zip(state.read().ok())
+                .is_some_and(|(p, s)| s.knows(&p.to_string()));
+            if known && ann.network_id == network_id {
+                if let Ok(mut idx) = remote_fragment_index.write() {
+                    idx.upsert(ann);
+                }
+            }
+        }
+        Gossip::Members { entries } => {
+            let Ok(received) = crate::membership::Registry::from_entries(entries) else {
+                return;
+            };
+            let reply = {
+                let Ok(mut all) = memberships.write() else {
+                    return;
+                };
+                let Some(local) = all.get_mut(network_id) else {
+                    return;
+                };
+                match local.merge(&received) {
+                    Ok(changed) => {
+                        if changed {
+                            if let Err(e) = local.save() {
+                                tracing::warn!("Cannot save registry: {e}");
+                            }
+                        }
+                        let theirs_is_missing =
+                            local.entries().count() > received.entries().count();
+                        theirs_is_missing.then(|| local.entries().cloned().collect())
+                    }
+                    Err(_) => None,
+                }
+            };
+            if let Some(entries) = reply {
+                publish(swarm, networks, network_id, &Gossip::Members { entries });
+            }
+        }
     }
 }
 
@@ -641,6 +722,51 @@ fn serve_fragment_request(
                 }
             }
             FragmentResponse::NotFound
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{identity::Identity, membership::Registry};
+
+    #[test]
+    fn every_gossip_variant_survives_sealing() {
+        let id = Identity::in_memory(None).unwrap();
+        let (registry, key) = Registry::create(&id, "amici").unwrap();
+        let messages = [
+            Gossip::Node(Box::new(NodeInfo {
+                peer_id: id.peer_id.to_string(),
+                user_fingerprint: id.fingerprint.clone(),
+                user_alias: None,
+                service_type: crate::service::ServiceType::Bill,
+                service_id: "svc".into(),
+                network_id: "amici".into(),
+                listen_addrs: vec![],
+                announced_at: 0,
+                metadata: HashMap::new(),
+                device_cert: id.cert.clone(),
+            })),
+            Gossip::Index(fragment_gossip::FragmentIndexAnnouncement {
+                network_id: "amici".into(),
+                chunk_id: "c".into(),
+                announced_at: 0,
+                pointers: vec![],
+            }),
+            Gossip::Members {
+                entries: registry.entries().cloned().collect(),
+            },
+        ];
+        for message in messages {
+            let sealed =
+                crate::membership::seal(&key, &serde_json::to_vec(&message).unwrap()).unwrap();
+            let opened: Gossip =
+                serde_json::from_slice(&crate::membership::open(&key, &sealed).unwrap()).unwrap();
+            assert_eq!(
+                serde_json::to_value(&opened).unwrap(),
+                serde_json::to_value(&message).unwrap()
+            );
         }
     }
 }

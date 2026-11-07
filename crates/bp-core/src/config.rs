@@ -40,8 +40,8 @@ pub fn bootstrap_path() -> BpResult<PathBuf> {
     Ok(base_dir()?.join("bootstrap.json"))
 }
 
-pub fn network_keys_path() -> BpResult<PathBuf> {
-    Ok(base_dir()?.join("network_keys.json"))
+pub fn networks_dir() -> BpResult<PathBuf> {
+    Ok(base_dir()?.join("networks"))
 }
 
 pub fn cek_hints_path() -> BpResult<PathBuf> {

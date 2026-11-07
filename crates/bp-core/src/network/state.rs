@@ -26,10 +26,6 @@ impl NodeInfo {
             && device.fingerprint == self.user_fingerprint
             && publisher.map(|p| p.to_string()) == Some(peer)
     }
-
-    pub fn topic_name(network_id: &str) -> String {
-        format!("billpouch/v1/{}/nodes", network_id)
-    }
 }
 
 #[derive(Default)]
@@ -50,6 +46,10 @@ impl NetworkState {
         if info.announced_at >= entry.announced_at {
             *entry = info;
         }
+    }
+
+    pub fn knows(&self, peer_id: &str) -> bool {
+        self.nodes.contains_key(peer_id)
     }
 
     pub fn remove(&mut self, peer_id: &str) {

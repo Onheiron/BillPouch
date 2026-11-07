@@ -39,5 +39,8 @@ rand    = "0.8"
 futures = "0.3"
 argon2  = "0.5"
 chacha20poly1305 = "0.10"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+curve25519-dalek = "4"
+base64 = "0.22"
 ssh-key = { version = "0.6", default-features = false, features = ["std", "ed25519", "encryption", "rand_core"] }
 

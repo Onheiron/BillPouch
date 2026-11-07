@@ -28,7 +28,7 @@ Each node runs one or more services, named after the pelican:
 cargo build --release          # binaries: target/release/bp, target/release/bp-api
 
 bp login --ssh-key ~/.ssh/id_ed25519   # your SSH key is your identity (or omit to generate one)
-bp hatch pouch --network friends --tier T1   # starts the daemon, offers 10 GiB
+bp hatch pouch --network friends --tier T1   # offers 10 GiB
 bp hatch bill  --network friends
 
 bp put photo.jpg --network friends          # → chunk_id
@@ -37,11 +37,12 @@ bp ls                                        # files you uploaded
 bp status                                    # identity, services, storage, peers
 ```
 
-Friends join a network with an invite (membership is not enforced yet, see [roadmap](docs/roadmap.md)).
+Networks are invite-only. The friend sends you the public key `bp login` printed for them:
 
 ```bash
-bp invite create --network friends --invite-password <pwd>   # prints a token
-bp invite join <token> --invite-password <pwd>               # on the friend's machine
+bp network create friends                        # you are the first member
+bp invite friends "ssh-ed25519 AAAA… marco@pc"   # prints a token for Marco
+bp join <token>                                  # on Marco's machine
 ```
 
 To try a whole network on one machine: `./playground.sh up` (Docker, 6 nodes).

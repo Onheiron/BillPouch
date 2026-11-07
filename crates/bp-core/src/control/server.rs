@@ -6,11 +6,12 @@ use crate::{
     },
     error::BpResult,
     identity::Identity,
+    membership::{Memberships, Registry},
     network::{
         fragment_gossip::{FragmentIndexAnnouncement, FragmentPointer, RemoteFragmentIndex},
         state::NodeInfo,
-        FragmentResponse, NetworkCommand, OutgoingAssignments, QosRegistry, ReputationStore,
-        StorageManagerMap,
+        FragmentResponse, Gossip, NetworkCommand, OutgoingAssignments, QosRegistry,
+        ReputationStore, StorageManagerMap,
     },
     service::{ServiceInfo, ServiceRegistry, ServiceStatus, ServiceType},
     storage::{ChunkCipher, FileRegistry, StorageManager, StorageTier},
@@ -108,6 +109,7 @@ pub struct DaemonState {
     pub services: RwLock<ServiceRegistry>,
     pub network_state: Arc<RwLock<crate::network::state::NetworkState>>,
     pub networks: RwLock<Vec<String>>,
+    pub memberships: Memberships,
     pub net_tx: mpsc::Sender<NetworkCommand>,
     pub storage_managers: StorageManagerMap,
     pub qos: Arc<RwLock<QosRegistry>>,
@@ -258,18 +260,8 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             network_id,
             metadata,
         } => {
-            let already_joined = {
-                let nets = state.networks.read().unwrap();
-                nets.contains(&network_id)
-            };
-            if !already_joined {
-                let _ = state
-                    .net_tx
-                    .send(NetworkCommand::JoinNetwork {
-                        network_id: network_id.clone(),
-                    })
-                    .await;
-                state.networks.write().unwrap().push(network_id.clone());
+            if let Err(e) = subscribe(state, &network_id).await {
+                return ControlResponse::err(e.to_string());
             }
 
             if service_type == ServiceType::Pouch {
@@ -447,31 +439,101 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             ControlResponse::ok(data)
         }
 
-        ControlRequest::Join { network_id } => {
-            {
-                let nets = state.networks.read().unwrap();
-                if nets.contains(&network_id) {
-                    return ControlResponse::err(format!(
-                        "Already a member of network '{}'",
-                        network_id
+        ControlRequest::CreateNetwork { name } => {
+            if state.memberships.read().unwrap().contains_key(&name) {
+                return ControlResponse::err(format!("a network named '{name}' already exists"));
+            }
+            let result = Registry::create(&state.identity, &name).and_then(|(registry, _)| {
+                registry.save()?;
+                let id = registry.id()?;
+                state
+                    .memberships
+                    .write()
+                    .unwrap()
+                    .insert(name.clone(), registry);
+                Ok(id)
+            });
+            match result {
+                Ok(id) => match subscribe(state, &name).await {
+                    Ok(()) => ControlResponse::ok(serde_json::json!({
+                        "network_id": name,
+                        "genesis": id,
+                        "message": format!("Created network '{name}'"),
+                    })),
+                    Err(e) => ControlResponse::err(e.to_string()),
+                },
+                Err(e) => ControlResponse::err(e.to_string()),
+            }
+        }
+
+        ControlRequest::Invite {
+            network_id,
+            member_key,
+        } => {
+            let result = {
+                let mut memberships = state.memberships.write().unwrap();
+                match memberships.get_mut(&network_id) {
+                    None => Err(crate::error::BpError::InvalidInput(format!(
+                        "you are not in a network named '{network_id}'"
+                    ))),
+                    Some(registry) => registry
+                        .invite(&state.identity, &member_key)
+                        .and_then(|()| registry.save())
+                        .and_then(|()| {
+                            Ok((
+                                registry.to_token()?,
+                                crate::identity::parse_user_key(&member_key)?.1,
+                            ))
+                        }),
+                }
+            };
+            match result {
+                Ok((token, member)) => {
+                    publish_members(state, &network_id).await;
+                    ControlResponse::ok(InviteData {
+                        token,
+                        network_id,
+                        member,
+                    })
+                }
+                Err(e) => ControlResponse::err(e.to_string()),
+            }
+        }
+
+        ControlRequest::JoinNetwork { token } => {
+            let result = Registry::from_token(&token).and_then(|received| {
+                if !received.is_member(&state.identity.fingerprint) {
+                    return Err(crate::error::BpError::Identity(
+                        "this invite is not for you".into(),
                     ));
                 }
+                let name = received.name()?.to_string();
+                let mut memberships = state.memberships.write().unwrap();
+                match memberships.get_mut(&name) {
+                    Some(existing) => {
+                        existing.merge(&received)?;
+                        existing.save()?;
+                    }
+                    None => {
+                        received.save()?;
+                        memberships.insert(name.clone(), received);
+                    }
+                }
+                Ok(name)
+            });
+            match result {
+                Ok(name) => match subscribe(state, &name).await {
+                    Ok(()) => {
+                        publish_members(state, &name).await;
+                        ControlResponse::ok(serde_json::json!({
+                            "network_id": name,
+                            "message": format!("Joined network '{name}'"),
+                        }))
+                    }
+                    Err(e) => ControlResponse::err(e.to_string()),
+                },
+                Err(e) => ControlResponse::err(e.to_string()),
             }
-            if let Err(e) = crate::storage::network_key::NetworkMetaKey::load_or_create(&network_id)
-            {
-                tracing::warn!(network = %network_id, "Failed to ensure NetworkMetaKey: {e}");
-            }
-            let _ = state
-                .net_tx
-                .send(NetworkCommand::JoinNetwork {
-                    network_id: network_id.clone(),
-                })
-                .await;
-            state.networks.write().unwrap().push(network_id.clone());
-            ControlResponse::ok(serde_json::json!({
-                "network_id": network_id,
-                "message": format!("Joined network '{}'", network_id),
-            }))
         }
 
         ControlRequest::Leave { network_id, force } => {
@@ -567,31 +629,6 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 "relay_addr": relay_addr,
                 "message": format!("Dialing relay '{}'", relay_addr),
             }))
-        }
-        ControlRequest::CreateInvite {
-            network_id,
-            invitee_fingerprint,
-            invite_password,
-            ttl_hours,
-        } => {
-            let ttl = ttl_hours.unwrap_or(24);
-            let expires_at =
-                (chrono::Utc::now() + chrono::Duration::hours(ttl as i64)).timestamp() as u64;
-            match crate::invite::create_invite(
-                &state.identity,
-                &network_id,
-                invitee_fingerprint,
-                ttl,
-                &invite_password,
-            ) {
-                Ok(blob) => ControlResponse::ok(InviteData {
-                    blob,
-                    network_id,
-                    expires_at,
-                    inviter_fingerprint: state.identity.fingerprint.clone(),
-                }),
-                Err(e) => ControlResponse::err(format!("Failed to create invite: {e}")),
-            }
         }
         ControlRequest::PutFile {
             chunk_data,
@@ -759,18 +796,16 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                     announced_at: chrono::Utc::now().timestamp() as u64,
                     pointers: index_pointers,
                 };
-                if let Ok(payload) = serde_json::to_vec(&ann) {
-                    let _ = state
-                        .net_tx
-                        .send(NetworkCommand::AnnounceIndex {
-                            network_id: network_id.clone(),
-                            payload,
-                        })
-                        .await;
-                    if let Ok(mut idx) = state.remote_fragment_index.write() {
-                        idx.upsert(ann);
-                    }
+                if let Ok(mut idx) = state.remote_fragment_index.write() {
+                    idx.upsert(ann.clone());
                 }
+                let _ = state
+                    .net_tx
+                    .send(NetworkCommand::Publish {
+                        network_id: network_id.clone(),
+                        message: Gossip::Index(ann),
+                    })
+                    .await;
             }
 
             tracing::info!(
@@ -1100,17 +1135,67 @@ async fn announce_service(state: &DaemonState, svc: &ServiceInfo) {
         metadata: svc.metadata.clone(),
         device_cert: state.identity.cert.clone(),
     };
-    match serde_json::to_vec(&info) {
-        Ok(payload) => {
-            let _ = state
-                .net_tx
-                .send(NetworkCommand::Announce {
-                    network_id: svc.network_id.clone(),
-                    payload,
-                })
-                .await;
+    let _ = state
+        .net_tx
+        .send(NetworkCommand::Publish {
+            network_id: svc.network_id.clone(),
+            message: Gossip::Node(Box::new(info)),
+        })
+        .await;
+}
+
+async fn subscribe(state: &DaemonState, network_id: &str) -> BpResult<()> {
+    let key = match state.memberships.read().unwrap().get(network_id) {
+        Some(registry) => registry.network_key(&state.identity)?,
+        None => {
+            return Err(crate::error::BpError::InvalidInput(format!(
+                "you are not in a network named '{network_id}' — create it or join with an invite"
+            )))
         }
-        Err(e) => tracing::warn!("Failed to serialize NodeInfo: {}", e),
+    };
+    if !state
+        .networks
+        .read()
+        .unwrap()
+        .iter()
+        .any(|n| n == network_id)
+    {
+        let _ = state
+            .net_tx
+            .send(NetworkCommand::JoinNetwork {
+                network_id: network_id.to_string(),
+                key,
+            })
+            .await;
+        state.networks.write().unwrap().push(network_id.to_string());
+    }
+    Ok(())
+}
+
+async fn publish_members(state: &DaemonState, network_id: &str) {
+    let entries = state
+        .memberships
+        .read()
+        .unwrap()
+        .get(network_id)
+        .map(|r| r.entries().cloned().collect::<Vec<_>>());
+    if let Some(entries) = entries {
+        let _ = state
+            .net_tx
+            .send(NetworkCommand::Publish {
+                network_id: network_id.to_string(),
+                message: Gossip::Members { entries },
+            })
+            .await;
+    }
+}
+
+pub async fn join_all(state: &DaemonState) {
+    let names: Vec<String> = state.memberships.read().unwrap().keys().cloned().collect();
+    for name in names {
+        if let Err(e) = subscribe(state, &name).await {
+            tracing::warn!(network = %name, "cannot join network: {e}");
+        }
     }
 }
 
@@ -1132,6 +1217,10 @@ pub async fn announce_all(state: &DaemonState) {
         .collect();
     for svc in &services {
         announce_service(state, svc).await;
+    }
+    let networks: Vec<String> = state.networks.read().unwrap().clone();
+    for network in networks {
+        publish_members(state, &network).await;
     }
 }
 

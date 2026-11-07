@@ -4,18 +4,38 @@ set -euo pipefail
 NODE_NAME="${NODE_NAME:-node}"
 NETWORK="${NETWORK:-playground}"
 SERVICES="${SERVICES:-}"
+SHARED="${SHARED:-/shared}"
 
-bp login --alias "${NODE_NAME}"
+mkdir -p "${SHARED}/keys" "${SHARED}/tokens"
+bp login --alias "${NODE_NAME}" | tail -1 | sed 's/^ *//' > "${SHARED}/keys/${NODE_NAME}.pub"
+
 bp --daemon &
 DAEMON_PID=$!
-
 for _ in $(seq 1 30); do
     [ -S "${HOME}/.local/share/billpouch/control.sock" ] && break
     sleep 0.2
 done
 
-bp join "${NETWORK}" || true
-echo "[${NODE_NAME}] daemon up, joined '${NETWORK}'"
+if [ "${FOUNDER:-false}" = "true" ]; then
+    bp network create "${NETWORK}" || true
+    (
+        while true; do
+            for key in "${SHARED}"/keys/*.pub; do
+                name=$(basename "${key}" .pub)
+                token="${SHARED}/tokens/${name}.token"
+                if [ "${name}" != "${NODE_NAME}" ] && [ ! -f "${token}" ]; then
+                    bp invite "${NETWORK}" "$(cat "${key}")" > "${token}.tmp" && mv "${token}.tmp" "${token}"
+                fi
+            done
+            sleep 1
+        done
+    ) &
+else
+    until [ -f "${SHARED}/tokens/${NODE_NAME}.token" ]; do sleep 1; done
+    bp join "$(cat "${SHARED}/tokens/${NODE_NAME}.token")"
+fi
+touch "${HOME}/.joined"
+echo "[${NODE_NAME}] member of '${NETWORK}'"
 
 if [ -n "${SERVICES}" ]; then
     sleep 15

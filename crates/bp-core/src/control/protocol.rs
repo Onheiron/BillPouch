@@ -27,8 +27,15 @@ pub enum ControlRequest {
     Resume {
         service_id: String,
     },
-    Join {
+    CreateNetwork {
+        name: String,
+    },
+    Invite {
         network_id: String,
+        member_key: String,
+    },
+    JoinNetwork {
+        token: String,
     },
     Leave {
         network_id: String,
@@ -50,12 +57,6 @@ pub enum ControlRequest {
     },
     ConnectRelay {
         relay_addr: String,
-    },
-    CreateInvite {
-        network_id: String,
-        invitee_fingerprint: Option<String>,
-        invite_password: String,
-        ttl_hours: Option<u64>,
     },
     StorageInfo {
         network_id: String,
@@ -144,10 +145,9 @@ pub struct GetFileData {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InviteData {
-    pub blob: String,
+    pub token: String,
     pub network_id: String,
-    pub expires_at: u64,
-    pub inviter_fingerprint: String,
+    pub member: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

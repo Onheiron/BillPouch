@@ -23,23 +23,21 @@ Types: `bp_core::control::protocol`; client helper: `bp_core::control::client::s
 | `farewell_evict` | `service_id` | Evicts a service (see [cli.md](cli.md)) |
 | `pause` | `service_id`, `eta_minutes` | Maintenance mode |
 | `resume` | `service_id` | Leaves maintenance mode |
-| `join` | `network_id` | Subscribes to the network's gossip topics |
+| `create_network` | `name` | Creates a network with you as creator |
+| `invite` | `network_id`, `member_key` (OpenSSH line) | Adds a member, returns the join token |
+| `join_network` | `token` | Joins with a token |
 | `leave` | `network_id`, `force` | Leaves a network |
 | `put_file` | `chunk_data` (bytes), `network_id`, `ph`?, `q_target`?, `file_name`? | Stores a file, returns `chunk_id`, `k`, `n`, placement counts |
 | `get_file` | `chunk_id`, `network_id` | Returns the decrypted bytes |
 | `list_files` | `network_id` (`""` = all) | Files uploaded from this node |
 | `storage_info` | `network_id` (`""` = all) | Per-Pouch and aggregate storage |
-| `create_invite` | `network_id`, `invite_password`, `invitee_fingerprint`?, `ttl_hours`? | Returns an invite token |
 | `connect_relay` | `relay_addr` | Dials a relay and reserves a circuit |
-
-Redeeming an invite happens client-side (`bp_core::invite::redeem_invite` +
-`save_invite_key`) followed by `join`.
 
 ## REST API (`bp-api`)
 
 `bp-api [--host 127.0.0.1] [--port 3000]` forwards HTTP calls to a running
 daemon's socket. `GET /` serves a dashboard that polls `/status` and `/peers`.
-Errors are `{"error": "…"}` with 503 (daemon unreachable), 422 (invalid base64 or invite) or 500 (daemon error).
+Errors are `{"error": "…"}` with 503 (daemon unreachable), 422 (invalid base64) or 500 (daemon error).
 
 | Method | Path | Body / query | Control command |
 |--------|------|--------------|-----------------|
@@ -50,12 +48,12 @@ Errors are `{"error": "…"}` with 503 (daemon unreachable), 422 (invalid base64
 | DELETE | `/services/:id` | `?evict=true` to evict | `farewell` / `farewell_evict` |
 | POST | `/services/:id/pause` | `{eta_minutes}` | `pause` |
 | POST | `/services/:id/resume` | | `resume` |
-| POST | `/networks/join` | `{network_id}` | `join` |
+| POST | `/networks` | `{name}` → 201 | `create_network` |
+| POST | `/networks/:id/invites` | `{member_key}` → 201 | `invite` |
+| POST | `/networks/join` | `{token}` | `join_network` |
 | POST | `/networks/leave` | `{network_id, force?}` | `leave` |
-| POST | `/files` | `{chunk_data: base64, network_id?, ph?, q_target?, file_name?}` → 201 | `put_file` |
-| GET | `/files/:chunk_id` | `?network=<id>` (default `public`) → `{chunk_id, data: base64, …}` | `get_file` |
-| POST | `/invites` | `{network_id, invite_password, invitee_fingerprint?, ttl_hours?}` | `create_invite` |
-| POST | `/invites/redeem` | `{blob, invite_password}` | redeem + `join` |
+| POST | `/files` | `{chunk_data: base64, network_id, ph?, q_target?, file_name?}` → 201 | `put_file` |
+| GET | `/files/:chunk_id` | `?network=<id>` → `{chunk_id, data: base64, …}` | `get_file` |
 | POST | `/relay/connect` | `{relay_addr}` | `connect_relay` |
 
 There is no authentication: keep it on `127.0.0.1`.

@@ -2,14 +2,12 @@ pub mod encryption;
 pub mod file_registry;
 pub mod fragment;
 pub mod meta;
-pub mod network_key;
 pub mod tier;
 
 pub use encryption::ChunkCipher;
 pub use file_registry::{FileRegistry, StoredFileEntry};
 pub use fragment::{FragmentIndex, FragmentMeta};
 pub use meta::PouchMeta;
-pub use network_key::NetworkMetaKey;
 pub use tier::StorageTier;
 
 use crate::{

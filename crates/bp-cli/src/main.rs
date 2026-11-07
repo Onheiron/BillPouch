@@ -4,8 +4,6 @@ mod commands;
 use clap::{Parser, Subcommand};
 use std::collections::HashMap;
 
-const DEFAULT_NETWORK: &str = "public";
-
 #[derive(Parser)]
 #[command(
     name = "bp",
@@ -52,8 +50,8 @@ enum Cmd {
         #[arg(help = "Service type to start: bill | pouch | post")]
         service_type: String,
 
-        #[arg(help = "Network ID to join (default: \"public\")")]
-        #[arg(long, short, default_value = DEFAULT_NETWORK)]
+        #[arg(help = "Network the service belongs to")]
+        #[arg(long, short)]
         network: String,
 
         #[arg(
@@ -104,11 +102,27 @@ enum Cmd {
         service_id: String,
     },
 
-    #[command(about = "Subscribe to a network's gossip topic (used by scripts/automation)")]
-    #[clap(hide = true)]
-    Join {
-        #[arg(help = "The network identifier to subscribe to")]
+    #[command(about = "Create a network you will be the first member of")]
+    Network {
+        #[command(subcommand)]
+        action: NetworkAction,
+    },
+
+    #[command(
+        about = "Let someone join a network: prints a token for them",
+        long_about = "Let someone join a network: prints a token for them.\n\nThey give you their SSH public key (the line `bp login` prints); you get a token to send back. The token is useless to anyone else: the network key inside is encrypted for their key only."
+    )]
+    Invite {
+        #[arg(help = "Network to invite them into")]
         network_id: String,
+        #[arg(help = "Their SSH public key, e.g. \"ssh-ed25519 AAAA... marco@laptop\"")]
+        member_key: String,
+    },
+
+    #[command(about = "Join a network with the token you were sent")]
+    Join {
+        #[arg(help = "The token printed by `bp invite`")]
+        token: String,
     },
 
     #[command(
@@ -128,8 +142,8 @@ enum Cmd {
         #[arg(help = "Path to the file to store")]
         file: std::path::PathBuf,
 
-        #[arg(help = "Network ID whose Pouch will store the fragments (default: \"public\")")]
-        #[arg(long, short, default_value = DEFAULT_NETWORK)]
+        #[arg(help = "Network that stores the file")]
+        #[arg(long, short)]
         network: String,
 
         #[arg(
@@ -159,8 +173,8 @@ enum Cmd {
         #[arg(help = "Where to write the recovered file")]
         output: std::path::PathBuf,
 
-        #[arg(help = "Network ID to search (default: \"public\")")]
-        #[arg(long, short, default_value = DEFAULT_NETWORK)]
+        #[arg(help = "Network that stores the file")]
+        #[arg(long, short)]
         network: String,
     },
 
@@ -201,15 +215,6 @@ enum Cmd {
         #[command(subcommand)]
         action: RelayAction,
     },
-
-    #[command(
-        about = "Manage network invite tokens",
-        long_about = "Manage network invite tokens.\n\nNetworks are private by default.  Use `bp invite create` to generate a token for someone and `bp invite join` to accept one."
-    )]
-    Invite {
-        #[command(subcommand)]
-        action: InviteAction,
-    },
 }
 
 #[derive(Subcommand)]
@@ -245,37 +250,11 @@ enum RelayAction {
 }
 
 #[derive(Subcommand)]
-enum InviteAction {
-    #[command(
-        about = "Create a signed+encrypted invite token for a network",
-        long_about = "Create a signed+encrypted invite token for a network.\n\nThe token contains the network's secret key — share the blob AND the invite-password with the invitee out-of-band (Signal, phone, etc.)."
-    )]
+enum NetworkAction {
+    #[command(about = "Create a new network")]
     Create {
-        #[arg(help = "Network to invite the recipient into")]
-        #[arg(long, short, default_value = DEFAULT_NETWORK)]
-        network: String,
-
-        #[arg(help = "Optional: fingerprint of the specific invitee. Omit for an open invite")]
-        #[arg(long)]
-        for_fingerprint: Option<String>,
-
-        #[arg(help = "Token validity in hours (default: 24)")]
-        #[arg(long, default_value_t = 24)]
-        ttl: u64,
-
-        #[arg(help = "Password used to encrypt the token (share out-of-band)")]
-        #[arg(long)]
-        invite_password: String,
-    },
-
-    #[command(about = "Redeem an invite token: decrypt, verify, save the network key and join")]
-    Join {
-        #[arg(help = "The hex blob produced by `bp invite create`")]
-        blob: String,
-
-        #[arg(help = "Password used to decrypt the token")]
-        #[arg(long)]
-        invite_password: String,
+        #[arg(help = "Name of the network, e.g. friends")]
+        name: String,
     },
 }
 
@@ -356,8 +335,21 @@ async fn main() -> anyhow::Result<()> {
             commands::pause::resume(service_id).await?;
         }
 
-        Some(Cmd::Join { network_id }) => {
-            commands::join::join(network_id).await?;
+        Some(Cmd::Network {
+            action: NetworkAction::Create { name },
+        }) => {
+            commands::network::create(name, cli.passphrase.clone()).await?;
+        }
+
+        Some(Cmd::Invite {
+            network_id,
+            member_key,
+        }) => {
+            commands::network::invite(network_id, member_key, cli.passphrase.clone()).await?;
+        }
+
+        Some(Cmd::Join { token }) => {
+            commands::network::join(token, cli.passphrase.clone()).await?;
         }
 
         Some(Cmd::Leave { network_id, force }) => {
@@ -405,23 +397,6 @@ async fn main() -> anyhow::Result<()> {
         Some(Cmd::Relay { action }) => match action {
             RelayAction::Connect { addr } => {
                 commands::relay::connect(addr).await?;
-            }
-        },
-
-        Some(Cmd::Invite { action }) => match action {
-            InviteAction::Create {
-                network,
-                for_fingerprint,
-                ttl,
-                invite_password,
-            } => {
-                commands::invite::create(network, for_fingerprint, ttl, invite_password).await?;
-            }
-            InviteAction::Join {
-                blob,
-                invite_password,
-            } => {
-                commands::invite::join(blob, invite_password).await?;
             }
         },
     }
