@@ -19,7 +19,7 @@ struct Cli {
     daemon: bool,
 
     #[arg(
-        help = "Passphrase to unlock a passphrase-protected identity. Can also be set via the `BP_PASSPHRASE` environment variable"
+        help = "Passphrase of your SSH key (also used to encrypt a newly generated one). Can also be set via the `BP_PASSPHRASE` environment variable"
     )]
     #[arg(long, global = true, env = "BP_PASSPHRASE")]
     passphrase: Option<String>,
@@ -30,43 +30,22 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    #[command(about = "Create your identity (keypair) and log in to BillPouch")]
+    #[command(
+        about = "Log in on this device with your SSH identity (imported or newly generated)"
+    )]
     Login {
+        #[arg(
+            help = "Use an existing OpenSSH ed25519 private key as your identity (default: generate a new one)"
+        )]
+        #[arg(long)]
+        ssh_key: Option<std::path::PathBuf>,
         #[arg(help = "Optional human-readable alias for this identity")]
         #[arg(long, short)]
         alias: Option<String>,
-        #[arg(
-            help = "Encrypt the identity key with a passphrase (Argon2id + ChaCha20-Poly1305). Without it the key is stored unencrypted"
-        )]
-        #[arg(long)]
-        passphrase: Option<String>,
     },
 
     #[command(about = "Remove your identity from this machine")]
     Logout,
-
-    #[command(
-        about = "Export your identity (keypair + profile) to a portable JSON file",
-        long_about = "Export your identity (keypair + profile) to a portable JSON file.\n\nUse this to move your identity to another machine.  On the target machine run `bp import-identity <file>`."
-    )]
-    ExportIdentity {
-        #[arg(help = "File path to write the exported identity to")]
-        #[arg(long, short)]
-        out: String,
-    },
-
-    #[command(
-        about = "Import an identity previously exported with `bp export-identity`",
-        long_about = "Import an identity previously exported with `bp export-identity`.\n\nInstalls the keypair and profile into the local XDG data directory. Fails if an identity already exists unless `--force` is specified."
-    )]
-    ImportIdentity {
-        #[arg(help = "Path to the identity export file")]
-        path: String,
-
-        #[arg(help = "Overwrite any existing identity without prompting")]
-        #[arg(long)]
-        force: bool,
-    },
 
     #[command(about = "Hatch (start) a new service: bill | pouch | post")]
     Hatch {
@@ -323,20 +302,12 @@ async fn main() -> anyhow::Result<()> {
             println!("   Run `bp --help` for usage.");
         }
 
-        Some(Cmd::Login { alias, passphrase }) => {
-            commands::auth::login(alias, passphrase.as_deref()).await?;
+        Some(Cmd::Login { ssh_key, alias }) => {
+            commands::auth::login(ssh_key.as_deref(), alias, cli.passphrase.as_deref()).await?;
         }
 
         Some(Cmd::Logout) => {
             commands::auth::logout().await?;
-        }
-
-        Some(Cmd::ExportIdentity { out }) => {
-            commands::auth::export_identity(&out).await?;
-        }
-
-        Some(Cmd::ImportIdentity { path, force }) => {
-            commands::auth::import_identity(&path, force).await?;
         }
 
         Some(Cmd::Hatch {

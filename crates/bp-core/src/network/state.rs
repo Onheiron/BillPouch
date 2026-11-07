@@ -1,4 +1,4 @@
-use crate::service::ServiceType;
+use crate::{identity::DeviceCert, service::ServiceType};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -13,9 +13,20 @@ pub struct NodeInfo {
     pub listen_addrs: Vec<String>,
     pub announced_at: u64,
     pub metadata: HashMap<String, serde_json::Value>,
+    pub device_cert: DeviceCert,
 }
 
 impl NodeInfo {
+    pub fn is_authentic(&self, publisher: Option<&libp2p::PeerId>) -> bool {
+        let Ok(device) = self.device_cert.verify() else {
+            return false;
+        };
+        let peer = device.peer_id.to_string();
+        peer == self.peer_id
+            && device.fingerprint == self.user_fingerprint
+            && publisher.map(|p| p.to_string()) == Some(peer)
+    }
+
     pub fn topic_name(network_id: &str) -> String {
         format!("billpouch/v1/{}/nodes", network_id)
     }
@@ -68,5 +79,49 @@ impl NetworkState {
 
     pub fn is_empty(&self) -> bool {
         self.nodes.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::identity::Identity;
+
+    fn announce(id: &Identity) -> NodeInfo {
+        NodeInfo {
+            peer_id: id.peer_id.to_string(),
+            user_fingerprint: id.fingerprint.clone(),
+            user_alias: None,
+            service_type: ServiceType::Pouch,
+            service_id: "svc".into(),
+            network_id: "amici".into(),
+            listen_addrs: vec![],
+            announced_at: 0,
+            metadata: HashMap::new(),
+            device_cert: id.cert.clone(),
+        }
+    }
+
+    #[test]
+    fn genuine_announcement_is_accepted() {
+        let id = Identity::in_memory(None).unwrap();
+        assert!(announce(&id).is_authentic(Some(&id.peer_id)));
+    }
+
+    #[test]
+    fn forged_announcements_are_rejected() {
+        let carlo = Identity::in_memory(None).unwrap();
+        let mallory = Identity::in_memory(None).unwrap();
+
+        assert!(!announce(&carlo).is_authentic(Some(&mallory.peer_id)));
+        assert!(!announce(&carlo).is_authentic(None));
+
+        let mut impersonation = announce(&mallory);
+        impersonation.user_fingerprint = carlo.fingerprint.clone();
+        assert!(!impersonation.is_authentic(Some(&mallory.peer_id)));
+
+        let mut stolen_cert = announce(&mallory);
+        stolen_cert.device_cert = carlo.cert.clone();
+        assert!(!stolen_cert.is_authentic(Some(&mallory.peer_id)));
     }
 }

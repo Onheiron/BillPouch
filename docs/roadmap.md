@@ -4,7 +4,7 @@ Alpha. Current version in `version.txt`; history in [CHANGELOG.md](../CHANGELOG.
 
 ## Works today
 
-- Identity: Ed25519, optional passphrase encryption, export/import.
+- Identity: SSH ed25519 user key, per-device keys with signed certificates, verified announcements.
 - Services `pouch` / `bill` / `post`; storage tiers T1–T5; one Pouch per network per node.
 - Discovery (mDNS, Kademlia, bootstrap list, saved peers), gossip, NAT relay client.
 - `bp put` / `bp get`: per-user encryption, RLNC coding with adaptive k/n,
