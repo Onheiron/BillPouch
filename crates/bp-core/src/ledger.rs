@@ -1,6 +1,6 @@
 use crate::{
     error::{BpError, BpResult},
-    identity::{parse_user_key, Identity},
+    identity::{parse_user_key, DeviceCert, Identity},
     membership::Entry,
     network::ReputationTier,
 };
@@ -41,6 +41,12 @@ pub enum Op {
     },
     ApproveExpel {
         member: String,
+    },
+    RegisterDevice {
+        cert: DeviceCert,
+    },
+    SetVotingDevice {
+        device: String,
     },
 }
 
@@ -158,6 +164,13 @@ pub struct Member {
     pub joined_at: u64,
     pub sent: u64,
     pub passed: u64,
+    pub voting_device: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Device {
+    pub user: String,
+    pub key: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -167,6 +180,7 @@ pub struct Ledger {
     pub head: String,
     pub time: u64,
     pub members: BTreeMap<String, Member>,
+    pub devices: BTreeMap<String, Device>,
     pub entries: Vec<Entry>,
     pub expelled: BTreeSet<String>,
     pub expel_approvals: BTreeMap<String, BTreeSet<String>>,
@@ -176,23 +190,37 @@ pub struct Ledger {
 }
 
 impl Ledger {
-    pub fn new(genesis: Entry) -> BpResult<Self> {
+    pub fn new(genesis: Entry, creator_device: &DeviceCert) -> BpResult<Self> {
         let (_, creator) = parse_user_key(&genesis.body.author)?;
+        let device = creator_device.verify()?;
+        if device.fingerprint != creator {
+            return Err(invalid("the first device must belong to the creator"));
+        }
+        let peer = device.peer_id.to_string();
         let mut members = BTreeMap::new();
         members.insert(
-            creator,
+            creator.clone(),
             Member {
                 key: genesis.body.author.clone(),
                 joined_at: genesis.body.at,
                 sent: 0,
                 passed: 0,
+                voting_device: Some(peer.clone()),
             },
         );
+        let devices = BTreeMap::from([(
+            peer,
+            Device {
+                user: creator,
+                key: creator_device.device_key.clone(),
+            },
+        )]);
         let mut ledger = Self {
             head: genesis.id(),
             time: genesis.body.at,
             height: 0,
             members,
+            devices,
             entries: Vec::new(),
             expelled: BTreeSet::new(),
             expel_approvals: BTreeMap::new(),
@@ -206,6 +234,19 @@ impl Ledger {
         };
         ledger.snapshot = ledger.compute_snapshot(ledger.snapshot.epoch);
         Ok(ledger)
+    }
+
+    pub fn voting_device(&self, user: &str) -> Option<&str> {
+        self.members.get(user)?.voting_device.as_deref()
+    }
+
+    pub fn device_owner(&self, device: &str) -> Option<&str> {
+        self.devices.get(device).map(|d| d.user.as_str())
+    }
+
+    pub fn device_key(&self, device: &str) -> Option<libp2p::identity::PublicKey> {
+        let bytes = hex::decode(&self.devices.get(device)?.key).ok()?;
+        libp2p::identity::PublicKey::try_decode_protobuf(&bytes).ok()
     }
 
     pub fn creator(&self) -> String {
@@ -296,6 +337,7 @@ impl Ledger {
                         joined_at: block.time,
                         sent: 0,
                         passed: 0,
+                        voting_device: None,
                     },
                 );
                 self.entries.push(entry.clone());
@@ -346,6 +388,31 @@ impl Ledger {
                     return Err(invalid("cannot approve this expulsion"));
                 }
                 self.maybe_expel(member);
+            }
+            Op::RegisterDevice { cert } => {
+                let device = cert.verify()?;
+                let peer = device.peer_id.to_string();
+                if device.fingerprint != author || self.devices.contains_key(&peer) {
+                    return Err(invalid("cannot register this device"));
+                }
+                self.devices.insert(
+                    peer.clone(),
+                    Device {
+                        user: author.clone(),
+                        key: cert.device_key.clone(),
+                    },
+                );
+                let member = self.members.get_mut(&author).expect("checked member");
+                member.voting_device.get_or_insert(peer);
+            }
+            Op::SetVotingDevice { device } => {
+                if self.devices.get(device).map(|d| &d.user) != Some(&author) {
+                    return Err(invalid("not one of your devices"));
+                }
+                self.members
+                    .get_mut(&author)
+                    .expect("checked member")
+                    .voting_device = Some(device.clone());
             }
         }
         self.applied_ops.insert(id);
@@ -437,7 +504,7 @@ mod tests {
             let people: Vec<Identity> =
                 (0..n).map(|_| Identity::in_memory(None).unwrap()).collect();
             let (registry, _) = Registry::create(&people[0], "amici").unwrap();
-            let ledger = Ledger::new(registry.genesis().unwrap().clone()).unwrap();
+            let ledger = Ledger::new(registry.genesis().unwrap().clone(), &people[0].cert).unwrap();
             Self {
                 people,
                 ledger,
@@ -680,5 +747,42 @@ mod tests {
         let t = net.now();
         let op = SignedOp::sign(&net.people[1], Op::ProposeExpel { member: net.fp(2) }).unwrap();
         assert!(net.commit(1, t, vec![op]).is_err());
+    }
+
+    #[test]
+    fn each_user_votes_from_one_registered_device() {
+        let mut net = Net::everyone_joined(2);
+        let t = net.now();
+        assert_eq!(
+            net.ledger.voting_device(&net.fp(0)),
+            Some(net.people[0].peer_id.to_string().as_str())
+        );
+        assert_eq!(net.ledger.voting_device(&net.fp(1)), None);
+
+        let laptop = net.people[1].cert.clone();
+        let op = SignedOp::sign(&net.people[1], Op::RegisterDevice { cert: laptop }).unwrap();
+        net.commit(0, t, vec![op]).unwrap();
+        let laptop_id = net.people[1].peer_id.to_string();
+        assert_eq!(
+            net.ledger.voting_device(&net.fp(1)),
+            Some(laptop_id.as_str())
+        );
+        assert_eq!(
+            net.ledger.device_owner(&laptop_id),
+            Some(net.fp(1).as_str())
+        );
+        assert!(net.ledger.device_key(&laptop_id).is_some());
+
+        let stolen = SignedOp::sign(
+            &net.people[0],
+            Op::RegisterDevice {
+                cert: net.people[1].cert.clone(),
+            },
+        )
+        .unwrap();
+        assert!(net.commit(0, t, vec![stolen]).is_err());
+        let hijack =
+            SignedOp::sign(&net.people[0], Op::SetVotingDevice { device: laptop_id }).unwrap();
+        assert!(net.commit(0, t, vec![hijack]).is_err());
     }
 }
