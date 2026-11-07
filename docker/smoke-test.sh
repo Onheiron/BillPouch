@@ -37,6 +37,15 @@ for c in "${CONTAINERS[@]}"; do
     fi
 done
 
+header "1b. Waiting for every node to join the network through an invite"
+for c in "${CONTAINERS[@]}"; do
+    if timeout 60 bash -c "until docker exec ${c} test -f /root/.joined; do sleep 1; done"; then
+        pass "${c} joined via invite"
+    else
+        fail "${c} never joined (no invite token after 60s)"
+    fi
+done
+
 header "2. Waiting for mDNS discovery + gossipsub mesh formation"
 info "Sleeping 20s for peers to discover each other and form gossipsub mesh..."
 sleep 20

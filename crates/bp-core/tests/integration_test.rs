@@ -15,16 +15,41 @@ use bp_core::network::state::NetworkState;
 use bp_core::network::{NetworkCommand, QosRegistry, ReputationStore};
 use bp_core::service::ServiceRegistry;
 
+fn memberships_for(
+    identity: &bp_core::identity::Identity,
+    names: &[&str],
+) -> bp_core::membership::Memberships {
+    let registries = names
+        .iter()
+        .map(|n| {
+            let (registry, _) = bp_core::membership::Registry::create(identity, n).unwrap();
+            (n.to_string(), registry)
+        })
+        .collect();
+    std::sync::Arc::new(std::sync::RwLock::new(registries))
+}
+
 fn make_daemon_state() -> (Arc<DaemonState>, mpsc::Receiver<NetworkCommand>) {
     let identity = Identity::in_memory(Some("test-pelican".to_string())).unwrap();
 
     let (net_tx, net_rx) = mpsc::channel::<NetworkCommand>(64);
 
     let state = Arc::new(DaemonState {
-        identity,
+        identity: identity.clone(),
         services: RwLock::new(ServiceRegistry::new()),
         network_state: Arc::new(RwLock::new(NetworkState::new())),
         networks: RwLock::new(Vec::new()),
+        memberships: memberships_for(
+            &identity,
+            &[
+                "amici",
+                "lavoro",
+                "test-net",
+                "block-net",
+                "dup-net",
+                "evict-net",
+            ],
+        ),
         net_tx,
         storage_managers: Arc::new(RwLock::new(std::collections::HashMap::new())),
         qos: Arc::new(RwLock::new(QosRegistry::new())),
@@ -163,13 +188,15 @@ async fn full_user_journey() {
 
     let resp = send_request(
         &socket_path,
-        &ControlRequest::Join {
+        &ControlRequest::Hatch {
+            service_type: bp_core::service::ServiceType::Bill,
             network_id: "lavoro".to_string(),
+            metadata: HashMap::new(),
         },
     )
     .await;
-    let join_data = unwrap_ok(resp);
-    assert_eq!(join_data["network_id"], "lavoro");
+    let hatch_lavoro: HatchData = serde_json::from_value(unwrap_ok(resp)).unwrap();
+    assert_eq!(hatch_lavoro.network_id, "lavoro");
 
     let resp = send_request(&socket_path, &ControlRequest::Status).await;
     let status: StatusData = serde_json::from_value(unwrap_ok(resp)).unwrap();
@@ -190,8 +217,8 @@ async fn full_user_journey() {
     let flock: FlockData = serde_json::from_value(unwrap_ok(resp)).unwrap();
     assert_eq!(
         flock.local_services.len(),
-        2,
-        "expected 2 services after farewell"
+        3,
+        "expected 3 services after farewell"
     );
     assert!(
         flock.local_services.iter().any(|s| s.id == pouch_id),
@@ -217,8 +244,8 @@ async fn full_user_journey() {
 
     let resp = send_request(
         &socket_path,
-        &ControlRequest::Join {
-            network_id: "amici".to_string(),
+        &ControlRequest::CreateNetwork {
+            name: "amici".to_string(),
         },
     )
     .await;
@@ -604,14 +631,6 @@ async fn leave_blocked_by_active_service() {
         let _ = run_control_server(&server_path, server_state).await;
     });
     tokio::time::sleep(std::time::Duration::from_millis(30)).await;
-
-    let _ = send_request(
-        &socket_path,
-        &ControlRequest::Join {
-            network_id: "block-net".to_string(),
-        },
-    )
-    .await;
 
     let hatch_resp = send_request(
         &socket_path,

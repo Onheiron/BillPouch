@@ -40,12 +40,14 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
     let qos = Arc::new(RwLock::new(crate::network::QosRegistry::new()));
     let outgoing_assignments: OutgoingAssignments = Arc::new(RwLock::new(HashMap::new()));
     let remote_fragment_index = Arc::new(RwLock::new(RemoteFragmentIndex::new()));
+    let memberships = Arc::new(RwLock::new(crate::membership::Registry::load_all()?));
 
     let daemon_state = Arc::new(DaemonState {
         identity: identity.clone(),
         services: RwLock::new(ServiceRegistry::new()),
         network_state: Arc::clone(&network_state),
         networks: RwLock::new(Vec::new()),
+        memberships: Arc::clone(&memberships),
         net_tx: net_tx.clone(),
         storage_managers: Arc::clone(&storage_managers),
         qos,
@@ -75,6 +77,7 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
     let net_storage = Arc::clone(&storage_managers);
     let net_outgoing = Arc::clone(&outgoing_assignments);
     let net_fragment_idx = Arc::clone(&remote_fragment_index);
+    let net_memberships = Arc::clone(&memberships);
     tokio::spawn(async move {
         if let Err(e) = network::run_network_loop(
             swarm,
@@ -84,12 +87,15 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
             net_storage,
             net_outgoing,
             net_fragment_idx,
+            net_memberships,
         )
         .await
         {
             tracing::error!("Network loop exited with error: {}", e);
         }
     });
+
+    crate::control::server::join_all(&daemon_state).await;
 
     let evict_state = Arc::clone(&network_state);
     tokio::spawn(async move {
