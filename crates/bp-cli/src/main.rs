@@ -58,7 +58,7 @@ enum Cmd {
         /// Optional human-readable alias for this identity.
         #[arg(long, short)]
         alias: Option<String>,
-        /// Encrypt the identity key with a passphrase (Argon2id + AES-256-GCM).
+        /// Encrypt the identity key with a passphrase (Argon2id + ChaCha20-Poly1305).
         /// Leave empty for a plaintext key (backwards-compatible).
         #[arg(long)]
         passphrase: Option<String>,

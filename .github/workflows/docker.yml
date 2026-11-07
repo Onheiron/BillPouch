@@ -1,10 +1,33 @@
 name: Docker
 
+# Triggers:
+# - release-please.yml calls this workflow after a release is created
+#   (tags pushed with GITHUB_TOKEN do not trigger other workflows).
+# - Manual run from the Actions tab (workflow_dispatch) for ad-hoc images:
+#   no need to push throwaway version tags anymore.
+# - Tag push, kept for manually created release tags.
 on:
   push:
     tags:
       - "v*"
       - "billpouch-v*"
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Extra image tag (default: sha-<short commit>)"
+        required: false
+        type: string
+  workflow_call:
+    inputs:
+      tag:
+        description: "Release tag to build and push (e.g. billpouch-v0.3.2)"
+        required: true
+        type: string
+    secrets:
+      DOCKERHUB_USERNAME:
+        required: true
+      DOCKERHUB_TOKEN:
+        required: true
 
 jobs:
   docker:
@@ -14,6 +37,21 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Compute image tag
+        id: meta
+        run: |
+          if [ -n "${{ inputs.tag }}" ]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          elif [ -n "${{ inputs.image_tag }}" ]; then
+            echo "tag=${{ inputs.image_tag }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -35,6 +73,6 @@ jobs:
           push: true
           tags: |
             onheirongithub/billpouch:latest
-            onheirongithub/billpouch:${{ github.ref_name }}
+            onheirongithub/billpouch:${{ steps.meta.outputs.tag }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

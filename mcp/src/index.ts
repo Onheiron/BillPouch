@@ -181,7 +181,7 @@ const TOOLS = [
         message: { type: "string", description: "Commit message" },
         tag: {
           type: "string",
-          description: "Optional semver tag to create and push (e.g. 'v0.3.19')",
+          description: "Optional git tag to create and push. Do NOT use version tags (vX.Y.Z): releases are created by release-please, ad-hoc Docker images via the Docker workflow's manual run.",
         },
       },
       required: ["message"],
