@@ -43,7 +43,9 @@ pub type OutgoingAssignments = Arc<RwLock<HashMap<String, Vec<OutgoingFragment>>
 pub enum Gossip {
     Node(Box<NodeInfo>),
     Index(fragment_gossip::FragmentIndexAnnouncement),
-    Members(Vec<crate::membership::Entry>),
+    Members {
+        entries: Vec<crate::membership::Entry>,
+    },
 }
 
 #[derive(Debug)]
@@ -602,7 +604,7 @@ fn handle_gossip(
                 }
             }
         }
-        Gossip::Members(entries) => {
+        Gossip::Members { entries } => {
             let Ok(received) = crate::membership::Registry::from_entries(entries) else {
                 return;
             };
@@ -628,7 +630,7 @@ fn handle_gossip(
                 }
             };
             if let Some(entries) = reply {
-                publish(swarm, networks, network_id, &Gossip::Members(entries));
+                publish(swarm, networks, network_id, &Gossip::Members { entries });
             }
         }
     }
@@ -720,6 +722,51 @@ fn serve_fragment_request(
                 }
             }
             FragmentResponse::NotFound
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{identity::Identity, membership::Registry};
+
+    #[test]
+    fn every_gossip_variant_survives_sealing() {
+        let id = Identity::in_memory(None).unwrap();
+        let (registry, key) = Registry::create(&id, "amici").unwrap();
+        let messages = [
+            Gossip::Node(Box::new(NodeInfo {
+                peer_id: id.peer_id.to_string(),
+                user_fingerprint: id.fingerprint.clone(),
+                user_alias: None,
+                service_type: crate::service::ServiceType::Bill,
+                service_id: "svc".into(),
+                network_id: "amici".into(),
+                listen_addrs: vec![],
+                announced_at: 0,
+                metadata: HashMap::new(),
+                device_cert: id.cert.clone(),
+            })),
+            Gossip::Index(fragment_gossip::FragmentIndexAnnouncement {
+                network_id: "amici".into(),
+                chunk_id: "c".into(),
+                announced_at: 0,
+                pointers: vec![],
+            }),
+            Gossip::Members {
+                entries: registry.entries().cloned().collect(),
+            },
+        ];
+        for message in messages {
+            let sealed =
+                crate::membership::seal(&key, &serde_json::to_vec(&message).unwrap()).unwrap();
+            let opened: Gossip =
+                serde_json::from_slice(&crate::membership::open(&key, &sealed).unwrap()).unwrap();
+            assert_eq!(
+                serde_json::to_value(&opened).unwrap(),
+                serde_json::to_value(&message).unwrap()
+            );
         }
     }
 }

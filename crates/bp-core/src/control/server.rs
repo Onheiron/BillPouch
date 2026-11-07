@@ -1184,7 +1184,7 @@ async fn publish_members(state: &DaemonState, network_id: &str) {
             .net_tx
             .send(NetworkCommand::Publish {
                 network_id: network_id.to_string(),
-                message: Gossip::Members(entries),
+                message: Gossip::Members { entries },
             })
             .await;
     }
