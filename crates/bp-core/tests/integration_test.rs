@@ -12,21 +12,18 @@ use bp_core::control::protocol::{
 use bp_core::control::server::{run_control_server, DaemonState};
 use bp_core::identity::Identity;
 use bp_core::network::state::NetworkState;
-use bp_core::network::{NetworkCommand, QosRegistry, ReputationStore};
+use bp_core::network::{NetworkCommand, QosRegistry};
 use bp_core::service::ServiceRegistry;
 
-fn memberships_for(
-    identity: &bp_core::identity::Identity,
-    names: &[&str],
-) -> bp_core::membership::Memberships {
-    let registries = names
+fn chains_for(identity: &bp_core::identity::Identity, names: &[&str]) -> bp_core::chain::Chains {
+    let chains = names
         .iter()
         .map(|n| {
-            let (registry, _) = bp_core::membership::Registry::create(identity, n).unwrap();
-            (n.to_string(), registry)
+            let chain = bp_core::chain::Chain::create(identity, n).unwrap();
+            (n.to_string(), chain)
         })
         .collect();
-    std::sync::Arc::new(std::sync::RwLock::new(registries))
+    std::sync::Arc::new(std::sync::RwLock::new(chains))
 }
 
 fn make_daemon_state() -> (Arc<DaemonState>, mpsc::Receiver<NetworkCommand>) {
@@ -39,7 +36,7 @@ fn make_daemon_state() -> (Arc<DaemonState>, mpsc::Receiver<NetworkCommand>) {
         services: RwLock::new(ServiceRegistry::new()),
         network_state: Arc::new(RwLock::new(NetworkState::new())),
         networks: RwLock::new(Vec::new()),
-        memberships: memberships_for(
+        chains: chains_for(
             &identity,
             &[
                 "amici",
@@ -56,7 +53,6 @@ fn make_daemon_state() -> (Arc<DaemonState>, mpsc::Receiver<NetworkCommand>) {
         outgoing_assignments: Arc::new(RwLock::new(std::collections::HashMap::new())),
         remote_fragment_index: Arc::new(RwLock::new(bp_core::network::RemoteFragmentIndex::new())),
         chunk_cek_hints: RwLock::new(std::collections::HashMap::new()),
-        reputation: Arc::new(RwLock::new(ReputationStore::new())),
         file_registry: RwLock::new(bp_core::storage::FileRegistry::default()),
     });
 

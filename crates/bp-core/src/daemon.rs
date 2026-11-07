@@ -5,7 +5,7 @@ use crate::{
     identity::Identity,
     network::{
         self, run_quality_monitor, NetworkState, OutgoingAssignments, RemoteFragmentIndex,
-        ReputationStore, StorageManagerMap,
+        StorageManagerMap,
     },
     service::ServiceRegistry,
     storage::FileRegistry,
@@ -40,21 +40,24 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
     let qos = Arc::new(RwLock::new(crate::network::QosRegistry::new()));
     let outgoing_assignments: OutgoingAssignments = Arc::new(RwLock::new(HashMap::new()));
     let remote_fragment_index = Arc::new(RwLock::new(RemoteFragmentIndex::new()));
-    let memberships = Arc::new(RwLock::new(crate::membership::Registry::load_all()?));
+    let chains = Arc::new(RwLock::new(crate::chain::Chain::load_all(
+        &identity,
+        crate::chain::now_ms(),
+    )?));
+    let observations = crate::chain::ObservationLog::default();
 
     let daemon_state = Arc::new(DaemonState {
         identity: identity.clone(),
         services: RwLock::new(ServiceRegistry::new()),
         network_state: Arc::clone(&network_state),
         networks: RwLock::new(Vec::new()),
-        memberships: Arc::clone(&memberships),
+        chains: Arc::clone(&chains),
         net_tx: net_tx.clone(),
         storage_managers: Arc::clone(&storage_managers),
         qos,
         outgoing_assignments: Arc::clone(&outgoing_assignments),
         remote_fragment_index: Arc::clone(&remote_fragment_index),
         chunk_cek_hints: RwLock::new(load_cek_hints()),
-        reputation: Arc::new(RwLock::new(ReputationStore::new())),
         file_registry: RwLock::new(
             config::file_registry_path()
                 .map(|p| FileRegistry::load(&p))
@@ -77,7 +80,9 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
     let net_storage = Arc::clone(&storage_managers);
     let net_outgoing = Arc::clone(&outgoing_assignments);
     let net_fragment_idx = Arc::clone(&remote_fragment_index);
-    let net_memberships = Arc::clone(&memberships);
+    let net_chains = Arc::clone(&chains);
+    let net_identity = identity.clone();
+    let net_observations = Arc::clone(&observations);
     tokio::spawn(async move {
         if let Err(e) = network::run_network_loop(
             swarm,
@@ -87,7 +92,9 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
             net_storage,
             net_outgoing,
             net_fragment_idx,
-            net_memberships,
+            net_chains,
+            net_identity,
+            net_observations,
         )
         .await
         {
@@ -120,12 +127,12 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
     let monitor_qos = Arc::clone(&daemon_state.qos);
     let monitor_tx = net_tx.clone();
     let monitor_outgoing = Arc::clone(&outgoing_assignments);
-    let monitor_rep = Arc::clone(&daemon_state.reputation);
+    let monitor_observations = Arc::clone(&observations);
     tokio::spawn(async move {
         run_quality_monitor(
             monitor_state,
             monitor_qos,
-            monitor_rep,
+            monitor_observations,
             monitor_tx,
             monitor_outgoing,
         )

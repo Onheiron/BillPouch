@@ -3,18 +3,15 @@ use bp_core::network::state::{NetworkState, NodeInfo};
 use bp_core::service::*;
 use std::collections::HashMap;
 
-fn memberships_for(
-    identity: &bp_core::identity::Identity,
-    names: &[&str],
-) -> bp_core::membership::Memberships {
-    let registries = names
+fn chains_for(identity: &bp_core::identity::Identity, names: &[&str]) -> bp_core::chain::Chains {
+    let chains = names
         .iter()
         .map(|n| {
-            let (registry, _) = bp_core::membership::Registry::create(identity, n).unwrap();
-            (n.to_string(), registry)
+            let chain = bp_core::chain::Chain::create(identity, n).unwrap();
+            (n.to_string(), chain)
         })
         .collect();
-    std::sync::Arc::new(std::sync::RwLock::new(registries))
+    std::sync::Arc::new(std::sync::RwLock::new(chains))
 }
 
 fn test_cert() -> bp_core::identity::DeviceCert {
@@ -703,7 +700,7 @@ fn make_in_memory_state() -> std::sync::Arc<bp_core::control::server::DaemonStat
     let identity = bp_core::identity::Identity::in_memory(Some("test-server".into())).unwrap();
     let (net_tx, _net_rx) = tokio::sync::mpsc::channel(64);
     std::sync::Arc::new(bp_core::control::server::DaemonState {
-        memberships: memberships_for(
+        chains: chains_for(
             &identity,
             &[
                 "test-net",
@@ -731,9 +728,6 @@ fn make_in_memory_state() -> std::sync::Arc<bp_core::control::server::DaemonStat
             bp_core::network::RemoteFragmentIndex::new(),
         )),
         chunk_cek_hints: std::sync::RwLock::new(std::collections::HashMap::new()),
-        reputation: std::sync::Arc::new(std::sync::RwLock::new(
-            bp_core::network::ReputationStore::new(),
-        )),
         file_registry: std::sync::RwLock::new(bp_core::storage::FileRegistry::default()),
     })
 }
@@ -1050,6 +1044,8 @@ async fn network_loop_accetta_e_processa_comandi() {
         outgoing,
         frag_idx,
         std::sync::Arc::new(std::sync::RwLock::new(HashMap::new())),
+        bp_core::identity::Identity::in_memory(None).unwrap(),
+        bp_core::chain::ObservationLog::default(),
     ));
 
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;

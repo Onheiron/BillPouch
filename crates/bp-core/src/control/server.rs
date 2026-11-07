@@ -1,4 +1,5 @@
 use crate::{
+    chain::{now_ms, Chain, Chains},
     coding::{params as coding_params, rlnc},
     control::protocol::{
         ControlRequest, ControlResponse, FileEntry, FlockData, GetFileData, HatchData, InviteData,
@@ -6,12 +7,12 @@ use crate::{
     },
     error::BpResult,
     identity::Identity,
-    membership::{Memberships, Registry},
+    membership::Invite,
     network::{
         fragment_gossip::{FragmentIndexAnnouncement, FragmentPointer, RemoteFragmentIndex},
         state::NodeInfo,
-        FragmentResponse, Gossip, NetworkCommand, OutgoingAssignments, QosRegistry,
-        ReputationStore, StorageManagerMap,
+        FragmentResponse, Gossip, NetworkCommand, OutgoingAssignments, QosRegistry, ReputationTier,
+        StorageManagerMap,
     },
     service::{ServiceInfo, ServiceRegistry, ServiceStatus, ServiceType},
     storage::{ChunkCipher, FileRegistry, StorageManager, StorageTier},
@@ -109,14 +110,13 @@ pub struct DaemonState {
     pub services: RwLock<ServiceRegistry>,
     pub network_state: Arc<RwLock<crate::network::state::NetworkState>>,
     pub networks: RwLock<Vec<String>>,
-    pub memberships: Memberships,
+    pub chains: Chains,
     pub net_tx: mpsc::Sender<NetworkCommand>,
     pub storage_managers: StorageManagerMap,
     pub qos: Arc<RwLock<QosRegistry>>,
     pub outgoing_assignments: OutgoingAssignments,
     pub remote_fragment_index: Arc<RwLock<RemoteFragmentIndex>>,
     pub chunk_cek_hints: RwLock<HashMap<String, [u8; 32]>>,
-    pub reputation: Arc<RwLock<ReputationStore>>,
     pub file_registry: RwLock<FileRegistry>,
 }
 
@@ -196,19 +196,13 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             let ns = state.network_state.read().unwrap();
             let own_peer = state.identity.peer_id.to_string();
 
-            let (rep_tier, rep_score) = {
-                let rep = state.reputation.read().unwrap();
-                rep.get(&own_peer)
-                    .map_or((crate::network::ReputationTier::R1.to_string(), 0), |r| {
-                        (r.tier.to_string(), r.reputation_score)
-                    })
-            };
+            let rep_tier = own_tier(state).to_string();
             let pouch_stats = pouch_stats(state, &services, "");
 
             let qos_peer_count = state.qos.read().unwrap().peer_count();
             let network_qos = {
                 let qos = state.qos.read().unwrap();
-                let rep = state.reputation.read().unwrap();
+                let chains = state.chains.read().unwrap();
                 let peer_count = qos.peer_count();
                 if peer_count == 0 {
                     None
@@ -222,7 +216,11 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                     let mut tier_counts: std::collections::HashMap<String, usize> =
                         std::collections::HashMap::new();
                     for peer_id in qos.peer_ids() {
-                        let tier = rep.tier(peer_id).to_string();
+                        let tier = chains
+                            .values()
+                            .filter_map(|c| c.device_tier(peer_id))
+                            .max()
+                            .map_or_else(|| "unknown".to_string(), |t| t.to_string());
                         *tier_counts.entry(tier).or_insert(0) += 1;
                     }
                     Some(NetworkQosSummary {
@@ -242,7 +240,6 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 known_peers: ns.len().max(qos_peer_count),
                 version: env!("CARGO_PKG_VERSION").to_string(),
                 reputation_tier: rep_tier,
-                reputation_score: rep_score,
                 pouch_stats,
                 network_qos,
             };
@@ -262,6 +259,11 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
         } => {
             if let Err(e) = subscribe(state, &network_id).await {
                 return ControlResponse::err(e.to_string());
+            }
+            if !is_confirmed_member(state, &network_id) {
+                return ControlResponse::err(format!(
+                    "your membership of '{network_id}' is not in the ledger yet — wait for it to sync"
+                ));
             }
 
             if service_type == ServiceType::Pouch {
@@ -440,17 +442,13 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
         }
 
         ControlRequest::CreateNetwork { name } => {
-            if state.memberships.read().unwrap().contains_key(&name) {
+            if state.chains.read().unwrap().contains_key(&name) {
                 return ControlResponse::err(format!("a network named '{name}' already exists"));
             }
-            let result = Registry::create(&state.identity, &name).and_then(|(registry, _)| {
-                registry.save()?;
-                let id = registry.id()?;
-                state
-                    .memberships
-                    .write()
-                    .unwrap()
-                    .insert(name.clone(), registry);
+            let result = Chain::create(&state.identity, &name).and_then(|mut chain| {
+                chain.save()?;
+                let id = chain.id();
+                state.chains.write().unwrap().insert(name.clone(), chain);
                 Ok(id)
             });
             match result {
@@ -470,69 +468,64 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             network_id,
             member_key,
         } => {
-            let result = {
-                let mut memberships = state.memberships.write().unwrap();
-                match memberships.get_mut(&network_id) {
-                    None => Err(crate::error::BpError::InvalidInput(format!(
-                        "you are not in a network named '{network_id}'"
-                    ))),
-                    Some(registry) => registry
-                        .invite(&state.identity, &member_key)
-                        .and_then(|()| registry.save())
-                        .and_then(|()| {
-                            Ok((
-                                registry.to_token()?,
-                                crate::identity::parse_user_key(&member_key)?.1,
-                            ))
-                        }),
-                }
+            let member = match crate::identity::parse_user_key(&member_key) {
+                Ok((_, fingerprint)) => fingerprint,
+                Err(e) => return ControlResponse::err(e.to_string()),
             };
-            match result {
-                Ok((token, member)) => {
-                    publish_members(state, &network_id).await;
-                    ControlResponse::ok(InviteData {
-                        token,
-                        network_id,
-                        member,
-                    })
-                }
-                Err(e) => ControlResponse::err(e.to_string()),
+            let result = match state.chains.write().unwrap().get_mut(&network_id) {
+                None => Err(crate::error::BpError::InvalidInput(format!(
+                    "you are not in a network named '{network_id}'"
+                ))),
+                Some(chain) if chain.is_member(&member) => Err(
+                    crate::error::BpError::InvalidInput(format!("{member} is already a member")),
+                ),
+                Some(chain) => chain.invite(&state.identity, &member_key, now_ms()),
+            };
+            let token = match result.and_then(|invite| invite.to_token()) {
+                Ok(token) => token,
+                Err(e) => return ControlResponse::err(e.to_string()),
+            };
+            if wait_until(state, &network_id, |c| c.is_member(&member)).await {
+                ControlResponse::ok(InviteData {
+                    token,
+                    network_id,
+                    member,
+                })
+            } else {
+                ControlResponse::err(
+                    "the invitation was not committed by the network in time — are enough members online?",
+                )
             }
         }
 
         ControlRequest::JoinNetwork { token } => {
-            let result = Registry::from_token(&token).and_then(|received| {
-                if !received.is_member(&state.identity.fingerprint) {
-                    return Err(crate::error::BpError::Identity(
-                        "this invite is not for you".into(),
-                    ));
+            let result = Invite::from_token(&token).and_then(|invite| {
+                let name = invite.genesis.body.network.clone();
+                if state.chains.read().unwrap().contains_key(&name) {
+                    return Ok(name);
                 }
-                let name = received.name()?.to_string();
-                let mut memberships = state.memberships.write().unwrap();
-                match memberships.get_mut(&name) {
-                    Some(existing) => {
-                        existing.merge(&received)?;
-                        existing.save()?;
-                    }
-                    None => {
-                        received.save()?;
-                        memberships.insert(name.clone(), received);
-                    }
-                }
+                let mut chain = Chain::from_invite(&state.identity, invite)?;
+                chain.save()?;
+                state.chains.write().unwrap().insert(name.clone(), chain);
                 Ok(name)
             });
-            match result {
-                Ok(name) => match subscribe(state, &name).await {
-                    Ok(()) => {
-                        publish_members(state, &name).await;
-                        ControlResponse::ok(serde_json::json!({
-                            "network_id": name,
-                            "message": format!("Joined network '{name}'"),
-                        }))
-                    }
-                    Err(e) => ControlResponse::err(e.to_string()),
-                },
-                Err(e) => ControlResponse::err(e.to_string()),
+            let name = match result {
+                Ok(name) => name,
+                Err(e) => return ControlResponse::err(e.to_string()),
+            };
+            if let Err(e) = subscribe(state, &name).await {
+                return ControlResponse::err(e.to_string());
+            }
+            let me = state.identity.fingerprint.clone();
+            if wait_until(state, &name, |c| c.is_member(&me)).await {
+                ControlResponse::ok(serde_json::json!({
+                    "network_id": name,
+                    "message": format!("Joined network '{name}'"),
+                }))
+            } else {
+                ControlResponse::err(format!(
+                    "joined '{name}' but could not sync its ledger from any member yet"
+                ))
             }
         }
 
@@ -1068,12 +1061,50 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
     }
 }
 
+const MEMBERSHIP_WAIT_SECS: u64 = 90;
+
+async fn wait_until(state: &DaemonState, network_id: &str, done: impl Fn(&Chain) -> bool) -> bool {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(MEMBERSHIP_WAIT_SECS);
+    loop {
+        if state
+            .chains
+            .read()
+            .unwrap()
+            .get(network_id)
+            .is_some_and(&done)
+        {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+}
+
+fn is_confirmed_member(state: &DaemonState, network_id: &str) -> bool {
+    state
+        .chains
+        .read()
+        .unwrap()
+        .get(network_id)
+        .is_some_and(|c| c.is_member(&state.identity.fingerprint))
+}
+
+fn own_tier(state: &DaemonState) -> ReputationTier {
+    state
+        .chains
+        .read()
+        .unwrap()
+        .values()
+        .filter_map(|c| c.tier(&state.identity.fingerprint))
+        .max()
+        .unwrap_or(ReputationTier::R1)
+}
+
 fn availability_factor(state: &DaemonState) -> f64 {
     let own_peer = state.identity.peer_id.to_string();
-    let tier = state.reputation.read().unwrap().tier(&own_peer);
-    if tier == crate::network::ReputationTier::R0 {
-        return 0.0;
-    }
+    let tier = own_tier(state);
     let qos = state.qos.read().unwrap();
     let own_score = qos.get(&own_peer).map_or(0.4, |q| q.stability_score());
     let mut stabilities = qos.all_stability_scores();
@@ -1145,8 +1176,8 @@ async fn announce_service(state: &DaemonState, svc: &ServiceInfo) {
 }
 
 async fn subscribe(state: &DaemonState, network_id: &str) -> BpResult<()> {
-    let key = match state.memberships.read().unwrap().get(network_id) {
-        Some(registry) => registry.network_key(&state.identity)?,
+    let key = match state.chains.read().unwrap().get(network_id) {
+        Some(chain) => chain.key,
         None => {
             return Err(crate::error::BpError::InvalidInput(format!(
                 "you are not in a network named '{network_id}' — create it or join with an invite"
@@ -1172,26 +1203,8 @@ async fn subscribe(state: &DaemonState, network_id: &str) -> BpResult<()> {
     Ok(())
 }
 
-async fn publish_members(state: &DaemonState, network_id: &str) {
-    let entries = state
-        .memberships
-        .read()
-        .unwrap()
-        .get(network_id)
-        .map(|r| r.entries().cloned().collect::<Vec<_>>());
-    if let Some(entries) = entries {
-        let _ = state
-            .net_tx
-            .send(NetworkCommand::Publish {
-                network_id: network_id.to_string(),
-                message: Gossip::Members { entries },
-            })
-            .await;
-    }
-}
-
 pub async fn join_all(state: &DaemonState) {
-    let names: Vec<String> = state.memberships.read().unwrap().keys().cloned().collect();
+    let names: Vec<String> = state.chains.read().unwrap().keys().cloned().collect();
     for name in names {
         if let Err(e) = subscribe(state, &name).await {
             tracing::warn!(network = %name, "cannot join network: {e}");
@@ -1218,10 +1231,6 @@ pub async fn announce_all(state: &DaemonState) {
     for svc in &services {
         announce_service(state, svc).await;
     }
-    let networks: Vec<String> = state.networks.read().unwrap().clone();
-    for network in networks {
-        publish_members(state, &network).await;
-    }
 }
 
 async fn evict_service(state: &DaemonState, svc: &ServiceInfo) -> (usize, usize, u64) {
@@ -1243,16 +1252,6 @@ async fn evict_service(state: &DaemonState, svc: &ServiceInfo) -> (usize, usize,
         .insert("evicting".into(), serde_json::Value::Bool(true));
     announce_service(state, &notice).await;
 
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    state
-        .reputation
-        .write()
-        .unwrap()
-        .get_or_create(&state.identity.peer_id.to_string(), now)
-        .evict_without_notice(now);
     state.services.write().unwrap().remove(&svc.id);
 
     let (chunks, fragments, bytes) = summary;

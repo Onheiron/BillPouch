@@ -20,7 +20,7 @@ per user per machine; it runs these Tokio tasks (`daemon.rs`):
 |------|--------------|
 | Control server | Unix socket `control.sock`, one JSON request/response per connection ([api.md](api.md)) |
 | Network loop | Drives the libp2p swarm, executes `NetworkCommand`s, serves fragment requests |
-| Quality monitor | Ping every 60 s, Proof-of-Storage every 300 s → QoS + reputation |
+| Quality monitor | Ping every 60 s, Proof-of-Storage every 300 s → QoS + per-device observations for the ledger |
 | Re-announce | Gossips every local service at 10, 20, 30 s after start, then every 30 s |
 | Stale eviction | Every 60 s drops peers not heard from for 120 s |
 
@@ -36,7 +36,7 @@ Everything is under the XDG data dir (`~/.local/share/billpouch/` on Linux):
 | `device.key`, `device_cert.json` | This device's libp2p key and the certificate your user key signed for it |
 | `profile.json` | Alias and creation time |
 | `control.sock`, `daemon.pid` | Daemon socket and PID |
-| `networks/<name>.json` | Member registry of each network you belong to |
+| `networks/<name>.json` | Genesis, your key entry and the committed ledger blocks of each network you belong to |
 | `cek_hints.json` | `chunk_id → BLAKE3(plaintext)`, needed to decrypt your files |
 | `file_registry.json` | Files you uploaded (`bp ls`) |
 | `kad_peers.json` | Known peer addresses, saved every 600 s and redialled at start |
@@ -56,7 +56,7 @@ libp2p 0.54 over TCP with Noise and Yamux:
 | Request-response (CBOR) | `/billpouch/fragment/1.1.0`: store, fetch, ping, Proof-of-Storage |
 | AutoNAT + relay client | NAT traversal through a relay (`bp relay connect`) |
 
-A daemon can be in several networks at once. Gossip messages are `Node` (NodeInfo), `Index` (fragment locations) and `Members` (registry entries). A node accepts them, and serves fragment requests, only from devices of registry members.
+A daemon can be in several networks at once. Gossip messages are `Node` (NodeInfo), `Index` (fragment locations) and `Consensus` (ledger ops, proposals, votes, commits). A node accepts NodeInfo, and serves fragment requests, only from devices of ledger members.
 
 **NodeInfo** is what every service announces:
 
@@ -129,22 +129,66 @@ For every peer the daemon keeps a QoS record (`network/qos.rs`):
   (RTT EWMA α = 0.125, success EWMA β = 0.10). This is the `p_i` used for k/n.
 - **Fault score** 0–100: +5 per failed Proof-of-Storage, −1 per passed one.
   At 90 (*suspected*) the fragments it holds are recoded and pushed to a peer
-  below 70 (*degraded*); at 100 its reputation becomes R0.
+  below 70 (*degraded*).
 
 **Proof-of-Storage**: every 300 s the daemon picks one fragment it placed on
 each peer and asks for `BLAKE3(fragment ‖ nonce)`. A reply within 10 s passes.
 
-**Reputation** (`network/reputation.rs`), updated after every challenge:
+Every challenge result is counted per device and epoch. In the last 10 % of an
+epoch each member submits an `Observations` op with its counts (at most 288
+challenges per device per epoch) for the devices of other users.
+
+QoS lives in memory only; reputation lives in the ledger.
+
+## Shared ledger and consensus
+
+Each network has a ledger (`ledger.rs`) built by replaying committed blocks of
+signed ops from the genesis entry and the creator's device certificate:
+
+| Op | Effect |
+|----|--------|
+| `AddMember` | Adds a member entry (with the network key wrapped for them) |
+| `RegisterDevice` | Adds one of your devices; the first one becomes your voting device |
+| `SetVotingDevice` | Picks which of your devices votes |
+| `Observations` | Adds PoS counts to other users' totals |
+| `ProposeExpel` / `ApproveExpel` | Expulsion vote |
+
+**Epochs** last one day of block time. At the first block of an epoch the
+ledger takes a snapshot of every user's tier and weight; weights stay fixed for
+the whole epoch. A member who joined during the epoch has no weight until the
+next one.
+
+**Reputation** is per user, over all their devices:
 
 | Tier | Name | Rule |
 |------|------|------|
-| R0 | Quarantine | fault score 100, or evicted (locked 30 days) |
-| R1 | Fledgling | default |
-| R2 | Reliable | known ≥ 30 days, PoS pass rate ≥ 98 % |
-| R3 | Trusted | known ≥ 90 days, pass rate ≥ 99.5 % |
-| R4 | Pillar | known ≥ 365 days, pass rate ≥ 99.9 % |
+| R1 | Fledgling | default, or fewer than 100 challenges |
+| R2 | Reliable | member ≥ 30 days, PoS pass rate ≥ 98 % |
+| R3 | Trusted | member ≥ 90 days, pass rate ≥ 99.5 % |
+| R4 | Pillar | member ≥ 365 days, pass rate ≥ 99.9 % |
 
-QoS and reputation live in memory only.
+Weight = tier rank (R1 = 1 … R4 = 4). With 4 or more users no user can hold
+more than a quarter of the total (capped iteratively).
+
+**Capabilities**: vote R1+, invite R2+, propose an expulsion R3+; while nobody
+has reached R2 (R3) the creator alone can invite (propose expulsions). An
+expulsion passes with > 2/3 of the other members' weight and at least half of
+them by count.
+
+**Consensus** (`consensus.rs`) is Tendermint-style over the snapshot weights:
+the round's proposer (validators in order, rotating with height and round)
+proposes a block of pending ops, members prevote and precommit, and a block with
+precommits from > 2/3 of the weight is final. A node that precommitted a block
+is locked on it and only unlocks on a newer > 2/3 prevote, so a committed block
+is never replaced; rounds time out (3 s + 1 s per round) and are skipped when
+> 1/3 of the weight is already in a later one. Each user votes through one
+voting device, so their devices cannot equivocate by accident. Nothing is
+proposed while no op is pending.
+
+**Sync**: commits carry their precommits, so any node can verify them alone.
+A node that sees a commit more than one block ahead asks the sender for the
+missing ones (at most 100 per request); the sender serves them only to a device
+whose certificate belongs to a member (`chain.rs`).
 
 ## Identity and access
 
@@ -157,19 +201,15 @@ QoS and reputation live in memory only.
 - **Announcements** carry the certificate. A NodeInfo is accepted only if the
   certificate verifies, its device is the gossip publisher and its user matches
   `user_fingerprint`.
-- **Registry**: each network is a set of signed entries rooted in a genesis entry
-  signed by the creator; the genesis hash identifies the network. An entry "author
-  adds member" is valid if the author is a member holding the `invite` capability
-  (today only the creator; later from reputation R2). Registries merge by union.
+- **Network**: rooted in a genesis entry signed by the creator; the genesis hash
+  identifies the network. Membership is whatever the ledger says.
 - **Network key**: 32 random bytes made at creation. Every entry carries it
   encrypted for the new member: X25519 (from the member's ed25519 key) with an
   ephemeral key, BLAKE3-derived wrapping key, ChaCha20-Poly1305. It never travels
   in clear and only the member it was wrapped for can open it.
-- **Invites**: `bp invite` adds the entry and prints the registry as a token;
-  `bp join` checks the token contains you, saves it and subscribes. Members
-  gossip the registry, so everybody learns new members.
-- **Capabilities** (by user reputation, user = all their devices): `invite` R2+,
-  `expel` R3+ (proposal, decided by vote), `vote` R1+ weighted per user;
-  `add-device` and `share` always on your own things. Until reputation snapshots
-  exist, only the creator invites.
+- **Invites**: `bp invite` submits an `AddMember` op, waits for it to be
+  committed and prints a token (genesis, creator's device certificate, your
+  entry). `bp join` opens the key from the entry, subscribes, syncs the ledger
+  from members and waits until it lists you; the daemon then registers the
+  device by itself.
 - **Transport**: every connection is Noise-encrypted.

@@ -491,24 +491,24 @@ fn invalid(reason: &str) -> BpError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::membership::Registry;
+    use crate::membership::{genesis, invite_entry};
 
     struct Net {
         people: Vec<Identity>,
         ledger: Ledger,
-        registry: Registry,
+        key: [u8; 32],
     }
 
     impl Net {
         fn new(n: usize) -> Self {
             let people: Vec<Identity> =
                 (0..n).map(|_| Identity::in_memory(None).unwrap()).collect();
-            let (registry, _) = Registry::create(&people[0], "amici").unwrap();
-            let ledger = Ledger::new(registry.genesis().unwrap().clone(), &people[0].cert).unwrap();
+            let (root, key) = genesis(&people[0], "amici").unwrap();
+            let ledger = Ledger::new(root, &people[0].cert).unwrap();
             Self {
                 people,
                 ledger,
-                registry,
+                key,
             }
         }
 
@@ -524,11 +524,7 @@ mod tests {
 
         fn commit(&mut self, proposer: usize, time: u64, ops: Vec<SignedOp>) -> BpResult<()> {
             let block = self.block(proposer, time, ops);
-            self.ledger.apply(&block)?;
-            for entry in self.ledger.entries.clone() {
-                self.registry.add_entry(entry);
-            }
-            Ok(())
+            self.ledger.apply(&block)
         }
 
         fn next_epoch(&mut self) {
@@ -538,10 +534,13 @@ mod tests {
 
         fn invite_op(&mut self, by: usize, who: usize) -> SignedOp {
             let member_key = self.people[who].user_key.clone();
-            let entry = self
-                .registry
-                .entry_for(&self.people[by], &member_key)
-                .unwrap();
+            let entry = invite_entry(
+                &self.people[by],
+                &self.ledger.genesis,
+                &self.key,
+                &member_key,
+            )
+            .unwrap();
             SignedOp::sign(&self.people[by], Op::AddMember { entry }).unwrap()
         }
 

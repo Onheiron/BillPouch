@@ -1,7 +1,6 @@
 use crate::{
-    config,
     error::{BpError, BpResult},
-    identity::{parse_user_key, Identity},
+    identity::{parse_user_key, DeviceCert, Identity},
     storage::ChunkCipher,
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD as B64, Engine as _};
@@ -9,15 +8,6 @@ use libp2p::identity::{Keypair, PublicKey};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha512};
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::{Arc, RwLock};
-
-pub type Memberships = Arc<RwLock<HashMap<String, Registry>>>;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Capability {
-    Invite,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WrappedKey {
@@ -66,172 +56,60 @@ impl Entry {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Registry {
-    entries: BTreeMap<String, Entry>,
+impl Entry {
+    pub fn unwrap_key(&self, identity: &Identity) -> BpResult<[u8; 32]> {
+        if parse_user_key(&self.body.member)?.1 != identity.fingerprint {
+            return Err(BpError::Identity("this entry is not for you".into()));
+        }
+        unwrap(&self.body.wrapped_key, &identity.user)
+    }
 }
 
-impl Registry {
-    pub fn create(identity: &Identity, network: &str) -> BpResult<(Self, [u8; 32])> {
-        let mut key = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut key);
-        let genesis = Entry::sign(
-            &identity.user,
-            EntryBody {
-                network: network.to_string(),
-                genesis: None,
-                author: identity.user_key.clone(),
-                member: identity.user_key.clone(),
-                wrapped_key: wrap(&key, &identity.user.public())?,
-                at: now(),
-            },
-        )?;
-        let mut entries = BTreeMap::new();
-        entries.insert(genesis.id(), genesis);
-        Ok((Self { entries }, key))
-    }
+pub fn genesis(identity: &Identity, network: &str) -> BpResult<(Entry, [u8; 32])> {
+    let mut key = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut key);
+    let entry = Entry::sign(
+        &identity.user,
+        EntryBody {
+            network: network.to_string(),
+            genesis: None,
+            author: identity.user_key.clone(),
+            member: identity.user_key.clone(),
+            wrapped_key: wrap(&key, &identity.user.public())?,
+            at: now(),
+        },
+    )?;
+    Ok((entry, key))
+}
 
-    pub fn from_entries(entries: impl IntoIterator<Item = Entry>) -> BpResult<Self> {
-        let mut registry = Self {
-            entries: BTreeMap::new(),
-        };
-        for entry in entries {
-            registry.entries.insert(entry.id(), entry);
-        }
-        registry.genesis()?;
-        Ok(registry)
-    }
+pub fn invite_entry(
+    identity: &Identity,
+    genesis: &Entry,
+    key: &[u8; 32],
+    member_key: &str,
+) -> BpResult<Entry> {
+    let (member_public, _) = parse_user_key(member_key)?;
+    Entry::sign(
+        &identity.user,
+        EntryBody {
+            network: genesis.body.network.clone(),
+            genesis: Some(genesis.id()),
+            author: identity.user_key.clone(),
+            member: member_key.trim().to_string(),
+            wrapped_key: wrap(key, &member_public)?,
+            at: now(),
+        },
+    )
+}
 
-    pub fn entries(&self) -> impl Iterator<Item = &Entry> {
-        self.entries.values()
-    }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Invite {
+    pub genesis: Entry,
+    pub creator_device: DeviceCert,
+    pub entry: Entry,
+}
 
-    pub fn genesis(&self) -> BpResult<&Entry> {
-        let mut roots = self.entries.values().filter(|e| {
-            e.body.genesis.is_none()
-                && e.body.author == e.body.member
-                && e.signed_by_author().is_some()
-        });
-        match (roots.next(), roots.next()) {
-            (Some(root), None) => Ok(root),
-            _ => Err(BpError::Identity(
-                "registry must have exactly one valid genesis".into(),
-            )),
-        }
-    }
-
-    pub fn id(&self) -> BpResult<String> {
-        Ok(self.genesis()?.id())
-    }
-
-    pub fn name(&self) -> BpResult<&str> {
-        Ok(&self.genesis()?.body.network)
-    }
-
-    pub fn creator(&self) -> BpResult<String> {
-        Ok(parse_user_key(&self.genesis()?.body.author)?.1)
-    }
-
-    pub fn members(&self) -> BpResult<HashSet<String>> {
-        Ok(self.valid_entries()?.into_keys().collect())
-    }
-
-    pub fn is_member(&self, fingerprint: &str) -> bool {
-        self.members()
-            .map(|m| m.contains(fingerprint))
-            .unwrap_or(false)
-    }
-
-    pub fn has_capability(&self, fingerprint: &str, capability: Capability) -> bool {
-        match capability {
-            Capability::Invite => self.creator().is_ok_and(|c| c == fingerprint),
-        }
-    }
-
-    fn valid_entries(&self) -> BpResult<HashMap<String, &Entry>> {
-        let genesis = self.genesis()?;
-        let genesis_id = genesis.id();
-        let creator = self.creator()?;
-        let mut members: HashMap<String, &Entry> = HashMap::new();
-        members.insert(creator, genesis);
-        for entry in self.entries.values() {
-            if entry.body.genesis.as_deref() != Some(&genesis_id) {
-                continue;
-            }
-            let Some(author) = entry.signed_by_author() else {
-                continue;
-            };
-            let Ok((_, member)) = parse_user_key(&entry.body.member) else {
-                continue;
-            };
-            if members.contains_key(&author)
-                && self.has_capability(&author, Capability::Invite)
-                && !members.contains_key(&member)
-            {
-                members.insert(member, entry);
-            }
-        }
-        Ok(members)
-    }
-
-    pub fn invite(&mut self, identity: &Identity, member_key: &str) -> BpResult<()> {
-        let (_, member) = parse_user_key(member_key)?;
-        if !self.has_capability(&identity.fingerprint, Capability::Invite) {
-            return Err(BpError::Identity(
-                "you do not have the invite capability in this network".into(),
-            ));
-        }
-        if self.is_member(&member) {
-            return Err(BpError::Identity(format!("{member} is already a member")));
-        }
-        let entry = self.entry_for(identity, member_key)?;
-        self.entries.insert(entry.id(), entry);
-        Ok(())
-    }
-
-    pub fn entry_for(&self, identity: &Identity, member_key: &str) -> BpResult<Entry> {
-        let (member_public, _) = parse_user_key(member_key)?;
-        let key = self.network_key(identity)?;
-        Entry::sign(
-            &identity.user,
-            EntryBody {
-                network: self.name()?.to_string(),
-                genesis: Some(self.id()?),
-                author: identity.user_key.clone(),
-                member: member_key.trim().to_string(),
-                wrapped_key: wrap(&key, &member_public)?,
-                at: now(),
-            },
-        )
-    }
-
-    pub fn add_entry(&mut self, entry: Entry) {
-        self.entries.insert(entry.id(), entry);
-    }
-
-    pub fn merge(&mut self, other: &Registry) -> BpResult<bool> {
-        if other.id()? != self.id()? {
-            return Err(BpError::Identity(
-                "cannot merge registries of different networks".into(),
-            ));
-        }
-        let before = self.entries.len();
-        for (id, entry) in &other.entries {
-            self.entries
-                .entry(id.clone())
-                .or_insert_with(|| entry.clone());
-        }
-        Ok(self.entries.len() > before)
-    }
-
-    pub fn network_key(&self, identity: &Identity) -> BpResult<[u8; 32]> {
-        let entries = self.valid_entries()?;
-        let own = entries
-            .get(&identity.fingerprint)
-            .ok_or_else(|| BpError::Identity("you are not a member of this network".into()))?;
-        unwrap(&own.body.wrapped_key, &identity.user)
-    }
-
+impl Invite {
     pub fn to_token(&self) -> BpResult<String> {
         Ok(B64.encode(serde_json::to_vec(self)?))
     }
@@ -240,33 +118,16 @@ impl Registry {
         let bytes = B64
             .decode(token.trim())
             .map_err(|_| BpError::InvalidInput("malformed invite token".into()))?;
-        let registry: Self = serde_json::from_slice(&bytes)?;
-        registry.genesis()?;
-        Ok(registry)
-    }
-
-    pub fn save(&self) -> BpResult<()> {
-        let dir = config::networks_dir()?;
-        std::fs::create_dir_all(&dir)?;
-        std::fs::write(
-            dir.join(format!("{}.json", self.name()?)),
-            serde_json::to_string_pretty(self)?,
-        )?;
-        Ok(())
-    }
-
-    pub fn load_all() -> BpResult<HashMap<String, Registry>> {
-        let dir = config::networks_dir()?;
-        let mut all = HashMap::new();
-        if !dir.exists() {
-            return Ok(all);
+        let invite: Self = serde_json::from_slice(&bytes)?;
+        let genesis_ok = invite.genesis.body.genesis.is_none()
+            && invite.genesis.body.author == invite.genesis.body.member
+            && invite.genesis.signed_by_author().is_some();
+        let entry_ok = invite.entry.body.genesis.as_deref() == Some(&invite.genesis.id())
+            && invite.entry.signed_by_author().is_some();
+        if !genesis_ok || !entry_ok {
+            return Err(BpError::InvalidInput("forged invite token".into()));
         }
-        for entry in std::fs::read_dir(dir)? {
-            let registry: Registry =
-                serde_json::from_str(&std::fs::read_to_string(entry?.path())?)?;
-            all.insert(registry.name()?.to_string(), registry);
-        }
-        Ok(all)
+        Ok(invite)
     }
 }
 
@@ -361,99 +222,44 @@ fn now() -> u64 {
 mod tests {
     use super::*;
 
-    fn network() -> (Identity, Registry, [u8; 32]) {
+    #[test]
+    fn invite_token_carries_a_key_only_the_invitee_can_open() {
         let carlo = Identity::in_memory(Some("carlo".into())).unwrap();
-        let (registry, key) = Registry::create(&carlo, "amici").unwrap();
-        (carlo, registry, key)
-    }
-
-    #[test]
-    fn creator_is_the_only_member_and_holds_the_key() {
-        let (carlo, registry, key) = network();
-        assert_eq!(
-            registry.members().unwrap(),
-            HashSet::from([carlo.fingerprint.clone()])
-        );
-        assert_eq!(registry.network_key(&carlo).unwrap(), key);
-        assert!(registry.has_capability(&carlo.fingerprint, Capability::Invite));
-    }
-
-    #[test]
-    fn invited_member_can_unwrap_the_network_key() {
-        let (carlo, mut registry, key) = network();
         let marco = Identity::in_memory(None).unwrap();
-        registry.invite(&carlo, &marco.user_key).unwrap();
-        let received = Registry::from_token(&registry.to_token().unwrap()).unwrap();
-        assert!(received.is_member(&marco.fingerprint));
-        assert_eq!(received.network_key(&marco).unwrap(), key);
-        assert!(received
-            .network_key(&Identity::in_memory(None).unwrap())
-            .is_err());
+        let (root, key) = genesis(&carlo, "amici").unwrap();
+        assert_eq!(root.unwrap_key(&carlo).unwrap(), key);
+        let invite = Invite {
+            entry: invite_entry(&carlo, &root, &key, &marco.user_key).unwrap(),
+            genesis: root,
+            creator_device: carlo.cert.clone(),
+        };
+        let received = Invite::from_token(&invite.to_token().unwrap()).unwrap();
+        assert_eq!(received.entry.unwrap_key(&marco).unwrap(), key);
+        assert!(received.entry.unwrap_key(&carlo).is_err());
     }
 
     #[test]
-    fn only_the_creator_can_invite_until_reputation_snapshots_exist() {
-        let (carlo, mut registry, _) = network();
+    fn tampered_invites_are_rejected() {
+        let carlo = Identity::in_memory(None).unwrap();
         let marco = Identity::in_memory(None).unwrap();
-        let lucia = Identity::in_memory(None).unwrap();
-        registry.invite(&carlo, &marco.user_key).unwrap();
-        assert!(registry.invite(&marco, &lucia.user_key).is_err());
-        assert!(registry.invite(&carlo, &marco.user_key).is_err());
-    }
-
-    #[test]
-    fn forged_entries_are_ignored() {
-        let (carlo, mut registry, _) = network();
-        let mallory = Identity::in_memory(None).unwrap();
-        let genesis_id = registry.id().unwrap();
-
-        let self_added = Entry::sign(
-            &mallory.user,
-            EntryBody {
-                network: "amici".into(),
-                genesis: Some(genesis_id.clone()),
-                author: mallory.user_key.clone(),
-                member: mallory.user_key.clone(),
-                wrapped_key: wrap(&[0; 32], &mallory.user.public()).unwrap(),
-                at: 0,
-            },
-        )
-        .unwrap();
-        let mut stolen_author = self_added.clone();
-        stolen_author.body.author = carlo.user_key.clone();
-
-        registry.entries.insert(self_added.id(), self_added.clone());
-        registry.entries.insert(stolen_author.id(), stolen_author);
-        assert!(!registry.is_member(&mallory.fingerprint));
-    }
-
-    #[test]
-    fn a_second_genesis_invalidates_the_registry() {
-        let (_, mut registry, _) = network();
-        let (_, other, _) = network();
-        for entry in other.entries() {
-            registry.entries.insert(entry.id(), entry.clone());
-        }
-        assert!(registry.genesis().is_err());
-    }
-
-    #[test]
-    fn merge_unions_entries_of_the_same_network_only() {
-        let (carlo, registry, _) = network();
-        let mut copy = registry.clone();
-        copy.invite(&carlo, &Identity::in_memory(None).unwrap().user_key)
-            .unwrap();
-        let mut original = registry.clone();
-        assert!(original.merge(&copy).unwrap());
-        assert!(!original.merge(&copy).unwrap());
-        assert_eq!(original.members().unwrap().len(), 2);
-        assert!(original.merge(&network().1).is_err());
+        let (root, key) = genesis(&carlo, "amici").unwrap();
+        let mut invite = Invite {
+            entry: invite_entry(&carlo, &root, &key, &marco.user_key).unwrap(),
+            genesis: root,
+            creator_device: carlo.cert.clone(),
+        };
+        invite.entry.body.member = Identity::in_memory(None).unwrap().user_key;
+        assert!(Invite::from_token(&invite.to_token().unwrap()).is_err());
+        let (other, _) = genesis(&carlo, "altri").unwrap();
+        invite.entry = invite_entry(&carlo, &other, &key, &marco.user_key).unwrap();
+        assert!(Invite::from_token(&invite.to_token().unwrap()).is_err());
     }
 
     #[test]
     fn gossip_topic_and_sealing_depend_on_the_key() {
-        let (_, _, key) = network();
-        let (_, _, other) = network();
+        let carlo = Identity::in_memory(None).unwrap();
+        let (_, key) = genesis(&carlo, "amici").unwrap();
+        let (_, other) = genesis(&carlo, "amici").unwrap();
         assert_ne!(gossip_topic(&key), gossip_topic(&other));
         let blob = seal(&key, b"hello").unwrap();
         assert_eq!(open(&key, &blob).unwrap(), b"hello");

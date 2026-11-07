@@ -117,7 +117,6 @@ pub struct StatusData {
     pub known_peers: usize,
     pub version: String,
     pub reputation_tier: String,
-    pub reputation_score: i64,
     pub pouch_stats: Vec<PouchStat>,
     pub network_qos: Option<NetworkQosSummary>,
 }

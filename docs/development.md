@@ -14,8 +14,8 @@ cargo test --workspace
 
 | Where | What |
 |-------|------|
-| `#[cfg(test)]` in `bp-core/src` | Unit tests: GF(2⁸), RLNC, coding params, QoS, reputation, storage, encryption, identity, member registry |
-| `bp-core/tests/architecture_test.rs` | Identity on disk, registry, gossip state, swarm build, control server over a real Unix socket, network loop |
+| `#[cfg(test)]` in `bp-core/src` | Unit tests: GF(2⁸), RLNC, coding params, QoS, storage, encryption, identity, invites, ledger, consensus (simulated network), chain sync |
+| `bp-core/tests/architecture_test.rs` | Identity on disk, gossip state, swarm build, control server over a real Unix socket, network loop |
 | `bp-core/tests/integration_test.rs` | `put_file` / `get_file` through the control server |
 | `bp-cli` | `Cli::command().debug_assert()` catches clap definition errors |
 | `docker/smoke-test.sh` | 3 containers (pouch, bill, post) discover each other via mDNS and gossip |
