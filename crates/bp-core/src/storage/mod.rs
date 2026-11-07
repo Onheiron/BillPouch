@@ -6,8 +6,6 @@
 //! - Persist and load [`EncodedFragment`]s in the binary `.frag` format.
 //! - Maintain an in-memory [`FragmentIndex`] for fast chunk/fragment lookups.
 //! - Enforce the storage quota declared at bid time.
-//! - Expose recoding helpers so the daemon can generate new fragments for
-//!   newly-joined Pouches without touching the original data.
 //!
 //! ## Directory layout
 //!

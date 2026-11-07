@@ -7,10 +7,10 @@
 //! - [`add`] — addition = XOR (free)
 //! - [`mul`] — multiplication via Russian-peasant (8 iterations, no lookup tables)
 //! - [`inv`] — multiplicative inverse via Fermat: a⁻¹ = a²⁵⁴
-//! - [`div`] — division = mul(a, inv(b))
+//! - [`mul_acc`] — `acc ^= coeff · symbol`, the RLNC inner loop
 //!
 //! Element 0 is the additive identity. Element 1 is the multiplicative identity.
-//! Calling [`inv`] or [`div`] with b=0 panics (division by zero).
+//! Calling [`inv`] with 0 panics.
 
 /// Lower 8 bits of the AES reduction polynomial (x⁸ + x⁴ + x³ + x + 1).
 const POLY: u8 = 0x1b;

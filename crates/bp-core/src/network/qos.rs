@@ -48,15 +48,15 @@ const W_RELIABILITY: f64 = 0.4;
 
 // ── Fault-score thresholds ────────────────────────────────────────────────────
 
-/// Fault score (0–100) at which a peer is considered *degraded* — no new
-/// fragments will be assigned to it.
+/// Fault score (0–100) at or above which a peer is *degraded*: it is not
+/// chosen as a replacement target when fragments are rerouted.
 pub const FAULT_DEGRADED: u8 = 70;
 
-/// Fault score at which a peer is *suspected* — preventive recoding begins.
+/// Fault score at which a peer is *suspected*: its fragments are recoded
+/// and pushed to a healthy peer.
 pub const FAULT_SUSPECTED: u8 = 90;
 
-/// Fault score at which a peer is *blacklisted* — evicted from routing and
-/// announced as blacklisted on gossip.
+/// Fault score at which a peer is *blacklisted*: its reputation drops to R0.
 pub const FAULT_BLACKLISTED: u8 = 100;
 
 /// Points added to `fault_score` per failed Proof-of-Storage challenge.

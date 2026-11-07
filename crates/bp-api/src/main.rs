@@ -1,34 +1,8 @@
 //! # bp-api — BillPouch REST API gateway
 //!
-//! Thin HTTP adapter that proxies REST requests to the running `bp` daemon
-//! over the Unix control socket.  The daemon must already be running
-//! (`bp hatch <type>`) before requests can be served.
-//!
-//! ## Endpoints
-//!
-//! | Method | Path                              | Description                             |
-//! |--------|-----------------------------------|-----------------------------------------|
-//! | GET    | `/ping`                           | Liveness check                          |
-//! | GET    | `/status`                         | Daemon identity + services              |
-//! | GET    | `/peers`                          | Known peers + network info              |
-//! | POST   | `/services`                       | Hatch a new service                     |
-//! | DELETE | `/services/:service_id`           | Stop a service                          |
-//! | DELETE | `/services/:service_id?evict=true`| Stop + evict all stored fragments       |
-//! | POST   | `/services/:service_id/pause`     | Pause a service (body: `eta_minutes`)   |
-//! | POST   | `/services/:service_id/resume`    | Resume a paused service                 |
-//! | POST   | `/networks/join`                  | Join a gossip network                   |
-//! | POST   | `/networks/leave`                 | Leave a gossip network                  |
-//! | POST   | `/files`                          | Store a file (base64 chunk_data)        |
-//! | GET    | `/files/:chunk_id`                | Retrieve a file (`?network=public`)     |
-//! | POST   | `/relay/connect`                  | Dial a relay node for NAT traversal     |
-//! | POST   | `/invites`                        | Create an invite token                  |
-//! | POST   | `/invites/redeem`                 | Join a network via invite token         |
-//!
-//! ## Usage
-//!
-//! ```text
-//! bp-api --port 3000 --host 127.0.0.1
-//! ```
+//! Thin HTTP adapter that forwards requests to the running daemon over the
+//! Unix control socket, plus an embedded dashboard at `GET /`.
+//! Endpoints: see `docs/api.md`.
 
 use axum::{
     extract::{Path, Query, State},

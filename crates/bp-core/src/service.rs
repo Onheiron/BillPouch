@@ -90,7 +90,7 @@ pub struct ServiceInfo {
     pub status: ServiceStatus,
     /// UTC timestamp when the service was started.
     pub started_at: chrono::DateTime<chrono::Utc>,
-    /// Extensible metadata (e.g. `storage_bytes` for Pouch, `mount_path` for Bill).
+    /// Extensible metadata (e.g. `tier` and `storage_bytes` for Pouch).
     pub metadata: HashMap<String, serde_json::Value>,
 }
 

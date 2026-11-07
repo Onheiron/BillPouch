@@ -5,8 +5,8 @@
 //! A BillPouch network is private by default.  The only way to join is to
 //! receive an invite token from an existing member.  The token:
 //!
-//! 1. **Contains the `NetworkMetaKey`** — the 32-byte random secret that
-//!    protects file metadata on the network.
+//! 1. **Contains the `NetworkMetaKey`** — the network's 32-byte random
+//!    shared secret.
 //! 2. **Is signed** by the inviter's Ed25519 key so the recipient can verify
 //!    the invite is authentic.
 //! 3. **Is encrypted** with a password shared out-of-band (Signal, phone call,

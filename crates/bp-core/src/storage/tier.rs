@@ -1,26 +1,15 @@
-//! Storage tier system for BillPouch Pouch services.
+//! Storage tiers: a Pouch offers exactly one fixed quota.
 //!
-//! Instead of arbitrary byte quotas, Pouches declare one of five fixed tiers.
-//! Each tier defines:
-//! - An exact on-disk quota that the Pouch reserves.
-//! - Which tier-buckets the Pouch participates in (a T3 Pouch participates in
-//!   T1, T2, and T3 fragment placement).
+//! | Tier | Name     | Quota   |
+//! |------|----------|---------|
+//! | T1   | Pebble   | 10 GiB  |
+//! | T2   | Stone    | 100 GiB |
+//! | T3   | Boulder  | 500 GiB |
+//! | T4   | Rock     | 1 TiB   |
+//! | T5   | Monolith | 5 TiB   |
 //!
-//! ## Tiers
-//!
-//! | Tier | Name     | Quota  |
-//! |------|----------|--------|
-//! | T1   | Pebble   | 10 GB  |
-//! | T2   | Stone    | 100 GB |
-//! | T3   | Boulder  | 500 GB |
-//! | T4   | Rock     | 1 TB   |
-//! | T5   | Monolith | 5 TB   |
-//!
-//! ## One Pouch per node per network
-//!
-//! A daemon rejects a second `hatch pouch --network X` if a Pouch is already
-//! active on that network for this identity.  Two correlated Pouches on the
-//! same machine defeat the purpose of distributed redundancy.
+//! The daemon rejects a second `hatch pouch --network X` on the same node:
+//! two Pouches on one machine fail together and defeat redundancy.
 
 use crate::error::{BpError, BpResult};
 use serde::{Deserialize, Serialize};
@@ -43,9 +32,7 @@ pub const TIER_T5_BYTES: u64 = 5 * 1024 * 1024 * 1024 * 1024;
 
 /// A fixed storage tier for a Pouch service.
 ///
-/// Tiers are ordered: `T1 < T2 < T3 < T4 < T5`.  A Pouch at tier T participates
-/// in fragment placement for all tiers ≤ T (e.g. a T3 Pouch stores fragments
-/// from T1, T2, and T3 files).
+/// Tiers are ordered: `T1 < T2 < T3 < T4 < T5`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum StorageTier {
@@ -114,11 +101,11 @@ impl StorageTier {
 impl fmt::Display for StorageTier {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let (label, name) = match self {
-            StorageTier::T1 => ("T1", "Pebble  — 10 GB"),
-            StorageTier::T2 => ("T2", "Stone   — 100 GB"),
-            StorageTier::T3 => ("T3", "Boulder — 500 GB"),
-            StorageTier::T4 => ("T4", "Rock    — 1 TB"),
-            StorageTier::T5 => ("T5", "Monolith — 5 TB"),
+            StorageTier::T1 => ("T1", "Pebble — 10 GiB"),
+            StorageTier::T2 => ("T2", "Stone — 100 GiB"),
+            StorageTier::T3 => ("T3", "Boulder — 500 GiB"),
+            StorageTier::T4 => ("T4", "Rock — 1 TiB"),
+            StorageTier::T5 => ("T5", "Monolith — 5 TiB"),
         };
         write!(f, "{} ({})", label, name)
     }
