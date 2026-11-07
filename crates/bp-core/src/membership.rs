@@ -58,7 +58,7 @@ impl Entry {
             .to_string()
     }
 
-    fn signed_by_author(&self) -> Option<String> {
+    pub fn signed_by_author(&self) -> Option<String> {
         let (author, fingerprint) = parse_user_key(&self.body.author).ok()?;
         let signature = hex::decode(&self.signature).ok()?;
         let body = serde_json::to_vec(&self.body).ok()?;
@@ -175,7 +175,7 @@ impl Registry {
     }
 
     pub fn invite(&mut self, identity: &Identity, member_key: &str) -> BpResult<()> {
-        let (member_public, member) = parse_user_key(member_key)?;
+        let (_, member) = parse_user_key(member_key)?;
         if !self.has_capability(&identity.fingerprint, Capability::Invite) {
             return Err(BpError::Identity(
                 "you do not have the invite capability in this network".into(),
@@ -184,8 +184,15 @@ impl Registry {
         if self.is_member(&member) {
             return Err(BpError::Identity(format!("{member} is already a member")));
         }
+        let entry = self.entry_for(identity, member_key)?;
+        self.entries.insert(entry.id(), entry);
+        Ok(())
+    }
+
+    pub fn entry_for(&self, identity: &Identity, member_key: &str) -> BpResult<Entry> {
+        let (member_public, _) = parse_user_key(member_key)?;
         let key = self.network_key(identity)?;
-        let entry = Entry::sign(
+        Entry::sign(
             &identity.user,
             EntryBody {
                 network: self.name()?.to_string(),
@@ -195,9 +202,11 @@ impl Registry {
                 wrapped_key: wrap(&key, &member_public)?,
                 at: now(),
             },
-        )?;
+        )
+    }
+
+    pub fn add_entry(&mut self, entry: Entry) {
         self.entries.insert(entry.id(), entry);
-        Ok(())
     }
 
     pub fn merge(&mut self, other: &Registry) -> BpResult<bool> {
