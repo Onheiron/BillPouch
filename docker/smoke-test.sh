@@ -141,7 +141,54 @@ for c in "${CONTAINERS[@]}"; do
     fi
 done
 
-header "9. Node logs (last 20 lines each)"
+header "9. Expulsion and key rotation"
+POST_FP=$(docker exec bp-post bp status 2>/dev/null | grep -oP 'fingerprint\s*:\s*\K\S+' || true)
+EXPEL_OUT=$(docker exec bp-pouch bp expel smoketest "${POST_FP}" 2>&1) || true
+echo "${EXPEL_OUT}"
+if echo "${EXPEL_OUT}" | grep -q "expelled"; then
+    pass "carlo-pouch expelled lucia-post"
+else
+    fail "expulsion was not committed: ${EXPEL_OUT}"
+fi
+
+info "Sleeping 20s for the expulsion and the key rotation to reach every node..."
+sleep 20
+
+MEMBERS_OUT=$(docker exec bp-bill bp members smoketest 2>&1) || true
+echo "${MEMBERS_OUT}"
+if echo "${MEMBERS_OUT}" | grep -q "${POST_FP}  expelled"; then
+    pass "marco-bill's ledger lists lucia-post as expelled"
+else
+    fail "marco-bill's ledger does not list lucia-post as expelled"
+fi
+
+for c in bp-pouch bp-bill; do
+    if docker logs "${c}" 2>&1 | grep -q "Moved to the rotated gossip topic"; then
+        pass "${c} moved to the rotated gossip topic"
+    else
+        fail "${c} did not move to the rotated gossip topic"
+    fi
+done
+
+if docker logs bp-post 2>&1 | grep -q "Moved to the rotated gossip topic"; then
+    fail "the expelled lucia-post got the rotated key"
+else
+    pass "the expelled lucia-post did not get the rotated key"
+fi
+
+ROTATED_AT=$(date +%s)
+info "Sleeping 40s for marco-bill to re-announce on the rotated topic..."
+sleep 40
+FLOCK_JSON=$(docker exec bp-pouch bash -c \
+    'echo "{\"cmd\":\"flock\"}" | socat -T2 - UNIX-CONNECT:$HOME/.local/share/billpouch/control.sock 2>/dev/null') || true
+LATEST=$(echo "${FLOCK_JSON}" | grep -oP '"announced_at":\K[0-9]+' | sort -n | tail -1)
+if [ -n "${LATEST}" ] && [ "${LATEST}" -ge "${ROTATED_AT}" ]; then
+    pass "carlo-pouch still hears marco-bill after the rotation"
+else
+    fail "carlo-pouch heard nothing after the rotation (latest announcement ${LATEST}, rotation ${ROTATED_AT})"
+fi
+
+header "10. Node logs (last 20 lines each)"
 for c in "${CONTAINERS[@]}"; do
     info "--- ${c} ---"
     docker logs "${c}" 2>&1 | tail -20

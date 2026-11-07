@@ -51,6 +51,8 @@ Errors are `{"error": "…"}` with 503 (daemon unreachable), 422 (invalid base64
 | POST | `/networks` | `{name}` → 201 | `create_network` |
 | POST | `/networks/:id/invites` | `{member_key}` → 201 | `invite` |
 | POST | `/networks/join` | `{token}` | `join_network` |
+| GET | `/networks/:id/members` | — | `members` |
+| POST | `/networks/:id/expulsions` | `{member}` (fingerprint) | `expel` |
 | POST | `/networks/leave` | `{network_id, force?}` | `leave` |
 | POST | `/files` | `{chunk_data: base64, network_id, ph?, q_target?, file_name?}` → 201 | `put_file` |
 | GET | `/files/:chunk_id` | `?network=<id>` → `{chunk_id, data: base64, …}` | `get_file` |

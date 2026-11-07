@@ -1,7 +1,7 @@
 use crate::{
     error::{BpError, BpResult},
     identity::{parse_user_key, DeviceCert, Identity},
-    membership::Entry,
+    membership::{Entry, WrappedKey},
     network::ReputationTier,
 };
 use serde::{Deserialize, Serialize};
@@ -47,6 +47,11 @@ pub enum Op {
     },
     SetVotingDevice {
         device: String,
+    },
+    RotateKey {
+        epoch: u64,
+        wrapped: BTreeMap<String, WrappedKey>,
+        commitment: String,
     },
 }
 
@@ -187,6 +192,10 @@ pub struct Ledger {
     pub reported: BTreeSet<(String, u64)>,
     pub applied_ops: BTreeSet<String>,
     pub snapshot: Snapshot,
+    pub commitment: String,
+    pub key_wraps: BTreeMap<String, WrappedKey>,
+    pub rotated_epoch: u64,
+    pub rekey_since: Option<u64>,
 }
 
 impl Ledger {
@@ -230,6 +239,10 @@ impl Ledger {
                 epoch: genesis.body.at / EPOCH_SECS,
                 users: BTreeMap::new(),
             },
+            commitment: genesis.body.commitment.clone(),
+            key_wraps: BTreeMap::new(),
+            rotated_epoch: genesis.body.at / EPOCH_SECS,
+            rekey_since: None,
             genesis,
         };
         ledger.snapshot = ledger.compute_snapshot(ledger.snapshot.epoch);
@@ -257,6 +270,18 @@ impl Ledger {
 
     pub fn is_member(&self, user: &str) -> bool {
         self.members.contains_key(user) && !self.expelled.contains(user)
+    }
+
+    pub fn active_members(&self) -> impl Iterator<Item = (&String, &Member)> {
+        self.members
+            .iter()
+            .filter(|(user, _)| !self.expelled.contains(*user))
+    }
+
+    pub fn rotation_due(&self, now_secs: u64) -> Option<u64> {
+        let epoch = now_secs / EPOCH_SECS;
+        self.rekey_since
+            .or_else(|| (epoch > self.rotated_epoch).then_some(epoch * EPOCH_SECS))
     }
 
     pub fn has_capability(&self, user: &str, capability: Capability) -> bool {
@@ -322,6 +347,7 @@ impl Ledger {
                 }
                 if entry.body.author != signed.author
                     || entry.body.genesis.as_deref() != Some(&self.genesis.id())
+                    || entry.body.commitment != self.commitment
                     || entry.signed_by_author().is_none()
                 {
                     return Err(invalid("malformed member entry"));
@@ -375,7 +401,7 @@ impl Ledger {
                 }
                 self.expel_approvals
                     .insert(member.clone(), BTreeSet::from([author]));
-                self.maybe_expel(member);
+                self.maybe_expel(member, block.time);
             }
             Op::ApproveExpel { member } => {
                 if !self.has_capability(&author, Capability::Vote)
@@ -387,7 +413,7 @@ impl Ledger {
                 {
                     return Err(invalid("cannot approve this expulsion"));
                 }
-                self.maybe_expel(member);
+                self.maybe_expel(member, block.time);
             }
             Op::RegisterDevice { cert } => {
                 let device = cert.verify()?;
@@ -414,12 +440,30 @@ impl Ledger {
                     .expect("checked member")
                     .voting_device = Some(device.clone());
             }
+            Op::RotateKey {
+                epoch,
+                wrapped,
+                commitment,
+            } => {
+                let members: BTreeSet<&String> = self.active_members().map(|(u, _)| u).collect();
+                if *epoch != block.epoch()
+                    || self.rotation_due(block.time).is_none()
+                    || wrapped.keys().collect::<BTreeSet<_>>() != members
+                    || *commitment == self.commitment
+                {
+                    return Err(invalid("invalid key rotation"));
+                }
+                self.commitment = commitment.clone();
+                self.key_wraps = wrapped.clone();
+                self.rotated_epoch = *epoch;
+                self.rekey_since = None;
+            }
         }
         self.applied_ops.insert(id);
         Ok(())
     }
 
-    fn maybe_expel(&mut self, member: &str) {
+    fn maybe_expel(&mut self, member: &str, time: u64) {
         let Some(approvals) = self.expel_approvals.get(member) else {
             return;
         };
@@ -433,6 +477,8 @@ impl Ledger {
         if approved_weight * 3 > others_weight * 2 && approvals.len() * 2 >= others.len() {
             self.expelled.insert(member.to_string());
             self.expel_approvals.remove(member);
+            self.snapshot.users.remove(member);
+            self.rekey_since.get_or_insert(time);
         }
     }
 
@@ -491,7 +537,7 @@ fn invalid(reason: &str) -> BpError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::membership::{genesis, invite_entry};
+    use crate::membership::{genesis, invite_entry, key_commitment, new_key, wrap_for};
 
     struct Net {
         people: Vec<Identity>,
@@ -585,6 +631,95 @@ mod tests {
             )
             .unwrap()
         }
+
+        fn rotate_op(&self, by: usize, members: &[usize], time: u64) -> SignedOp {
+            let key = new_key();
+            let wrapped = members
+                .iter()
+                .map(|&i| {
+                    (
+                        self.fp(i),
+                        wrap_for(&key, &self.people[i].user_key).unwrap(),
+                    )
+                })
+                .collect();
+            SignedOp::sign(
+                &self.people[by],
+                Op::RotateKey {
+                    epoch: time / EPOCH_SECS,
+                    wrapped,
+                    commitment: key_commitment(&key),
+                },
+            )
+            .unwrap()
+        }
+    }
+
+    #[test]
+    fn the_key_rotates_once_per_epoch_for_exactly_the_members() {
+        let mut net = Net::new(4);
+        for who in 1..3 {
+            let op = net.invite_op(0, who);
+            let t = net.now();
+            net.commit(0, t, vec![op]).unwrap();
+        }
+        let t = net.now();
+        assert_eq!(net.ledger.rotation_due(t), None);
+        assert!(net
+            .commit(0, t, vec![net.rotate_op(0, &[0, 1, 2], t)])
+            .is_err());
+
+        net.next_epoch();
+        let t = net.now();
+        assert!(net.ledger.rotation_due(t).is_some());
+        assert!(net
+            .commit(0, t, vec![net.rotate_op(0, &[0, 1], t)])
+            .is_err());
+        assert!(net
+            .commit(0, t, vec![net.rotate_op(0, &[0, 1, 2, 3], t)])
+            .is_err());
+        net.commit(0, t, vec![net.rotate_op(0, &[0, 1, 2], t)])
+            .unwrap();
+        assert_eq!(net.ledger.rotation_due(t), None);
+        assert!(net
+            .commit(0, t, vec![net.rotate_op(1, &[0, 1, 2], t)])
+            .is_err());
+
+        let stale = net.invite_op(0, 3);
+        assert!(net.commit(0, t, vec![stale]).is_err());
+    }
+
+    #[test]
+    fn an_expulsion_makes_a_rotation_due_without_the_expelled() {
+        let mut net = Net::everyone_joined(3);
+        let t = net.now();
+        net.commit(0, t, vec![net.rotate_op(0, &[0, 1, 2], t)])
+            .unwrap();
+        let lucia = net.fp(2);
+        let propose = SignedOp::sign(
+            &net.people[0],
+            Op::ProposeExpel {
+                member: lucia.clone(),
+            },
+        )
+        .unwrap();
+        let approve = SignedOp::sign(
+            &net.people[1],
+            Op::ApproveExpel {
+                member: lucia.clone(),
+            },
+        )
+        .unwrap();
+        net.commit(0, t, vec![propose, approve]).unwrap();
+        assert!(!net.ledger.is_member(&lucia));
+        assert_eq!(net.ledger.snapshot.weight(&lucia), 0);
+        assert_eq!(net.ledger.rotation_due(t), Some(t));
+        assert!(net
+            .commit(0, t, vec![net.rotate_op(0, &[0, 1, 2], t)])
+            .is_err());
+        net.commit(0, t, vec![net.rotate_op(1, &[0, 1], t)])
+            .unwrap();
+        assert_eq!(net.ledger.rotation_due(t), None);
     }
 
     #[test]

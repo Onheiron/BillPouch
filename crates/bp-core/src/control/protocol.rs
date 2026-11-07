@@ -37,6 +37,13 @@ pub enum ControlRequest {
     JoinNetwork {
         token: String,
     },
+    Members {
+        network_id: String,
+    },
+    Expel {
+        network_id: String,
+        member: String,
+    },
     Leave {
         network_id: String,
         force: bool,
@@ -147,6 +154,33 @@ pub struct InviteData {
     pub token: String,
     pub network_id: String,
     pub member: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemberInfo {
+    pub fingerprint: String,
+    pub tier: String,
+    pub weight: u64,
+    pub devices: usize,
+    pub joined_at: u64,
+    pub expel_approvals: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MembersData {
+    pub network_id: String,
+    pub height: u64,
+    pub epoch: u64,
+    pub total_weight: u64,
+    pub members: Vec<MemberInfo>,
+    pub expelled: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExpelData {
+    pub network_id: String,
+    pub member: String,
+    pub outcome: crate::chain::ExpelOutcome,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

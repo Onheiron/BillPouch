@@ -1,5 +1,8 @@
 use crate::{client::ControlClient, commands::hatch::ensure_daemon};
-use bp_core::control::protocol::{ControlRequest, InviteData};
+use bp_core::{
+    chain::ExpelOutcome,
+    control::protocol::{ControlRequest, ExpelData, InviteData, MembersData},
+};
 
 pub async fn create(name: String, passphrase: Option<String>) -> anyhow::Result<()> {
     ensure_daemon(passphrase).await?;
@@ -47,5 +50,63 @@ pub async fn join(token: String, passphrase: Option<String>) -> anyhow::Result<(
         .and_then(|v| v.as_str())
         .unwrap_or("?");
     println!("🌐 Joined network '{name}'.");
+    Ok(())
+}
+
+pub async fn members(network_id: String, passphrase: Option<String>) -> anyhow::Result<()> {
+    ensure_daemon(passphrase).await?;
+    let data = ControlClient::connect()
+        .await?
+        .request(ControlRequest::Members { network_id })
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("empty response from daemon"))?;
+    let m: MembersData = serde_json::from_value(data)?;
+    println!(
+        "🌐 {} — ledger height {}, epoch {}, total weight {}",
+        m.network_id, m.height, m.epoch, m.total_weight
+    );
+    for member in &m.members {
+        let expel = if member.expel_approvals > 0 {
+            format!("   ⚠ expulsion: {} approval(s)", member.expel_approvals)
+        } else {
+            String::new()
+        };
+        println!(
+            "   {}  {:<10} weight {}  devices {}{}",
+            member.fingerprint, member.tier, member.weight, member.devices, expel
+        );
+    }
+    for fingerprint in &m.expelled {
+        println!("   {fingerprint}  expelled");
+    }
+    Ok(())
+}
+
+pub async fn expel(
+    network_id: String,
+    member: String,
+    passphrase: Option<String>,
+) -> anyhow::Result<()> {
+    ensure_daemon(passphrase).await?;
+    let data = ControlClient::connect()
+        .await?
+        .request(ControlRequest::Expel { network_id, member })
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("empty response from daemon"))?;
+    let e: ExpelData = serde_json::from_value(data)?;
+    match e.outcome {
+        ExpelOutcome::Expelled => println!(
+            "🚫 {} is expelled from '{}'. The network key is being rotated.",
+            e.member, e.network_id
+        ),
+        ExpelOutcome::Proposed => println!(
+            "🗳  Proposed expelling {} from '{}'. Other members approve with: bp expel {} {}",
+            e.member, e.network_id, e.network_id, e.member
+        ),
+        ExpelOutcome::Approved => println!(
+            "🗳  Approved expelling {} from '{}'; more approvals are needed.",
+            e.member, e.network_id
+        ),
+    }
     Ok(())
 }

@@ -2,8 +2,9 @@ use crate::{
     chain::{now_ms, Chain, Chains},
     coding::{params as coding_params, rlnc},
     control::protocol::{
-        ControlRequest, ControlResponse, FileEntry, FlockData, GetFileData, HatchData, InviteData,
-        ListFilesData, NetworkQosSummary, PouchStat, PutFileData, StatusData, StorageInfoData,
+        ControlRequest, ControlResponse, ExpelData, FileEntry, FlockData, GetFileData, HatchData,
+        InviteData, ListFilesData, MemberInfo, MembersData, NetworkQosSummary, PouchStat,
+        PutFileData, StatusData, StorageInfoData,
     },
     error::BpResult,
     identity::Identity,
@@ -479,7 +480,7 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 Some(chain) if chain.is_member(&member) => Err(
                     crate::error::BpError::InvalidInput(format!("{member} is already a member")),
                 ),
-                Some(chain) => chain.invite(&state.identity, &member_key, now_ms()),
+                Some(chain) => chain.invite(&member_key, now_ms()),
             };
             let token = match result.and_then(|invite| invite.to_token()) {
                 Ok(token) => token,
@@ -527,6 +528,70 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                     "joined '{name}' but could not sync its ledger from any member yet"
                 ))
             }
+        }
+
+        ControlRequest::Members { network_id } => {
+            let chains = state.chains.read().unwrap();
+            let Some(chain) = chains.get(&network_id) else {
+                return ControlResponse::err(format!(
+                    "you are not in a network named '{network_id}'"
+                ));
+            };
+            let ledger = chain.ledger();
+            let members = ledger
+                .active_members()
+                .map(|(fingerprint, m)| MemberInfo {
+                    fingerprint: fingerprint.clone(),
+                    tier: ledger
+                        .snapshot
+                        .tier(fingerprint)
+                        .map_or_else(|| "new".to_string(), |t| t.to_string()),
+                    weight: ledger.snapshot.weight(fingerprint),
+                    devices: ledger
+                        .devices
+                        .values()
+                        .filter(|d| &d.user == fingerprint)
+                        .count(),
+                    joined_at: m.joined_at,
+                    expel_approvals: ledger
+                        .expel_approvals
+                        .get(fingerprint)
+                        .map_or(0, |a| a.len()),
+                })
+                .collect();
+            ControlResponse::ok(MembersData {
+                network_id: network_id.clone(),
+                height: ledger.height,
+                epoch: ledger.snapshot.epoch,
+                total_weight: ledger.snapshot.total_weight(),
+                members,
+                expelled: ledger.expelled.iter().cloned().collect(),
+            })
+        }
+
+        ControlRequest::Expel { network_id, member } => {
+            let result = match state.chains.write().unwrap().get_mut(&network_id) {
+                None => Err(crate::error::BpError::InvalidInput(format!(
+                    "you are not in a network named '{network_id}'"
+                ))),
+                Some(chain) => chain.expel(&member, now_ms()),
+            };
+            if let Err(e) = result {
+                return ControlResponse::err(e.to_string());
+            }
+            if !wait_until(state, &network_id, |c| c.expel_outcome(&member).is_some()).await {
+                return ControlResponse::err(
+                    "the expulsion vote was not committed by the network in time",
+                );
+            }
+            let outcome = state.chains.read().unwrap()[&network_id]
+                .expel_outcome(&member)
+                .expect("checked above");
+            ControlResponse::ok(ExpelData {
+                network_id,
+                member,
+                outcome,
+            })
         }
 
         ControlRequest::Leave { network_id, force } => {

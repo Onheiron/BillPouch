@@ -68,6 +68,7 @@ impl BillPouchBehaviour {
 
         let gossipsub_config = gossipsub::ConfigBuilder::default()
             .heartbeat_interval(Duration::from_secs(10))
+            .check_explicit_peers_ticks(1)
             .validation_mode(gossipsub::ValidationMode::Strict)
             .history_gossip(5)
             .build()

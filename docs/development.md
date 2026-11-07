@@ -18,7 +18,7 @@ cargo test --workspace
 | `bp-core/tests/architecture_test.rs` | Identity on disk, gossip state, swarm build, control server over a real Unix socket, network loop |
 | `bp-core/tests/integration_test.rs` | `put_file` / `get_file` through the control server |
 | `bp-cli` | `Cli::command().debug_assert()` catches clap definition errors |
-| `docker/smoke-test.sh` | 3 containers (pouch, bill, post) discover each other via mDNS and gossip |
+| `docker/smoke-test.sh` | 3 containers (pouch, bill, post) join by invite, discover each other and gossip; then pouch expels post and the other two move to the rotated key |
 
 Tests that change `HOME`/`XDG_DATA_HOME` hold a `static ENV_LOCK: Mutex<()>`.
 

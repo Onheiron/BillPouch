@@ -22,6 +22,7 @@ pub struct EntryBody {
     pub author: String,
     pub member: String,
     pub wrapped_key: WrappedKey,
+    pub commitment: String,
     pub at: u64,
 }
 
@@ -61,13 +62,36 @@ impl Entry {
         if parse_user_key(&self.body.member)?.1 != identity.fingerprint {
             return Err(BpError::Identity("this entry is not for you".into()));
         }
-        unwrap(&self.body.wrapped_key, &identity.user)
+        open_key(&self.body.wrapped_key, &self.body.commitment, identity)
     }
 }
 
-pub fn genesis(identity: &Identity, network: &str) -> BpResult<(Entry, [u8; 32])> {
+pub fn new_key() -> [u8; 32] {
     let mut key = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut key);
+    key
+}
+
+pub fn key_commitment(key: &[u8; 32]) -> String {
+    hex::encode(blake3::derive_key("billpouch/key-commitment/v1", key))
+}
+
+pub fn wrap_for(key: &[u8; 32], member_key: &str) -> BpResult<WrappedKey> {
+    wrap(key, &parse_user_key(member_key)?.0)
+}
+
+pub fn open_key(wrapped: &WrappedKey, commitment: &str, identity: &Identity) -> BpResult<[u8; 32]> {
+    let key = unwrap(wrapped, &identity.user)?;
+    if key_commitment(&key) != commitment {
+        return Err(BpError::Identity(
+            "wrapped key does not match its commitment".into(),
+        ));
+    }
+    Ok(key)
+}
+
+pub fn genesis(identity: &Identity, network: &str) -> BpResult<(Entry, [u8; 32])> {
+    let key = new_key();
     let entry = Entry::sign(
         &identity.user,
         EntryBody {
@@ -76,6 +100,7 @@ pub fn genesis(identity: &Identity, network: &str) -> BpResult<(Entry, [u8; 32])
             author: identity.user_key.clone(),
             member: identity.user_key.clone(),
             wrapped_key: wrap(&key, &identity.user.public())?,
+            commitment: key_commitment(&key),
             at: now(),
         },
     )?;
@@ -97,6 +122,7 @@ pub fn invite_entry(
             author: identity.user_key.clone(),
             member: member_key.trim().to_string(),
             wrapped_key: wrap(key, &member_public)?,
+            commitment: key_commitment(key),
             at: now(),
         },
     )

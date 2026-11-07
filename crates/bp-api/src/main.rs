@@ -236,6 +236,41 @@ async fn network_join(State(state): State<AppState>, Json(body): Json<JoinBody>)
 }
 
 #[instrument(skip_all)]
+async fn network_members(
+    State(state): State<AppState>,
+    Path(network_id): Path<String>,
+) -> Response {
+    respond(
+        &state,
+        ControlRequest::Members { network_id },
+        StatusCode::OK,
+    )
+    .await
+}
+
+#[derive(Deserialize)]
+struct ExpelBody {
+    member: String,
+}
+
+#[instrument(skip_all)]
+async fn network_expel(
+    State(state): State<AppState>,
+    Path(network_id): Path<String>,
+    Json(body): Json<ExpelBody>,
+) -> Response {
+    respond(
+        &state,
+        ControlRequest::Expel {
+            network_id,
+            member: body.member,
+        },
+        StatusCode::OK,
+    )
+    .await
+}
+
+#[instrument(skip_all)]
 async fn network_leave(State(state): State<AppState>, Json(body): Json<NetworkBody>) -> Response {
     respond(
         &state,
@@ -361,6 +396,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/networks", post(network_create))
         .route("/networks/:network_id/invites", post(network_invite))
         .route("/networks/join", post(network_join))
+        .route("/networks/:network_id/members", get(network_members))
+        .route("/networks/:network_id/expulsions", post(network_expel))
         .route("/networks/leave", post(network_leave))
         .route("/files", post(put_file))
         .route("/files/:chunk_id", get(get_file))

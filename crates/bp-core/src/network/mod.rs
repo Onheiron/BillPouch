@@ -30,6 +30,44 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 const CONSENSUS_TICK_MS: u64 = 200;
+const SYNC_INTERVAL_SECS: u64 = 15;
+const OLD_TOPIC_GRACE_MS: u64 = 600_000;
+
+struct Subscription {
+    network: String,
+    key: [u8; 32],
+    retire_at: Option<u64>,
+}
+
+type Topics = HashMap<gossipsub::TopicHash, Subscription>;
+
+fn switch_key(
+    swarm: &mut Swarm<BillPouchBehaviour>,
+    networks: &mut HashMap<String, ([u8; 32], gossipsub::IdentTopic)>,
+    topics: &mut Topics,
+    network_id: &str,
+    key: [u8; 32],
+    now_ms: u64,
+) {
+    let topic = gossipsub::IdentTopic::new(crate::membership::gossip_topic(&key));
+    if let Err(e) = swarm.behaviour_mut().gossipsub.subscribe(&topic) {
+        tracing::warn!("Failed to subscribe to {}: {}", network_id, e);
+    }
+    for sub in topics.values_mut() {
+        if sub.network == network_id && sub.retire_at.is_none() {
+            sub.retire_at = Some(now_ms + OLD_TOPIC_GRACE_MS);
+        }
+    }
+    topics.insert(
+        topic.hash(),
+        Subscription {
+            network: network_id.to_string(),
+            key,
+            retire_at: None,
+        },
+    );
+    networks.insert(network_id.to_string(), (key, topic));
+}
 
 pub type StorageManagerMap = Arc<RwLock<HashMap<String, Arc<RwLock<StorageManager>>>>>;
 
@@ -109,6 +147,7 @@ pub fn build_swarm(
                 .map_err(|e| Box::<dyn std::error::Error + Send + Sync>::from(e.to_string()))
         })
         .map_err(|e| anyhow::anyhow!("{}", e))?
+        .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(60)))
         .build();
 
     Ok(swarm)
@@ -134,7 +173,7 @@ pub async fn run_network_loop(
     tracing::info!("Network listening on {}", listen_addr);
 
     let mut networks: HashMap<String, ([u8; 32], gossipsub::IdentTopic)> = HashMap::new();
-    let mut topics: HashMap<gossipsub::TopicHash, String> = HashMap::new();
+    let mut topics: Topics = HashMap::new();
 
     let mut pending_fetches: HashMap<
         request_response::OutboundRequestId,
@@ -179,6 +218,7 @@ pub async fn run_network_loop(
     let mut kad_save_interval = tokio::time::interval(Duration::from_secs(KAD_SAVE_INTERVAL_SECS));
     kad_save_interval.reset();
     let mut consensus_interval = tokio::time::interval(Duration::from_millis(CONSENSUS_TICK_MS));
+    let mut sync_interval = tokio::time::interval(Duration::from_secs(SYNC_INTERVAL_SECS));
 
     loop {
         tokio::select! {
@@ -193,20 +233,20 @@ pub async fn run_network_loop(
                         break;
                     }
                     Some(NetworkCommand::JoinNetwork { network_id, key }) => {
-                        let topic = gossipsub::IdentTopic::new(crate::membership::gossip_topic(&key));
-                        if let Err(e) = swarm.behaviour_mut().gossipsub.subscribe(&topic) {
-                            tracing::warn!("Failed to subscribe to {}: {}", network_id, e);
-                        } else {
+                        if !networks.contains_key(&network_id) {
+                            switch_key(&mut swarm, &mut networks, &mut topics, &network_id, key, now_ms());
                             tracing::info!("Joined network gossip: {}", network_id);
                         }
-                        topics.insert(topic.hash(), network_id.clone());
-                        networks.insert(network_id, (key, topic));
                     }
                     Some(NetworkCommand::LeaveNetwork { network_id }) => {
-                        if let Some((_, topic)) = networks.remove(&network_id) {
-                            let _ = swarm.behaviour_mut().gossipsub.unsubscribe(&topic);
-                            topics.remove(&topic.hash());
-                        }
+                        networks.remove(&network_id);
+                        topics.retain(|hash, sub| {
+                            let keep = sub.network != network_id;
+                            if !keep {
+                                let _ = swarm.behaviour_mut().gossipsub.unsubscribe(&gossipsub::IdentTopic::new(hash.as_str()));
+                            }
+                            keep
+                        });
                     }
                     Some(NetworkCommand::Publish { network_id, message }) => {
                         publish(&mut swarm, &networks, &network_id, &message);
@@ -310,20 +350,54 @@ pub async fn run_network_loop(
             }
             _ = consensus_interval.tick() => {
                 let now = now_ms();
-                let outgoing: Vec<(String, Vec<crate::consensus::ConsensusMsg>)> = match chains.write() {
+                let outgoing: Vec<(String, [u8; 32], Vec<crate::consensus::ConsensusMsg>)> = match chains.write() {
                     Ok(mut all) => networks
                         .keys()
                         .filter_map(|name| {
                             let chain = all.get_mut(name)?;
-                            chain.tick(&identity, &observations, now);
-                            Some((name.clone(), chain.outbox()))
+                            chain.tick(&observations, now);
+                            Some((name.clone(), chain.key, chain.outbox()))
                         })
                         .collect(),
                     Err(_) => Vec::new(),
                 };
-                for (name, msgs) in outgoing {
+                for (name, key, msgs) in outgoing {
+                    if networks.get(&name).is_some_and(|(current, _)| *current != key) {
+                        switch_key(&mut swarm, &mut networks, &mut topics, &name, key, now);
+                        tracing::info!(network = %name, "Moved to the rotated gossip topic");
+                    }
                     for msg in msgs {
                         publish(&mut swarm, &networks, &name, &Gossip::Consensus { msg });
+                    }
+                }
+                topics.retain(|hash, sub| {
+                    let keep = sub.retire_at.is_none_or(|at| now < at);
+                    if !keep {
+                        let _ = swarm.behaviour_mut().gossipsub.unsubscribe(&gossipsub::IdentTopic::new(hash.as_str()));
+                    }
+                    keep
+                });
+            }
+            _ = sync_interval.tick() => {
+                let peers: Vec<PeerId> = swarm.connected_peers().copied().collect();
+                let wanted: Vec<(String, String, u64)> = chains
+                    .read()
+                    .map(|all| {
+                        networks
+                            .keys()
+                            .filter_map(|name| all.get(name).map(|c| (name.clone(), c.id(), c.height())))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                for (name, id, height) in wanted {
+                    for peer in &peers {
+                        let req = FragmentRequest::Commits {
+                            network: id.clone(),
+                            from: height,
+                            cert: identity.cert.clone(),
+                        };
+                        let req_id = swarm.behaviour_mut().fragment_exchange.send_request(peer, req);
+                        pending_syncs.insert(req_id, name.clone());
                     }
                 }
             }
@@ -346,7 +420,7 @@ async fn handle_swarm_event(
     swarm: &mut Swarm<BillPouchBehaviour>,
     state: &Arc<RwLock<NetworkState>>,
     networks: &HashMap<String, ([u8; 32], gossipsub::IdentTopic)>,
-    topics: &HashMap<gossipsub::TopicHash, String>,
+    topics: &Topics,
     chains: &Chains,
     identity: &crate::identity::Identity,
     storage_managers: &StorageManagerMap,
@@ -374,10 +448,12 @@ async fn handle_swarm_event(
                 ..
             },
         )) => {
-            let Some(network_id) = topics.get(&message.topic) else {
-                return;
-            };
-            let Some((key, _)) = networks.get(network_id) else {
+            let Some(Subscription {
+                network: network_id,
+                key,
+                ..
+            }) = topics.get(&message.topic)
+            else {
                 return;
             };
             let Some(gossip) = crate::membership::open(key, &message.data)
