@@ -6,8 +6,6 @@
 //! - Persist and load [`EncodedFragment`]s in the binary `.frag` format.
 //! - Maintain an in-memory [`FragmentIndex`] for fast chunk/fragment lookups.
 //! - Enforce the storage quota declared at bid time.
-//! - Expose recoding helpers so the daemon can generate new fragments for
-//!   newly-joined Pouches without touching the original data.
 //!
 //! ## Directory layout
 //!
@@ -22,19 +20,19 @@
 pub mod encryption;
 pub mod file_registry;
 pub mod fragment;
-pub mod manifest;
 pub mod meta;
+pub mod network_key;
 pub mod tier;
 
 pub use encryption::ChunkCipher;
 pub use file_registry::{FileRegistry, StoredFileEntry};
 pub use fragment::{FragmentIndex, FragmentMeta};
-pub use manifest::{ChunkManifest, FileManifest, FragmentLocation, NetworkMetaKey};
 pub use meta::PouchMeta;
+pub use network_key::NetworkMetaKey;
 pub use tier::StorageTier;
 
 use crate::{
-    coding::rlnc::{self, EncodedFragment},
+    coding::rlnc::EncodedFragment,
     config,
     error::{BpError, BpResult},
 };
@@ -156,72 +154,13 @@ impl StorageManager {
         EncodedFragment::from_bytes(fragment_id.to_string(), chunk_id.to_string(), &bytes)
     }
 
-    /// Remove a fragment from disk and update the index.
-    pub fn remove_fragment(&mut self, chunk_id: &str, fragment_id: &str) -> BpResult<()> {
-        let path = self
-            .root
-            .join("fragments")
-            .join(chunk_id)
-            .join(format!("{fragment_id}.frag"));
-
-        if path.exists() {
-            std::fs::remove_file(&path).map_err(BpError::Io)?;
-        }
-
-        // Remove empty chunk directory
-        let chunk_dir = self.root.join("fragments").join(chunk_id);
-        if chunk_dir.exists()
-            && std::fs::read_dir(&chunk_dir).map_or(true, |mut d| d.next().is_none())
-        {
-            std::fs::remove_dir(&chunk_dir).ok();
-        }
-
-        if let Some(removed) = self.index.remove(chunk_id, fragment_id) {
-            self.meta.storage_bytes_used = self
-                .meta
-                .storage_bytes_used
-                .saturating_sub(removed.size_bytes);
-            self.save_meta()?;
-        }
-
-        Ok(())
-    }
-
     // ── Recoding ──────────────────────────────────────────────────────────
-
-    /// Generate `count` new fragments for `chunk_id` by recoding the local ones.
-    ///
-    /// This is the key operation for filling new Pouches: no decoding is performed,
-    /// no original data is required.
-    ///
-    /// Returns an error if this Pouch holds no fragments for the given chunk.
-    pub fn recode_chunk(&self, chunk_id: &str, count: usize) -> BpResult<Vec<EncodedFragment>> {
-        let metas = self.index.fragments_for_chunk(chunk_id);
-        if metas.is_empty() {
-            return Err(BpError::Storage(format!(
-                "recode: no fragments for chunk {chunk_id}"
-            )));
-        }
-
-        // Load all local fragments for this chunk
-        let fragments: Vec<EncodedFragment> = metas
-            .iter()
-            .map(|m| self.load_fragment(chunk_id, &m.fragment_id))
-            .collect::<BpResult<_>>()?;
-
-        rlnc::recode(&fragments, count).map_err(|e| BpError::Storage(e.to_string()))
-    }
 
     // ── Accessors ─────────────────────────────────────────────────────────
 
     /// Whether this Pouch has remaining capacity for `bytes` more data.
     pub fn has_capacity(&self, bytes: u64) -> bool {
         self.meta.has_capacity(bytes)
-    }
-
-    /// Root directory of this Pouch's storage.
-    pub fn root(&self) -> &Path {
-        &self.root
     }
 
     /// Permanently delete all on-disk storage for this Pouch.
@@ -339,9 +278,8 @@ mod tests {
     fn init_creates_directory_and_meta() {
         with_temp_home_storage(|| {
             let sm = StorageManager::init("amici".into(), "svc-1".into(), 1_000_000).unwrap();
-            assert!(sm.root().exists());
-            assert!(sm.root().join("meta.json").exists());
-            assert!(sm.root().join("fragments").exists());
+            assert!(sm.root.join("meta.json").exists());
+            assert!(sm.root.join("fragments").exists());
             assert_eq!(sm.meta.storage_bytes_bid, 1_000_000);
             assert_eq!(sm.meta.storage_bytes_used, 0);
         });
@@ -371,40 +309,6 @@ mod tests {
             let mut sm = StorageManager::init("net".into(), "svc".into(), 1).unwrap();
             let frags = rlnc::encode(CHUNK, 4, 4).unwrap();
             assert!(sm.store_fragment(&frags[0]).is_err());
-        });
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn remove_fragment_frees_space() {
-        with_temp_home_storage(|| {
-            let mut sm = StorageManager::init("net".into(), "svc".into(), 1_000_000).unwrap();
-            let frags = rlnc::encode(CHUNK, 4, 4).unwrap();
-            sm.store_fragment(&frags[0]).unwrap();
-            let used = sm.meta.storage_bytes_used;
-            sm.remove_fragment(&frags[0].chunk_id, &frags[0].id)
-                .unwrap();
-            assert_eq!(sm.meta.storage_bytes_used, 0);
-            let _ = used; // just checking it was non-zero before
-        });
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn recode_chunk_produces_valid_fragments() {
-        with_temp_home_storage(|| {
-            let mut sm = StorageManager::init("net".into(), "svc".into(), 1_000_000).unwrap();
-            let k = 4;
-            let frags = rlnc::encode(CHUNK, k, k + 4).unwrap();
-
-            // Store 3 fragments
-            for f in &frags[..3] {
-                sm.store_fragment(f).unwrap();
-            }
-
-            let recoded = sm.recode_chunk(&frags[0].chunk_id, 2).unwrap();
-            assert_eq!(recoded.len(), 2);
-            assert_eq!(recoded[0].k, k);
         });
     }
 

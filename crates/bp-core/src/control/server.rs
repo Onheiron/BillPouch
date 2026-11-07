@@ -17,7 +17,7 @@ use crate::{
         StorageManagerMap,
     },
     service::{ServiceInfo, ServiceRegistry, ServiceStatus, ServiceType},
-    storage::{ChunkCipher, FileRegistry, StorageManager},
+    storage::{ChunkCipher, FileRegistry, StorageManager, StorageTier},
 };
 use libp2p::{Multiaddr, PeerId};
 use std::{
@@ -152,13 +152,12 @@ pub struct DaemonState {
     /// Maps `chunk_id → BLAKE3(plaintext_chunk)` so that `GetFile` can
     /// re-derive the per-user CEK for decryption after RLNC decode.
     ///
-    /// Populated by `PutFile`; persisted only for the daemon’s lifetime
-    /// (lost on restart — full persistence comes with the manifest system).
+    /// Populated by `PutFile`; persisted to `cek_hints.json`.
     pub chunk_cek_hints: RwLock<HashMap<String, [u8; 32]>>,
     /// Per-peer reputation state (tier R0–R4, score, uptime, PoS pass rate).
     ///
     /// Updated by the quality monitor and by eviction events.
-    pub reputation: RwLock<ReputationStore>,
+    pub reputation: Arc<RwLock<ReputationStore>>,
     /// Local catalogue of files uploaded by this node's Bill services.
     ///
     /// Populated on each successful `PutFile`.
@@ -247,84 +246,14 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             let ns = state.network_state.read().unwrap();
             let own_peer = state.identity.peer_id.to_string();
 
-            // Own reputation tier, score, and dynamic availability factor.
-            let (rep_tier, rep_score, avail_factor) = {
-                let (tier_str, score, tier_enum) = {
-                    let rep = state.reputation.read().unwrap();
-                    match rep.get(&own_peer) {
-                        Some(r) => (r.tier.to_string(), r.reputation_score, r.tier),
-                        None => (
-                            crate::network::ReputationTier::R1.to_string(),
-                            0i64,
-                            crate::network::ReputationTier::R1,
-                        ),
-                    }
-                };
-                // k/N: fraction of raw bid usable as recoverable content.
-                // N = remote Pouch peers + own node (score 0.4 if unobserved).
-                let factor = if tier_enum == crate::network::ReputationTier::R0 {
-                    0.0_f64
-                } else {
-                    let ph = tier_enum.qos_target_ph();
-                    let qos = state.qos.read().unwrap();
-                    let own_score = qos
-                        .get(&own_peer)
-                        .map(|q| q.stability_score())
-                        .unwrap_or(0.4);
-                    let mut stabilities = qos.all_stability_scores();
-                    stabilities.push(own_score);
-                    crate::coding::params::compute_network_storage_factor(&stabilities, ph)
-                };
-                (tier_str, score, factor)
-            };
-
-            // Per-Pouch storage stats.
-            let pouch_stats: Vec<crate::control::protocol::PouchStat> = {
-                let managers = state.storage_managers.read().unwrap();
-                services
-                    .all()
-                    .iter()
-                    .filter(|s| s.service_type == ServiceType::Pouch)
-                    .map(|s| {
-                        let tier_label = s.metadata.get("tier").and_then(|v| v.as_str()).map(|t| {
-                            format!(
-                                "{} — {}",
-                                t,
-                                match t {
-                                    "T1" => "Pebble",
-                                    "T2" => "Stone",
-                                    "T3" => "Boulder",
-                                    "T4" => "Rock",
-                                    "T5" => "Monolith",
-                                    _ => "?",
-                                }
-                            )
-                        });
-                        if let Some(sm_lock) = managers.get(&s.id) {
-                            let sm = sm_lock.read().unwrap();
-                            crate::control::protocol::PouchStat {
-                                service_id: s.id.clone(),
-                                network_id: s.network_id.clone(),
-                                storage_tier: tier_label,
-                                storage_bid_bytes: sm.meta.storage_bytes_bid,
-                                storage_used_bytes: sm.meta.storage_bytes_used,
-                                available_bytes: ((sm.meta.available_bytes() as f64) * avail_factor)
-                                    .round()
-                                    as u64,
-                            }
-                        } else {
-                            crate::control::protocol::PouchStat {
-                                service_id: s.id.clone(),
-                                network_id: s.network_id.clone(),
-                                storage_tier: tier_label,
-                                storage_bid_bytes: 0,
-                                storage_used_bytes: 0,
-                                available_bytes: 0,
-                            }
-                        }
+            let (rep_tier, rep_score) = {
+                let rep = state.reputation.read().unwrap();
+                rep.get(&own_peer)
+                    .map_or((crate::network::ReputationTier::R1.to_string(), 0), |r| {
+                        (r.tier.to_string(), r.reputation_score)
                     })
-                    .collect()
             };
+            let pouch_stats = pouch_stats(state, &services, "");
 
             // Network QoS summary.
             let qos_peer_count = state.qos.read().unwrap().peer_count();
@@ -373,31 +302,9 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
 
         // ── AnnounceNow ───────────────────────────────────────────────────
         ControlRequest::AnnounceNow => {
-            // Re-broadcast NodeInfo for every running service, then pause
-            // 2 s to let gossipsub deliver the messages to peers.
-            let svcs: Vec<(String, ServiceType, String)> = {
-                state
-                    .services
-                    .read()
-                    .unwrap()
-                    .all()
-                    .iter()
-                    .filter(|s| s.status == ServiceStatus::Running)
-                    .map(|s| (s.id.clone(), s.service_type, s.network_id.clone()))
-                    .collect()
-            };
-            if svcs.is_empty() {
-                tracing::debug!("AnnounceNow: no running services, skipping");
-            } else {
-                for (id, stype, net) in &svcs {
-                    announce_self(state, id, *stype, net).await;
-                }
-                tracing::debug!(
-                    "AnnounceNow: announced {} service(s), waiting 2s",
-                    svcs.len()
-                );
-                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-            }
+            // Re-broadcast every service, then give gossipsub 2 s to deliver.
+            announce_all(state).await;
+            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
             ControlResponse::ok("announced")
         }
 
@@ -441,14 +348,8 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             let info = ServiceInfo::new(service_type, network_id.clone(), metadata.clone());
             let service_id = info.id.clone();
 
-            // Set to Running immediately — scope the lock guard so it is dropped
-            // BEFORE the .await below (std::sync guards are !Send across await).
-            {
-                let mut reg = state.services.write().unwrap();
-                let mut running_info = info.clone();
-                running_info.status = ServiceStatus::Running;
-                reg.register(running_info);
-            } // ← lock released here
+            // Statement-scoped guard: released before the .await below.
+            state.services.write().unwrap().register(info);
 
             // Initialise a StorageManager when hatching a Pouch service.
             if service_type == ServiceType::Pouch {
@@ -474,7 +375,7 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             }
 
             // Announce to the network (await-safe: no lock held)
-            announce_self(state, &service_id, service_type, &network_id).await;
+            announce_service_id(state, &service_id).await;
 
             ControlResponse::ok(HatchData {
                 service_id: service_id.clone(),
@@ -498,99 +399,20 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
         }
         // ── FarewellEvict ─────────────────────────────────────────────────
         ControlRequest::FarewellEvict { service_id } => {
-            let now_secs = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-
-            // Look up the service.
-            let (network_id, service_type, peer_id_str) = {
-                let reg = state.services.read().unwrap();
-                match reg.get(&service_id) {
-                    Some(info) => (
-                        info.network_id.clone(),
-                        info.service_type,
-                        state.identity.peer_id.to_string(),
-                    ),
-                    None => {
-                        return ControlResponse::err(format!(
-                            "No service with id '{}'",
-                            service_id
-                        ));
-                    }
-                }
+            let Some(info) = state.services.read().unwrap().get(&service_id).cloned() else {
+                return ControlResponse::err(format!("No service with id '{}'", service_id));
             };
-
-            // Collect storage stats and purge disk (if Pouch).
-            let (chunk_count, fragment_count, bytes_freed) = {
-                let mut managers = state.storage_managers.write().unwrap();
-                if let Some(sm_lock) = managers.remove(&service_id) {
-                    let sm = sm_lock.read().unwrap();
-                    let summary = sm.storage_summary();
-                    if let Err(e) = sm.purge() {
-                        tracing::warn!("Failed to purge storage for {}: {}", service_id, e);
-                    }
-                    summary
-                } else {
-                    (0, 0, 0)
-                }
-            };
-
-            // Announce eviction via gossip before removing from registry.
-            {
-                let mut meta = HashMap::new();
-                meta.insert("evicting".to_string(), serde_json::Value::Bool(true));
-                let info = NodeInfo {
-                    peer_id: peer_id_str,
-                    user_fingerprint: state.identity.fingerprint.clone(),
-                    user_alias: state.identity.profile.alias.clone(),
-                    service_type,
-                    service_id: service_id.clone(),
-                    network_id: network_id.clone(),
-                    listen_addrs: vec![],
-                    announced_at: now_secs,
-                    metadata: meta,
-                };
-                if let Ok(payload) = serde_json::to_vec(&info) {
-                    let _ = state
-                        .net_tx
-                        .send(NetworkCommand::Announce {
-                            network_id: network_id.clone(),
-                            payload,
-                        })
-                        .await;
-                }
-            }
-
-            // Record reputation eviction.
-            {
-                let local_peer = state.identity.peer_id.to_string();
-                let mut rep = state.reputation.write().unwrap();
-                rep.get_or_create(&local_peer, now_secs)
-                    .evict_without_notice(now_secs);
-            }
-
-            // Remove from registry.
-            state.services.write().unwrap().remove(&service_id);
-
-            tracing::info!(
-                service_id = %service_id,
-                chunks = chunk_count,
-                fragments = fragment_count,
-                bytes = bytes_freed,
-                "Pouch evicted"
-            );
-
+            let (chunks, fragments, bytes) = evict_service(state, &info).await;
             ControlResponse::ok(serde_json::json!({
                 "service_id": service_id,
-                "network_id": network_id,
-                "chunks_removed": chunk_count,
-                "fragments_removed": fragment_count,
-                "bytes_freed": bytes_freed,
+                "network_id": info.network_id,
+                "chunks_removed": chunks,
+                "fragments_removed": fragments,
+                "bytes_freed": bytes,
                 "message": format!(
                     "Pouch {} evicted — {} chunk(s), {} fragment(s), {} bytes freed. \
                      Network peers will rebalance via Proof-of-Storage.",
-                    service_id, chunk_count, fragment_count, bytes_freed
+                    service_id, chunks, fragments, bytes
                 ),
             }))
         }
@@ -604,15 +426,13 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 .unwrap_or_default()
                 .as_secs();
 
-            let (network_id, service_type) = {
+            {
                 let mut reg = state.services.write().unwrap();
                 match reg.get_mut(&service_id) {
                     Some(info) => {
-                        if info.status == crate::service::ServiceStatus::Stopped
-                            || matches!(info.status, crate::service::ServiceStatus::Stopping)
-                        {
+                        if matches!(info.status, ServiceStatus::Paused { .. }) {
                             return ControlResponse::err(format!(
-                                "Service '{}' is not running",
+                                "Service '{}' is already paused",
                                 service_id
                             ));
                         }
@@ -624,7 +444,6 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                             .insert("maintenance".into(), serde_json::Value::Bool(true));
                         info.metadata
                             .insert("eta_minutes".into(), serde_json::Value::from(eta_minutes));
-                        (info.network_id.clone(), info.service_type)
                     }
                     None => {
                         return ControlResponse::err(format!(
@@ -635,7 +454,7 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 }
             };
 
-            announce_self(state, &service_id, service_type, &network_id).await;
+            announce_service_id(state, &service_id).await;
 
             ControlResponse::ok(serde_json::json!({
                 "service_id": service_id,
@@ -650,7 +469,7 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
 
         // ── Resume ────────────────────────────────────────────────────────
         ControlRequest::Resume { service_id } => {
-            let (network_id, service_type) = {
+            {
                 let mut reg = state.services.write().unwrap();
                 match reg.get_mut(&service_id) {
                     Some(info) => {
@@ -663,7 +482,6 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                         info.status = crate::service::ServiceStatus::Running;
                         info.metadata.remove("maintenance");
                         info.metadata.remove("eta_minutes");
-                        (info.network_id.clone(), info.service_type)
                     }
                     None => {
                         return ControlResponse::err(format!(
@@ -674,7 +492,7 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 }
             };
 
-            announce_self(state, &service_id, service_type, &network_id).await;
+            announce_service_id(state, &service_id).await;
 
             ControlResponse::ok(serde_json::json!({
                 "service_id": service_id,
@@ -711,7 +529,8 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             // Ensure a NetworkMetaKey exists for this network.
             // If none was installed via an invite token, we generate a fresh
             // random one (this node is creating the network).
-            if let Err(e) = crate::storage::manifest::NetworkMetaKey::load_or_create(&network_id) {
+            if let Err(e) = crate::storage::network_key::NetworkMetaKey::load_or_create(&network_id)
+            {
                 tracing::warn!(network = %network_id, "Failed to ensure NetworkMetaKey: {e}");
             }
             let _ = state
@@ -770,83 +589,18 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             }
 
             // force=true (or no blocking services): auto-evict then leave.
-            let now_secs = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
             let mut evicted: Vec<serde_json::Value> = Vec::new();
-
             for svc in &blocking {
-                let service_id = svc.id.clone();
-                let service_type = svc.service_type;
-                let peer_id_str = state.identity.peer_id.to_string();
-
-                if service_type == ServiceType::Pouch {
-                    // Purge on-disk storage.
-                    {
-                        let mut managers = state.storage_managers.write().unwrap();
-                        if let Some(sm_lock) = managers.remove(&service_id) {
-                            let sm = sm_lock.read().unwrap();
-                            if let Err(e) = sm.purge() {
-                                tracing::warn!(
-                                    "leave --force: failed to purge storage for {}: {}",
-                                    service_id,
-                                    e
-                                );
-                            }
-                        }
-                    }
-                    // Gossip eviction notice before removing from registry.
-                    {
-                        let mut meta = HashMap::new();
-                        meta.insert("evicting".to_string(), serde_json::Value::Bool(true));
-                        let info = NodeInfo {
-                            peer_id: peer_id_str.clone(),
-                            user_fingerprint: state.identity.fingerprint.clone(),
-                            user_alias: state.identity.profile.alias.clone(),
-                            service_type,
-                            service_id: service_id.clone(),
-                            network_id: network_id.clone(),
-                            listen_addrs: vec![],
-                            announced_at: now_secs,
-                            metadata: meta,
-                        };
-                        if let Ok(payload) = serde_json::to_vec(&info) {
-                            let _ = state
-                                .net_tx
-                                .send(NetworkCommand::Announce {
-                                    network_id: network_id.clone(),
-                                    payload,
-                                })
-                                .await;
-                        }
-                    }
-                    // Record reputation eviction.
-                    {
-                        let mut rep = state.reputation.write().unwrap();
-                        rep.get_or_create(&peer_id_str, now_secs)
-                            .evict_without_notice(now_secs);
-                    }
-                    tracing::info!(
-                        service_id = %service_id,
-                        network_id = %network_id,
-                        "Pouch auto-evicted by leave --force"
-                    );
+                if svc.service_type == ServiceType::Pouch {
+                    evict_service(state, svc).await;
                 } else {
-                    tracing::info!(
-                        service_id = %service_id,
-                        service_type = %service_type,
-                        network_id = %network_id,
-                        "service stopped by leave --force"
-                    );
+                    state.services.write().unwrap().remove(&svc.id);
                 }
-
-                // Remove from registry regardless of type.
-                state.services.write().unwrap().remove(&service_id);
+                tracing::info!(service_id = %svc.id, network_id = %network_id, "stopped by leave --force");
                 evicted.push(serde_json::json!({
-                    "service_id":   service_id,
-                    "service_type": service_type.to_string(),
-                    "evicted":       service_type == ServiceType::Pouch,
+                    "service_id":   svc.id,
+                    "service_type": svc.service_type.to_string(),
+                    "evicted":      svc.service_type == ServiceType::Pouch,
                 }));
             }
 
@@ -1352,80 +1106,10 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
 
         // ── StorageInfo ───────────────────────────────────────────────────
         ControlRequest::StorageInfo { network_id } => {
-            let managers = state.storage_managers.read().unwrap();
             let services = state.services.read().unwrap();
             let registry = state.file_registry.read().unwrap();
 
-            // k/N availability factor: dynamic, from current network QoS.
-            let avail_factor = {
-                let own_peer = state.identity.peer_id.to_string();
-                let tier_enum = {
-                    let rep = state.reputation.read().unwrap();
-                    match rep.get(&own_peer) {
-                        Some(r) => r.tier,
-                        None => crate::network::ReputationTier::R1,
-                    }
-                };
-                if tier_enum == crate::network::ReputationTier::R0 {
-                    0.0_f64
-                } else {
-                    let ph = tier_enum.qos_target_ph();
-                    let qos = state.qos.read().unwrap();
-                    let own_score = qos
-                        .get(&own_peer)
-                        .map(|q| q.stability_score())
-                        .unwrap_or(0.4);
-                    let mut stabilities = qos.all_stability_scores();
-                    stabilities.push(own_score);
-                    crate::coding::params::compute_network_storage_factor(&stabilities, ph)
-                }
-            };
-
-            let pouches: Vec<PouchStat> = services
-                .all()
-                .iter()
-                .filter(|s| {
-                    s.service_type == ServiceType::Pouch
-                        && (network_id.is_empty() || s.network_id == network_id)
-                })
-                .map(|s| {
-                    let tier_label = s.metadata.get("tier").and_then(|v| v.as_str()).map(|t| {
-                        format!(
-                            "{} — {}",
-                            t,
-                            match t {
-                                "T1" => "Pebble",
-                                "T2" => "Stone",
-                                "T3" => "Boulder",
-                                "T4" => "Rock",
-                                "T5" => "Monolith",
-                                _ => "?",
-                            }
-                        )
-                    });
-                    if let Some(sm_lock) = managers.get(&s.id) {
-                        let sm = sm_lock.read().unwrap();
-                        PouchStat {
-                            service_id: s.id.clone(),
-                            network_id: s.network_id.clone(),
-                            storage_tier: tier_label,
-                            storage_bid_bytes: sm.meta.storage_bytes_bid,
-                            storage_used_bytes: sm.meta.storage_bytes_used,
-                            available_bytes: ((sm.meta.available_bytes() as f64) * avail_factor)
-                                .round() as u64,
-                        }
-                    } else {
-                        PouchStat {
-                            service_id: s.id.clone(),
-                            network_id: s.network_id.clone(),
-                            storage_tier: tier_label,
-                            storage_bid_bytes: 0,
-                            storage_used_bytes: 0,
-                            available_bytes: 0,
-                        }
-                    }
-                })
-                .collect();
+            let pouches = pouch_stats(state, &services, &network_id);
 
             let total_bid_bytes: u64 = pouches.iter().map(|p| p.storage_bid_bytes).sum();
             let total_used_bytes: u64 = pouches.iter().map(|p| p.storage_used_bytes).sum();
@@ -1481,40 +1165,153 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
     }
 }
 
-/// Build a `NodeInfo` from the current daemon state for a given service and
-/// broadcast it via gossipsub.
-async fn announce_self(
-    state: &Arc<DaemonState>,
-    service_id: &str,
-    service_type: ServiceType,
-    network_id: &str,
-) {
-    let listen_addrs: Vec<String> = vec![]; // Populated once we know our Multiaddrs
+/// Fraction of a Pouch's free space that is usable as recoverable content:
+/// the k/N coding rate the network can sustain at this node's reputation `Ph`.
+fn availability_factor(state: &DaemonState) -> f64 {
+    let own_peer = state.identity.peer_id.to_string();
+    let tier = state.reputation.read().unwrap().tier(&own_peer);
+    if tier == crate::network::ReputationTier::R0 {
+        return 0.0;
+    }
+    let qos = state.qos.read().unwrap();
+    // N = remote Pouch peers + own node (score 0.4 if unobserved).
+    let own_score = qos.get(&own_peer).map_or(0.4, |q| q.stability_score());
+    let mut stabilities = qos.all_stability_scores();
+    stabilities.push(own_score);
+    coding_params::compute_network_storage_factor(&stabilities, tier.qos_target_ph())
+}
 
+/// Per-Pouch storage stats, optionally filtered by network (`""` = all).
+fn pouch_stats(
+    state: &DaemonState,
+    services: &ServiceRegistry,
+    network_id: &str,
+) -> Vec<PouchStat> {
+    let factor = availability_factor(state);
+    let managers = state.storage_managers.read().unwrap();
+    services
+        .all()
+        .iter()
+        .filter(|s| {
+            s.service_type == ServiceType::Pouch
+                && (network_id.is_empty() || s.network_id == network_id)
+        })
+        .map(|s| {
+            let storage_tier = s
+                .metadata
+                .get("tier")
+                .and_then(|v| v.as_str())
+                .and_then(|t| StorageTier::parse(t).ok())
+                .map(|t| format!("{t:?} — {}", t.name()));
+            let (bid, used, avail) = managers.get(&s.id).map_or((0, 0, 0), |sm| {
+                let sm = sm.read().unwrap();
+                (
+                    sm.meta.storage_bytes_bid,
+                    sm.meta.storage_bytes_used,
+                    (sm.meta.available_bytes() as f64 * factor).round() as u64,
+                )
+            });
+            PouchStat {
+                service_id: s.id.clone(),
+                network_id: s.network_id.clone(),
+                storage_tier,
+                storage_bid_bytes: bid,
+                storage_used_bytes: used,
+                available_bytes: avail,
+            }
+        })
+        .collect()
+}
+
+/// Broadcast a [`NodeInfo`] for `svc` (including its metadata) via gossipsub.
+async fn announce_service(state: &DaemonState, svc: &ServiceInfo) {
     let info = NodeInfo {
         peer_id: state.identity.peer_id.to_string(),
         user_fingerprint: state.identity.fingerprint.clone(),
         user_alias: state.identity.profile.alias.clone(),
-        service_type,
-        service_id: service_id.to_string(),
-        network_id: network_id.to_string(),
-        listen_addrs,
+        service_type: svc.service_type,
+        service_id: svc.id.clone(),
+        network_id: svc.network_id.clone(),
+        listen_addrs: vec![],
         announced_at: chrono::Utc::now().timestamp() as u64,
-        metadata: HashMap::new(),
+        metadata: svc.metadata.clone(),
     };
-
     match serde_json::to_vec(&info) {
         Ok(payload) => {
             let _ = state
                 .net_tx
                 .send(NetworkCommand::Announce {
-                    network_id: network_id.to_string(),
+                    network_id: svc.network_id.clone(),
                     payload,
                 })
                 .await;
         }
         Err(e) => tracing::warn!("Failed to serialize NodeInfo: {}", e),
     }
+}
+
+/// Announce the registered service `service_id`, if it exists.
+async fn announce_service_id(state: &DaemonState, service_id: &str) {
+    let svc = state.services.read().unwrap().get(service_id).cloned();
+    if let Some(svc) = svc {
+        announce_service(state, &svc).await;
+    }
+}
+
+/// Announce every registered service (used by `AnnounceNow` and the
+/// daemon's periodic re-announce loop).
+pub async fn announce_all(state: &DaemonState) {
+    let services: Vec<ServiceInfo> = state
+        .services
+        .read()
+        .unwrap()
+        .all()
+        .into_iter()
+        .cloned()
+        .collect();
+    for svc in &services {
+        announce_service(state, svc).await;
+    }
+}
+
+/// Permanently evict a service: purge its storage, gossip an `evicting`
+/// notice, apply the reputation eviction penalty and unregister it.
+///
+/// Returns `(chunks, fragments, bytes)` removed from local storage.
+async fn evict_service(state: &DaemonState, svc: &ServiceInfo) -> (usize, usize, u64) {
+    let summary = match state.storage_managers.write().unwrap().remove(&svc.id) {
+        Some(sm) => {
+            let sm = sm.read().unwrap();
+            let summary = sm.storage_summary();
+            if let Err(e) = sm.purge() {
+                tracing::warn!("Failed to purge storage for {}: {}", svc.id, e);
+            }
+            summary
+        }
+        None => (0, 0, 0),
+    };
+
+    let mut notice = svc.clone();
+    notice
+        .metadata
+        .insert("evicting".into(), serde_json::Value::Bool(true));
+    announce_service(state, &notice).await;
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    state
+        .reputation
+        .write()
+        .unwrap()
+        .get_or_create(&state.identity.peer_id.to_string(), now)
+        .evict_without_notice(now);
+    state.services.write().unwrap().remove(&svc.id);
+
+    let (chunks, fragments, bytes) = summary;
+    tracing::info!(service_id = %svc.id, chunks, fragments, bytes, "Service evicted");
+    summary
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

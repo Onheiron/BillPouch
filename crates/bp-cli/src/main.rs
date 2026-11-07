@@ -103,10 +103,6 @@ enum Cmd {
         /// (T1=10 GiB, T2=100 GiB, T3=500 GiB, T4=1 TiB, T5=5 TiB).
         #[arg(long)]
         tier: Option<String>,
-
-        /// For bill: local mount path for personal files.
-        #[arg(long)]
-        mount: Option<String>,
     },
 
     /// Show all known peers and network info.
@@ -194,7 +190,7 @@ enum Cmd {
 
         /// Human-readable name for the file (shown by `bp ls`).
         /// Defaults to the file's original filename.
-        #[arg(long, short)]
+        #[arg(long)]
         name: Option<String>,
     },
 
@@ -372,10 +368,12 @@ async fn main() -> anyhow::Result<()> {
             service_type,
             network,
             tier,
-            mount,
         }) => {
             let svc_type: bp_core::service::ServiceType = service_type.parse()?;
             let mut metadata: HashMap<String, serde_json::Value> = HashMap::new();
+            if svc_type == bp_core::service::ServiceType::Pouch && tier.is_none() {
+                anyhow::bail!("a pouch needs a storage tier: --tier T1|T2|T3|T4|T5");
+            }
             if let Some(tier_str) = tier {
                 let storage_tier = bp_core::storage::StorageTier::parse(&tier_str)
                     .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -384,9 +382,6 @@ async fn main() -> anyhow::Result<()> {
                     "storage_bytes".into(),
                     serde_json::Value::from(storage_tier.quota_bytes()),
                 );
-            }
-            if let Some(path) = mount {
-                metadata.insert("mount_path".into(), serde_json::Value::from(path));
             }
             commands::hatch::hatch(svc_type, network, metadata, cli.passphrase.clone()).await?;
         }
@@ -486,4 +481,16 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::CommandFactory;
+
+    /// Catches clap definition errors (e.g. duplicate short flags) that
+    /// would otherwise only panic at runtime.
+    #[test]
+    fn cli_definition_is_valid() {
+        super::Cli::command().debug_assert();
+    }
 }

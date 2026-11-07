@@ -1,26 +1,15 @@
-//! Storage tier system for BillPouch Pouch services.
+//! Storage tiers: a Pouch offers exactly one fixed quota.
 //!
-//! Instead of arbitrary byte quotas, Pouches declare one of five fixed tiers.
-//! Each tier defines:
-//! - An exact on-disk quota that the Pouch reserves.
-//! - Which tier-buckets the Pouch participates in (a T3 Pouch participates in
-//!   T1, T2, and T3 fragment placement).
+//! | Tier | Name     | Quota   |
+//! |------|----------|---------|
+//! | T1   | Pebble   | 10 GiB  |
+//! | T2   | Stone    | 100 GiB |
+//! | T3   | Boulder  | 500 GiB |
+//! | T4   | Rock     | 1 TiB   |
+//! | T5   | Monolith | 5 TiB   |
 //!
-//! ## Tiers
-//!
-//! | Tier | Name     | Quota  |
-//! |------|----------|--------|
-//! | T1   | Pebble   | 10 GB  |
-//! | T2   | Stone    | 100 GB |
-//! | T3   | Boulder  | 500 GB |
-//! | T4   | Rock     | 1 TB   |
-//! | T5   | Monolith | 5 TB   |
-//!
-//! ## One Pouch per node per network
-//!
-//! A daemon rejects a second `hatch pouch --network X` if a Pouch is already
-//! active on that network for this identity.  Two correlated Pouches on the
-//! same machine defeat the purpose of distributed redundancy.
+//! The daemon rejects a second `hatch pouch --network X` on the same node:
+//! two Pouches on one machine fail together and defeat redundancy.
 
 use crate::error::{BpError, BpResult};
 use serde::{Deserialize, Serialize};
@@ -43,9 +32,7 @@ pub const TIER_T5_BYTES: u64 = 5 * 1024 * 1024 * 1024 * 1024;
 
 /// A fixed storage tier for a Pouch service.
 ///
-/// Tiers are ordered: `T1 < T2 < T3 < T4 < T5`.  A Pouch at tier T participates
-/// in fragment placement for all tiers ≤ T (e.g. a T3 Pouch stores fragments
-/// from T1, T2, and T3 files).
+/// Tiers are ordered: `T1 < T2 < T3 < T4 < T5`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum StorageTier {
@@ -84,30 +71,6 @@ impl StorageTier {
         }
     }
 
-    /// Return all tiers from T1 up to and including `self`.
-    ///
-    /// Used to determine which tier-buckets a Pouch participates in.
-    pub fn participating_tiers(self) -> &'static [StorageTier] {
-        match self {
-            StorageTier::T1 => &[StorageTier::T1],
-            StorageTier::T2 => &[StorageTier::T1, StorageTier::T2],
-            StorageTier::T3 => &[StorageTier::T1, StorageTier::T2, StorageTier::T3],
-            StorageTier::T4 => &[
-                StorageTier::T1,
-                StorageTier::T2,
-                StorageTier::T3,
-                StorageTier::T4,
-            ],
-            StorageTier::T5 => &[
-                StorageTier::T1,
-                StorageTier::T2,
-                StorageTier::T3,
-                StorageTier::T4,
-                StorageTier::T5,
-            ],
-        }
-    }
-
     /// Return all defined tiers in ascending order.
     pub fn all() -> &'static [StorageTier] {
         &[
@@ -133,35 +96,16 @@ impl StorageTier {
             ))),
         }
     }
-
-    /// Return the minimum tier that can hold a file of the given byte size.
-    ///
-    /// Returns `None` if the file is too large even for T5.
-    pub fn for_file_size(bytes: u64) -> Option<Self> {
-        if bytes <= TIER_T1_BYTES {
-            Some(StorageTier::T1)
-        } else if bytes <= TIER_T2_BYTES {
-            Some(StorageTier::T2)
-        } else if bytes <= TIER_T3_BYTES {
-            Some(StorageTier::T3)
-        } else if bytes <= TIER_T4_BYTES {
-            Some(StorageTier::T4)
-        } else if bytes <= TIER_T5_BYTES {
-            Some(StorageTier::T5)
-        } else {
-            None
-        }
-    }
 }
 
 impl fmt::Display for StorageTier {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let (label, name) = match self {
-            StorageTier::T1 => ("T1", "Pebble  — 10 GB"),
-            StorageTier::T2 => ("T2", "Stone   — 100 GB"),
-            StorageTier::T3 => ("T3", "Boulder — 500 GB"),
-            StorageTier::T4 => ("T4", "Rock    — 1 TB"),
-            StorageTier::T5 => ("T5", "Monolith — 5 TB"),
+            StorageTier::T1 => ("T1", "Pebble — 10 GiB"),
+            StorageTier::T2 => ("T2", "Stone — 100 GiB"),
+            StorageTier::T3 => ("T3", "Boulder — 500 GiB"),
+            StorageTier::T4 => ("T4", "Rock — 1 TiB"),
+            StorageTier::T5 => ("T5", "Monolith — 5 TiB"),
         };
         write!(f, "{} ({})", label, name)
     }
@@ -199,40 +143,12 @@ mod tests {
     }
 
     #[test]
-    fn participating_tiers_correct() {
-        assert_eq!(StorageTier::T1.participating_tiers(), &[StorageTier::T1]);
-        assert_eq!(
-            StorageTier::T3.participating_tiers(),
-            &[StorageTier::T1, StorageTier::T2, StorageTier::T3]
-        );
-        assert_eq!(StorageTier::T5.participating_tiers().len(), 5);
-    }
-
-    #[test]
     fn parse_case_insensitive() {
         assert_eq!(StorageTier::parse("t1").unwrap(), StorageTier::T1);
         assert_eq!(StorageTier::parse("T3").unwrap(), StorageTier::T3);
         assert_eq!(StorageTier::parse("T5").unwrap(), StorageTier::T5);
         assert!(StorageTier::parse("T6").is_err());
         assert!(StorageTier::parse("pebble").is_err());
-    }
-
-    #[test]
-    fn for_file_size() {
-        assert_eq!(StorageTier::for_file_size(1024), Some(StorageTier::T1));
-        assert_eq!(
-            StorageTier::for_file_size(TIER_T1_BYTES),
-            Some(StorageTier::T1)
-        );
-        assert_eq!(
-            StorageTier::for_file_size(TIER_T1_BYTES + 1),
-            Some(StorageTier::T2)
-        );
-        assert_eq!(
-            StorageTier::for_file_size(TIER_T5_BYTES),
-            Some(StorageTier::T5)
-        );
-        assert_eq!(StorageTier::for_file_size(TIER_T5_BYTES + 1), None);
     }
 
     #[test]

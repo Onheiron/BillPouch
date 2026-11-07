@@ -1,34 +1,8 @@
 //! # bp-api — BillPouch REST API gateway
 //!
-//! Thin HTTP adapter that proxies REST requests to the running `bp` daemon
-//! over the Unix control socket.  The daemon must already be running
-//! (`bp hatch <type>`) before requests can be served.
-//!
-//! ## Endpoints
-//!
-//! | Method | Path                              | Description                             |
-//! |--------|-----------------------------------|-----------------------------------------|
-//! | GET    | `/ping`                           | Liveness check                          |
-//! | GET    | `/status`                         | Daemon identity + services              |
-//! | GET    | `/peers`                          | Known peers + network info              |
-//! | POST   | `/services`                       | Hatch a new service                     |
-//! | DELETE | `/services/:service_id`           | Stop a service                          |
-//! | DELETE | `/services/:service_id?evict=true`| Stop + evict all stored fragments       |
-//! | POST   | `/services/:service_id/pause`     | Pause a service (body: `eta_minutes`)   |
-//! | POST   | `/services/:service_id/resume`    | Resume a paused service                 |
-//! | POST   | `/networks/join`                  | Join a gossip network                   |
-//! | POST   | `/networks/leave`                 | Leave a gossip network                  |
-//! | POST   | `/files`                          | Store a file (base64 chunk_data)        |
-//! | GET    | `/files/:chunk_id`                | Retrieve a file (`?network=public`)     |
-//! | POST   | `/relay/connect`                  | Dial a relay node for NAT traversal     |
-//! | POST   | `/invites`                        | Create an invite token                  |
-//! | POST   | `/invites/redeem`                 | Join a network via invite token         |
-//!
-//! ## Usage
-//!
-//! ```text
-//! bp-api --port 3000 --host 127.0.0.1
-//! ```
+//! Thin HTTP adapter that forwards requests to the running daemon over the
+//! Unix control socket, plus an embedded dashboard at `GET /`.
+//! Endpoints: see `docs/api.md`.
 
 use axum::{
     extract::{Path, Query, State},
@@ -40,16 +14,15 @@ use axum::{
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use bp_core::{
     config,
-    control::protocol::{ControlRequest, ControlResponse},
+    control::{
+        client,
+        protocol::{ControlRequest, ControlResponse, GetFileData},
+    },
     service::ServiceType,
 };
 use clap::Parser;
 use serde::Deserialize;
 use std::{collections::HashMap, net::SocketAddr, path::PathBuf, sync::Arc};
-use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-    net::UnixStream,
-};
 use tracing::instrument;
 
 // ── CLI args ──────────────────────────────────────────────────────────────────
@@ -78,51 +51,30 @@ struct AppState {
     socket_path: Arc<PathBuf>,
 }
 
-// ── Daemon client ─────────────────────────────────────────────────────────────
+// ── Daemon calls ──────────────────────────────────────────────────────────────
 
-/// Minimal async client for the bp daemon control socket.
-struct DaemonClient {
-    stream: UnixStream,
-}
-
-impl DaemonClient {
-    async fn connect(path: &std::path::Path) -> anyhow::Result<Self> {
-        let stream = UnixStream::connect(path).await?;
-        Ok(Self { stream })
-    }
-
-    async fn call(&mut self, req: ControlRequest) -> anyhow::Result<serde_json::Value> {
-        let (read_half, mut write_half) = self.stream.split();
-        let mut json = serde_json::to_string(&req)?;
-        json.push('\n');
-        write_half.write_all(json.as_bytes()).await?;
-
-        let mut reader = BufReader::new(read_half);
-        let mut line = String::new();
-        reader.read_line(&mut line).await?;
-        let resp: ControlResponse = serde_json::from_str(line.trim())?;
-
-        match resp {
-            ControlResponse::Ok { data } => Ok(data.unwrap_or(serde_json::Value::Null)),
-            ControlResponse::Error { message } => Err(anyhow::anyhow!("{}", message)),
-        }
+/// Send `req` to the daemon; `Ok(data)` on success, or a ready HTTP error
+/// (503 if the daemon is unreachable, 500 if it returned an error).
+async fn call_daemon(
+    state: &AppState,
+    req: ControlRequest,
+) -> Result<serde_json::Value, Box<Response>> {
+    match client::send(&state.socket_path, &req).await {
+        Err(e) => Err(Box::new(daemon_unavailable(e))),
+        Ok(ControlResponse::Ok { data }) => Ok(data.unwrap_or(serde_json::Value::Null)),
+        Ok(ControlResponse::Error { message }) => Err(Box::new(api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            message,
+        ))),
     }
 }
 
-// ── Helper macros ─────────────────────────────────────────────────────────────
-
-/// Connect to the daemon, call `$req`, and return a JSON or error response.
-macro_rules! daemon_call {
-    ($state:expr, $req:expr) => {{
-        let path = $state.socket_path.as_ref();
-        match DaemonClient::connect(path).await {
-            Err(e) => daemon_unavailable(e),
-            Ok(mut client) => match client.call($req).await {
-                Ok(data) => (StatusCode::OK, Json(data)).into_response(),
-                Err(e) => api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-            },
-        }
-    }};
+/// Call the daemon and wrap its data as a JSON response with `status`.
+async fn respond(state: &AppState, req: ControlRequest, status: StatusCode) -> Response {
+    match call_daemon(state, req).await {
+        Ok(data) => (status, Json(data)).into_response(),
+        Err(resp) => *resp,
+    }
 }
 
 fn daemon_unavailable(e: impl std::fmt::Display) -> Response {
@@ -151,19 +103,19 @@ async fn dashboard() -> impl IntoResponse {
 /// `GET /ping` — liveness check.
 #[instrument(skip_all)]
 async fn ping(State(state): State<AppState>) -> Response {
-    daemon_call!(state, ControlRequest::Ping)
+    respond(&state, ControlRequest::Ping, StatusCode::OK).await
 }
 
 /// `GET /status` — daemon identity and local services.
 #[instrument(skip_all)]
 async fn status(State(state): State<AppState>) -> Response {
-    daemon_call!(state, ControlRequest::Status)
+    respond(&state, ControlRequest::Status, StatusCode::OK).await
 }
 
 /// `GET /peers` — all known gossip peers.
 #[instrument(skip_all)]
 async fn peers(State(state): State<AppState>) -> Response {
-    daemon_call!(state, ControlRequest::Flock)
+    respond(&state, ControlRequest::Flock, StatusCode::OK).await
 }
 
 // ── /services ─────────────────────────────────────────────────────────────────
@@ -184,14 +136,7 @@ async fn hatch(State(state): State<AppState>, Json(body): Json<HatchBody>) -> Re
         network_id: body.network_id,
         metadata: body.metadata,
     };
-    let path = state.socket_path.as_ref();
-    match DaemonClient::connect(path).await {
-        Err(e) => daemon_unavailable(e),
-        Ok(mut client) => match client.call(req).await {
-            Ok(data) => (StatusCode::CREATED, Json(data)).into_response(),
-            Err(e) => api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-        },
-    }
+    respond(&state, req, StatusCode::CREATED).await
 }
 
 /// Optional query parameters for `DELETE /services/:service_id`.
@@ -210,9 +155,19 @@ async fn farewell(
     Query(query): Query<FarewellQuery>,
 ) -> Response {
     if query.evict {
-        daemon_call!(state, ControlRequest::FarewellEvict { service_id })
+        respond(
+            &state,
+            ControlRequest::FarewellEvict { service_id },
+            StatusCode::OK,
+        )
+        .await
     } else {
-        daemon_call!(state, ControlRequest::Farewell { service_id })
+        respond(
+            &state,
+            ControlRequest::Farewell { service_id },
+            StatusCode::OK,
+        )
+        .await
     }
 }
 
@@ -232,19 +187,26 @@ async fn pause_service(
     Path(service_id): Path<String>,
     Json(body): Json<PauseBody>,
 ) -> Response {
-    daemon_call!(
-        state,
+    respond(
+        &state,
         ControlRequest::Pause {
             service_id,
             eta_minutes: body.eta_minutes,
-        }
+        },
+        StatusCode::OK,
     )
+    .await
 }
 
 /// `POST /services/:service_id/resume` — resume a paused service.
 #[instrument(skip_all)]
 async fn resume_service(State(state): State<AppState>, Path(service_id): Path<String>) -> Response {
-    daemon_call!(state, ControlRequest::Resume { service_id })
+    respond(
+        &state,
+        ControlRequest::Resume { service_id },
+        StatusCode::OK,
+    )
+    .await
 }
 
 // ── /networks ─────────────────────────────────────────────────────────────────
@@ -260,24 +222,28 @@ struct NetworkBody {
 /// `POST /networks/join` — subscribe to a gossip network.
 #[instrument(skip_all)]
 async fn network_join(State(state): State<AppState>, Json(body): Json<NetworkBody>) -> Response {
-    daemon_call!(
-        state,
+    respond(
+        &state,
         ControlRequest::Join {
-            network_id: body.network_id
-        }
+            network_id: body.network_id,
+        },
+        StatusCode::OK,
     )
+    .await
 }
 
 /// `POST /networks/leave` — unsubscribe from a gossip network.
 #[instrument(skip_all)]
 async fn network_leave(State(state): State<AppState>, Json(body): Json<NetworkBody>) -> Response {
-    daemon_call!(
-        state,
+    respond(
+        &state,
         ControlRequest::Leave {
             network_id: body.network_id,
             force: body.force,
-        }
+        },
+        StatusCode::OK,
     )
+    .await
 }
 
 // ── /files ────────────────────────────────────────────────────────────────────
@@ -325,14 +291,7 @@ async fn put_file(State(state): State<AppState>, Json(body): Json<PutFileBody>) 
         file_name: body.file_name,
     };
 
-    let path = state.socket_path.as_ref();
-    match DaemonClient::connect(path).await {
-        Err(e) => daemon_unavailable(e),
-        Ok(mut client) => match client.call(req).await {
-            Ok(data) => (StatusCode::CREATED, Json(data)).into_response(),
-            Err(e) => api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-        },
-    }
+    respond(&state, req, StatusCode::CREATED).await
 }
 
 #[derive(Deserialize)]
@@ -356,39 +315,20 @@ async fn get_file(
         network_id: query.network,
     };
 
-    let path = state.socket_path.as_ref();
-    match DaemonClient::connect(path).await {
-        Err(e) => daemon_unavailable(e),
-        Ok(mut client) => match client.call(req).await {
-            Ok(data) => {
-                // The chunk_data in the response is a JSON array of u8 from
-                // serde; re-encode it as base64 for a clean HTTP response.
-                if let Some(arr) = data.get("chunk_data") {
-                    if let Ok(bytes) = serde_json::from_value::<Vec<u8>>(arr.clone()) {
-                        return (
-                            StatusCode::OK,
-                            Json(serde_json::json!({
-                                "chunk_id": chunk_id,
-                                "data": B64.encode(&bytes),
-                            })),
-                        )
-                            .into_response();
-                    }
-                }
-                (StatusCode::OK, Json(data)).into_response()
-            }
-            Err(e) => {
-                let msg = e.to_string();
-                if msg.contains("not found") || msg.contains("NotFound") {
-                    api_error(
-                        StatusCode::NOT_FOUND,
-                        format!("Chunk '{chunk_id}' not found"),
-                    )
-                } else {
-                    api_error(StatusCode::INTERNAL_SERVER_ERROR, msg)
-                }
-            }
-        },
+    let data = match call_daemon(&state, req).await {
+        Ok(data) => data,
+        Err(resp) => return *resp,
+    };
+    // `data` is serialized by serde as a JSON array of u8 — return base64.
+    match serde_json::from_value::<GetFileData>(data) {
+        Ok(d) => Json(serde_json::json!({
+            "chunk_id": d.chunk_id,
+            "data": B64.encode(&d.data),
+            "fragments_used": d.fragments_used,
+            "fragments_remote": d.fragments_remote,
+        }))
+        .into_response(),
+        Err(e) => api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
 
@@ -413,15 +353,17 @@ async fn create_invite(
     State(state): State<AppState>,
     Json(body): Json<CreateInviteBody>,
 ) -> Response {
-    daemon_call!(
-        state,
+    respond(
+        &state,
         ControlRequest::CreateInvite {
             network_id: body.network_id,
             invitee_fingerprint: body.invitee_fingerprint,
             invite_password: body.invite_password,
             ttl_hours: body.ttl_hours,
-        }
+        },
+        StatusCode::OK,
     )
+    .await
 }
 
 #[derive(Deserialize)]
@@ -455,26 +397,20 @@ async fn redeem_invite(
     let network_id = payload.network_id.clone();
 
     // 3. Ask the daemon to join (subscribe gossip topics).
-    let path = state.socket_path.as_ref();
-    match DaemonClient::connect(path).await {
-        Err(e) => daemon_unavailable(e),
-        Ok(mut client) => {
-            let req = ControlRequest::Join {
-                network_id: network_id.clone(),
-            };
-            // Ignore join error (e.g. already joined) — the key is already saved.
-            let _ = client.call(req).await;
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({
-                    "status": "joined",
-                    "network_id": network_id,
-                    "inviter_fingerprint": payload.inviter_fingerprint,
-                })),
-            )
-                .into_response()
-        }
-    }
+    // Ignore join errors (e.g. already joined) — the key is already saved.
+    let _ = call_daemon(
+        &state,
+        ControlRequest::Join {
+            network_id: network_id.clone(),
+        },
+    )
+    .await;
+    Json(serde_json::json!({
+        "status": "joined",
+        "network_id": network_id,
+        "inviter_fingerprint": payload.inviter_fingerprint,
+    }))
+    .into_response()
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -495,12 +431,14 @@ async fn relay_connect(
     State(state): State<AppState>,
     Json(body): Json<RelayConnectBody>,
 ) -> Response {
-    daemon_call!(
-        state,
+    respond(
+        &state,
         ControlRequest::ConnectRelay {
             relay_addr: body.relay_addr,
-        }
+        },
+        StatusCode::OK,
     )
+    .await
 }
 
 #[tokio::main]

@@ -1,51 +1,37 @@
-//! Thin async client that connects to the daemon control socket, sends one
-//! JSON request and returns the parsed JSON response.
+//! Daemon connection used by every CLI command.
 
 use anyhow::{bail, Context};
 use bp_core::{
     config,
-    control::protocol::{ControlRequest, ControlResponse},
+    control::{
+        client,
+        protocol::{ControlRequest, ControlResponse},
+    },
 };
-use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-    net::UnixStream,
-};
+use std::path::PathBuf;
 
 pub struct ControlClient {
-    stream: UnixStream,
+    socket_path: PathBuf,
 }
 
 impl ControlClient {
-    /// Open a connection to the daemon control socket.
+    /// Locate the daemon control socket (fails if the daemon is not running).
     pub async fn connect() -> anyhow::Result<Self> {
-        let path = config::socket_path()?;
-        if !path.exists() {
+        let socket_path = config::socket_path()?;
+        if !socket_path.exists() {
             bail!("Daemon is not running. Start a service first with: bp hatch <type>");
         }
-        let stream = UnixStream::connect(&path)
-            .await
-            .with_context(|| format!("Cannot connect to control socket at {:?}", path))?;
-        Ok(Self { stream })
+        Ok(Self { socket_path })
     }
 
-    /// Send a request and receive a response.
+    /// Send a request and receive the raw response.
     pub async fn send(&mut self, req: ControlRequest) -> anyhow::Result<ControlResponse> {
-        let (read_half, mut write_half) = self.stream.split();
-
-        let mut json = serde_json::to_string(&req)?;
-        json.push('\n');
-        write_half.write_all(json.as_bytes()).await?;
-
-        let mut reader = BufReader::new(read_half);
-        let mut line = String::new();
-        reader.read_line(&mut line).await?;
-
-        let resp: ControlResponse = serde_json::from_str(line.trim())
-            .with_context(|| format!("Invalid response from daemon: {}", line))?;
-        Ok(resp)
+        client::send(&self.socket_path, &req)
+            .await
+            .context("Daemon request failed")
     }
 
-    /// Convenience: send and unwrap an Ok response (or bail on Error).
+    /// Send a request; return its data on `Ok`, bail on `Error`.
     pub async fn request(
         &mut self,
         req: ControlRequest,

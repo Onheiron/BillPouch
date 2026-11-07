@@ -166,10 +166,6 @@ impl ControlResponse {
         ControlResponse::Ok { data: Some(v) }
     }
 
-    pub fn ok_empty() -> Self {
-        ControlResponse::Ok { data: None }
-    }
-
     pub fn err(msg: impl ToString) -> Self {
         ControlResponse::Error {
             message: msg.to_string(),
@@ -248,20 +244,6 @@ pub struct GetFileData {
     pub fragments_used: usize,
     /// How many of those fragments came from remote Pouches.
     pub fragments_remote: usize,
-}
-
-/// Returned by [`ControlRequest::Leave`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LeaveData {
-    pub network_id: String,
-    /// Whether the leave was blocked by active services (only when `force=false`).
-    #[serde(default)]
-    pub blocked: bool,
-    /// Services that were automatically evicted (when `force=true`).
-    #[serde(default)]
-    pub services_auto_evicted: Vec<serde_json::Value>,
-    /// Human-readable summary.
-    pub message: String,
 }
 
 /// Returned by [`ControlRequest::CreateInvite`].
