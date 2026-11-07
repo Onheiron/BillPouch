@@ -357,7 +357,7 @@ async fn handle_swarm_event(
                 ..
             },
         )) => match serde_json::from_slice::<NodeInfo>(&message.data) {
-            Ok(node_info) => {
+            Ok(node_info) if node_info.is_authentic(message.source.as_ref()) => {
                 tracing::debug!(
                     peer=%propagation_source,
                     fingerprint=%node_info.user_fingerprint,
@@ -367,6 +367,13 @@ async fn handle_swarm_event(
                 if let Ok(mut st) = state.write() {
                     st.upsert(node_info);
                 }
+            }
+            Ok(node_info) => {
+                tracing::warn!(
+                    peer=%propagation_source,
+                    claimed=%node_info.peer_id,
+                    "Dropped NodeInfo with an invalid device certificate"
+                );
             }
             Err(_) => {
                 match serde_json::from_slice::<fragment_gossip::FragmentIndexAnnouncement>(

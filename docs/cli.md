@@ -1,18 +1,16 @@
 # CLI reference — `bp`
 
 `bp <command> --help` prints the authoritative flags. Global option:
-`--passphrase <P>` (or `BP_PASSPHRASE`) unlocks a passphrase-protected identity.
-Commands other than `login`, `logout`, `export-identity`, `import-identity`,
-`invite join` and `bootstrap` need a running daemon, which `bp hatch` starts.
+`--passphrase <P>` (or `BP_PASSPHRASE`) unlocks a passphrase-protected SSH key.
+Commands other than `login`, `logout`, `invite join` and `bootstrap` need a
+running daemon, which `bp hatch` starts.
 
 ## Identity
 
 | Command | Description |
 |---------|-------------|
-| `bp login [--alias <name>]` | Create your Ed25519 identity. With `--passphrase` the key is stored encrypted |
-| `bp logout` | Delete the identity from this machine (irreversible: export it first) |
-| `bp export-identity --out <file>` | Write keypair + profile to a portable JSON file |
-| `bp import-identity <file> [--force]` | Install an exported identity (`--force` overwrites) |
+| `bp login [--ssh-key <path>] [--alias <name>]` | Log in on this device. `--ssh-key` uses an existing OpenSSH ed25519 key as your identity; without it a new one is generated (encrypted if `--passphrase` is given). Prints your public key, to share when asking for an invite |
+| `bp logout` | Delete the user key copy, device key and certificate from this machine |
 
 ## Services
 

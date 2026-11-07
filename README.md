@@ -27,7 +27,7 @@ Each node runs one or more services, named after the pelican:
 ```bash
 cargo build --release          # binaries: target/release/bp, target/release/bp-api
 
-bp login --alias carlo         # create your Ed25519 identity
+bp login --ssh-key ~/.ssh/id_ed25519   # your SSH key is your identity (or omit to generate one)
 bp hatch pouch --network friends --tier T1   # starts the daemon, offers 10 GiB
 bp hatch bill  --network friends
 

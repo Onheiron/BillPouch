@@ -1,7 +1,7 @@
 use crate::{
     config,
     error::{BpError, BpResult},
-    identity::{fingerprint_pubkey, Identity},
+    identity::{parse_user_key, Identity},
     storage::network_key::NetworkMetaKey,
 };
 use argon2::Argon2;
@@ -21,7 +21,7 @@ pub struct InvitePayload {
     pub network_id: String,
     pub network_meta_key_hex: String,
     pub inviter_fingerprint: String,
-    pub inviter_pubkey_hex: String,
+    pub inviter_key: String,
     pub invitee_fingerprint: Option<String>,
     pub expires_at: u64,
     pub nonce_hex: String,
@@ -51,7 +51,7 @@ pub fn create_invite(
         network_id: network_id.to_string(),
         network_meta_key_hex: hex::encode(nmk.0),
         inviter_fingerprint: identity.fingerprint.clone(),
-        inviter_pubkey_hex: hex::encode(identity.keypair.public().encode_protobuf()),
+        inviter_key: identity.user_key.clone(),
         invitee_fingerprint,
         expires_at,
         nonce_hex: hex::encode(nonce_bytes),
@@ -60,7 +60,7 @@ pub fn create_invite(
     let payload_json = serde_json::to_vec(&payload).map_err(BpError::Serde)?;
 
     let signature = identity
-        .keypair
+        .user
         .sign(&payload_json)
         .map_err(|e| BpError::Identity(format!("Signing failed: {e}")))?;
 
@@ -122,24 +122,17 @@ pub fn redeem_invite(blob: &str, invite_password: &str) -> BpResult<InvitePayloa
 
     let payload: InvitePayload = serde_json::from_slice(payload_json).map_err(BpError::Serde)?;
 
-    let pubkey_bytes = hex::decode(&payload.inviter_pubkey_hex)
-        .map_err(|e| BpError::Identity(format!("Invalid inviter pubkey hex: {e}")))?;
-    let pubkey = libp2p::identity::PublicKey::try_decode_protobuf(&pubkey_bytes)
-        .map_err(|e| BpError::Identity(format!("Cannot parse inviter pubkey: {e}")))?;
-
+    let (pubkey, expected_fp) = parse_user_key(&payload.inviter_key)?;
     if !pubkey.verify(payload_json, signature) {
         return Err(BpError::Identity(
             "Invite signature verification failed — token may be forged".into(),
         ));
     }
-
-    let expected_fp = fingerprint_pubkey(&pubkey);
     if expected_fp != payload.inviter_fingerprint {
         return Err(BpError::Identity(
             "Invite fingerprint mismatch — token may be tampered".into(),
         ));
     }
-
     let now = chrono::Utc::now().timestamp() as u64;
     if now > payload.expires_at {
         return Err(BpError::Identity(format!(
@@ -183,27 +176,14 @@ fn derive_key(password: &str, salt: &[u8]) -> BpResult<[u8; 32]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::identity::{Identity, UserProfile};
+    use crate::identity::Identity;
     use crate::storage::network_key::NetworkMetaKey;
 
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn make_identity_and_key() -> (Identity, NetworkMetaKey) {
         let nmk = NetworkMetaKey([0xABu8; 32]);
-        let keypair = libp2p::identity::Keypair::generate_ed25519();
-        let peer_id = libp2p::PeerId::from_public_key(&keypair.public());
-        let fp = crate::identity::fingerprint(&keypair);
-        let profile = UserProfile {
-            fingerprint: fp.clone(),
-            alias: Some("tester".into()),
-            created_at: chrono::Utc::now(),
-        };
-        let identity = Identity {
-            keypair,
-            peer_id,
-            fingerprint: fp,
-            profile,
-        };
+        let identity = Identity::in_memory(Some("tester".into())).unwrap();
         (identity, nmk)
     }
 

@@ -8,12 +8,16 @@ pub fn base_dir() -> BpResult<PathBuf> {
         .ok_or_else(|| BpError::Config("Cannot determine home directory".into()))
 }
 
-pub fn identity_path() -> BpResult<PathBuf> {
-    Ok(base_dir()?.join("identity.key"))
+pub fn user_key_path() -> BpResult<PathBuf> {
+    Ok(base_dir()?.join("user_ed25519"))
 }
 
-pub fn encrypted_identity_path() -> BpResult<PathBuf> {
-    Ok(base_dir()?.join("identity.key.enc"))
+pub fn device_key_path() -> BpResult<PathBuf> {
+    Ok(base_dir()?.join("device.key"))
+}
+
+pub fn device_cert_path() -> BpResult<PathBuf> {
+    Ok(base_dir()?.join("device_cert.json"))
 }
 
 pub fn profile_path() -> BpResult<PathBuf> {
