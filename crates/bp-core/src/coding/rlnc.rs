@@ -58,7 +58,10 @@ pub fn encode(chunk: &[u8], k: usize, n: usize) -> BpResult<Vec<EncodedFragment>
     }
 
     let chunk_id = chunk_hash(chunk);
-    let (symbols, sym_size) = split_into_symbols(chunk, k);
+    let mut framed = Vec::with_capacity(8 + chunk.len());
+    framed.extend_from_slice(&(chunk.len() as u64).to_le_bytes());
+    framed.extend_from_slice(chunk);
+    let (symbols, sym_size) = split_into_symbols(&framed, k);
 
     let mut rng = rand::thread_rng();
     let mut fragments = Vec::with_capacity(n);
@@ -199,12 +202,16 @@ pub fn decode(fragments: &[EncodedFragment]) -> BpResult<Vec<u8>> {
         }
     }
 
-    let mut result = Vec::with_capacity(k * sym_size);
+    let mut framed = Vec::with_capacity(k * sym_size);
     for row in &matrix {
-        result.extend_from_slice(&row[k..]);
+        framed.extend_from_slice(&row[k..]);
     }
-
-    Ok(result)
+    let len = framed
+        .get(..8)
+        .map(|b| u64::from_le_bytes(b.try_into().unwrap()) as usize)
+        .filter(|&len| 8 + len <= framed.len())
+        .ok_or_else(|| BpError::Coding("decode: corrupt length header".into()))?;
+    Ok(framed[8..8 + len].to_vec())
 }
 
 pub fn chunk_hash(chunk: &[u8]) -> String {
@@ -365,5 +372,16 @@ mod tests {
     fn decode_error_too_few_fragments() {
         let frags = encode(TEST_CHUNK, 4, 6).unwrap();
         assert!(decode(&frags[..2]).is_err());
+    }
+
+    #[test]
+    fn decode_returns_exact_length_for_any_k() {
+        for len in [1usize, 2, 7, 1000, 1028, 4097] {
+            let chunk: Vec<u8> = (0..len).map(|i| (i * 31 % 251) as u8).collect();
+            for k in 1..=5 {
+                let frags = encode(&chunk, k, k + 3).unwrap();
+                assert_eq!(decode(&frags[3..]).unwrap(), chunk, "len={len} k={k}");
+            }
+        }
     }
 }
