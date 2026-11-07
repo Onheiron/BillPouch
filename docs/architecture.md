@@ -152,6 +152,7 @@ signed ops from the genesis entry and the creator's device certificate:
 | `SetVotingDevice` | Picks which of your devices votes |
 | `Observations` | Adds PoS counts to other users' totals |
 | `ProposeExpel` / `ApproveExpel` | Expulsion vote |
+| `RotateKey` | New network key, wrapped for every current member |
 
 **Epochs** last one day of block time. At the first block of an epoch the
 ledger takes a snapshot of every user's tier and weight; weights stay fixed for
@@ -186,9 +187,21 @@ voting device, so their devices cannot equivocate by accident. Nothing is
 proposed while no op is pending.
 
 **Sync**: commits carry their precommits, so any node can verify them alone.
-A node that sees a commit more than one block ahead asks the sender for the
-missing ones (at most 100 per request); the sender serves them only to a device
-whose certificate belongs to a member (`chain.rs`).
+Every 15 s, and whenever it sees a commit more than one block ahead, a node asks
+its peers for the blocks after its height (at most 100 per request); a peer
+serves them only to a device whose certificate belongs to a current member
+(`chain.rs`).
+
+**Key rotation**: the network key is replaced once per epoch, and as soon as an
+expulsion passes. The ledger holds the commitment `BLAKE3-derive("billpouch/
+key-commitment/v1", key)` of the current key; a `RotateKey` op is valid only
+while a rotation is due, must wrap the new key for exactly the current members
+and sets the new commitment. The rotator is one validator, chosen by epoch and
+moving to the next one every 60 s until a rotation is committed. Every member
+opens its own wrap, checks it against the commitment and moves to the new gossip
+topic, listening on the old one for 10 more minutes. Expelled members get no
+wrap, so they no longer read or reach the gossip, and nobody serves them blocks.
+Invitations carry the commitment too: one made with an old key is rejected.
 
 ## Identity and access
 
@@ -203,8 +216,8 @@ whose certificate belongs to a member (`chain.rs`).
   `user_fingerprint`.
 - **Network**: rooted in a genesis entry signed by the creator; the genesis hash
   identifies the network. Membership is whatever the ledger says.
-- **Network key**: 32 random bytes made at creation. Every entry carries it
-  encrypted for the new member: X25519 (from the member's ed25519 key) with an
+- **Network key**: 32 random bytes, made at creation and at every rotation.
+  Every entry or rotation carries it encrypted for each member: X25519 (from the member's ed25519 key) with an
   ephemeral key, BLAKE3-derived wrapping key, ChaCha20-Poly1305. It never travels
   in clear and only the member it was wrapped for can open it.
 - **Invites**: `bp invite` submits an `AddMember` op, waits for it to be

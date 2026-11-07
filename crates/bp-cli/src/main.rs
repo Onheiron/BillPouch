@@ -125,6 +125,23 @@ enum Cmd {
         token: String,
     },
 
+    #[command(about = "List the members of a network with their reputation and weight")]
+    Members {
+        #[arg(help = "The network")]
+        network_id: String,
+    },
+
+    #[command(
+        about = "Propose or approve expelling a member",
+        long_about = "Propose or approve expelling a member.\n\nThe first call proposes (needs R3, or the creator while nobody is R3); later calls by other members approve (needs R1). The member is out when the approvals hold more than 2/3 of the other members' weight and at least half of them; the network key is then rotated without them."
+    )]
+    Expel {
+        #[arg(help = "The network")]
+        network_id: String,
+        #[arg(help = "Fingerprint of the member, as `bp members` shows it (SHA256:...)")]
+        member: String,
+    },
+
     #[command(
         about = "Leave a network",
         long_about = "Leave a network.\n\nWithout `--force`: fails if any services are still active on the network. Use `bp farewell <id> --evict` (Pouch) or `bp farewell <id>` (Bill/Post) first.\n\nWith `--force`: automatically evicts all active services on the network, then leaves.  Equivalent to running `bp farewell --evict` on each Pouch and `bp farewell` on each Bill/Post, then leaving."
@@ -350,6 +367,14 @@ async fn main() -> anyhow::Result<()> {
 
         Some(Cmd::Join { token }) => {
             commands::network::join(token, cli.passphrase.clone()).await?;
+        }
+
+        Some(Cmd::Members { network_id }) => {
+            commands::network::members(network_id, cli.passphrase.clone()).await?;
+        }
+
+        Some(Cmd::Expel { network_id, member }) => {
+            commands::network::expel(network_id, member, cli.passphrase.clone()).await?;
         }
 
         Some(Cmd::Leave { network_id, force }) => {

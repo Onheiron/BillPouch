@@ -4,17 +4,20 @@ use crate::{
     error::{BpError, BpResult},
     identity::{DeviceCert, Identity},
     ledger::{Ledger, Observation, Op, SignedOp, EPOCH_SECS, MAX_CHALLENGES_PER_DEVICE_PER_EPOCH},
-    membership::{genesis, invite_entry, Entry, Invite},
+    membership::{
+        genesis, invite_entry, key_commitment, new_key, open_key, wrap_for, Entry, Invite,
+    },
     network::ReputationTier,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, RwLock};
 
 pub const SYNC_BATCH: usize = 100;
 const RESUBMIT_MS: u64 = 60_000;
 const SYNC_RETRY_MS: u64 = 5_000;
 const REPORT_AT: f64 = 0.9;
+const ROTATION_SLOT_SECS: u64 = 60;
 
 pub type Chains = Arc<RwLock<HashMap<String, Chain>>>;
 
@@ -42,6 +45,14 @@ pub fn observe(log: &ObservationLog, device: &str, passed: bool, now_ms: u64) {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExpelOutcome {
+    Proposed,
+    Approved,
+    Expelled,
+}
+
 #[derive(Serialize, Deserialize)]
 struct Stored {
     genesis: Entry,
@@ -54,11 +65,13 @@ pub struct Chain {
     pub name: String,
     pub key: [u8; 32],
     pub engine: Engine,
+    me: Identity,
     genesis: Entry,
     creator_device: DeviceCert,
     own_entry: Entry,
     commits: Vec<Commit>,
     device_submitted_ms: u64,
+    rotation_submitted_ms: u64,
     reported_epoch: Option<u64>,
     sync_requested_ms: u64,
     persistent: bool,
@@ -93,11 +106,13 @@ impl Chain {
             name: genesis.body.network.clone(),
             key,
             engine: Engine::new(identity, ledger),
+            me: identity.clone(),
             genesis,
             creator_device,
             own_entry,
             commits: Vec::new(),
             device_submitted_ms: 0,
+            rotation_submitted_ms: 0,
             reported_epoch: None,
             sync_requested_ms: 0,
             persistent: false,
@@ -128,15 +143,10 @@ impl Chain {
         self.tier(self.engine.ledger.device_owner(device)?)
     }
 
-    pub fn invite(
-        &mut self,
-        identity: &Identity,
-        member_key: &str,
-        now_ms: u64,
-    ) -> BpResult<Invite> {
-        let entry = invite_entry(identity, &self.genesis, &self.key, member_key)?;
+    pub fn invite(&mut self, member_key: &str, now_ms: u64) -> BpResult<Invite> {
+        let entry = invite_entry(&self.me, &self.genesis, &self.key, member_key)?;
         let op = SignedOp::sign(
-            identity,
+            &self.me,
             Op::AddMember {
                 entry: entry.clone(),
             },
@@ -150,6 +160,36 @@ impl Chain {
         })
     }
 
+    pub fn expel(&mut self, member: &str, now_ms: u64) -> BpResult<()> {
+        let op = if self.engine.ledger.expel_approvals.contains_key(member) {
+            Op::ApproveExpel {
+                member: member.to_string(),
+            }
+        } else {
+            Op::ProposeExpel {
+                member: member.to_string(),
+            }
+        };
+        let op = SignedOp::sign(&self.me, op)?;
+        self.engine.submit(op, now_ms)?;
+        self.record();
+        Ok(())
+    }
+
+    pub fn expel_outcome(&self, member: &str) -> Option<ExpelOutcome> {
+        let ledger = &self.engine.ledger;
+        if ledger.expelled.contains(member) {
+            return Some(ExpelOutcome::Expelled);
+        }
+        let approvals = ledger.expel_approvals.get(member)?;
+        let outcome = if approvals.len() == 1 {
+            ExpelOutcome::Proposed
+        } else {
+            ExpelOutcome::Approved
+        };
+        approvals.contains(&self.me.fingerprint).then_some(outcome)
+    }
+
     pub fn handle(&mut self, msg: ConsensusMsg, now_ms: u64) -> bool {
         let behind = matches!(&msg, ConsensusMsg::Commit { commit } if commit.block.height > self.height() + 1);
         self.engine.handle(msg, now_ms);
@@ -157,9 +197,10 @@ impl Chain {
         behind && self.want_sync(now_ms)
     }
 
-    pub fn tick(&mut self, identity: &Identity, log: &ObservationLog, now_ms: u64) {
-        self.register_device(identity, now_ms);
-        self.report(identity, log, now_ms);
+    pub fn tick(&mut self, log: &ObservationLog, now_ms: u64) {
+        self.register_device(now_ms);
+        self.report(log, now_ms);
+        self.rotate(now_ms);
         self.engine.tick(now_ms);
         self.record();
     }
@@ -206,6 +247,7 @@ impl Chain {
             return;
         }
         self.commits.extend(new);
+        self.refresh_key();
         if !self.persistent {
             return;
         }
@@ -214,37 +256,52 @@ impl Chain {
         }
     }
 
-    fn register_device(&mut self, identity: &Identity, now_ms: u64) {
+    fn refresh_key(&mut self) {
         let ledger = &self.engine.ledger;
-        let device = identity.peer_id.to_string();
-        if !ledger.is_member(&identity.fingerprint)
-            || ledger.devices.contains_key(&device)
+        if key_commitment(&self.key) == ledger.commitment {
+            return;
+        }
+        let Some(wrapped) = ledger.key_wraps.get(&self.me.fingerprint) else {
+            return;
+        };
+        match open_key(wrapped, &ledger.commitment, &self.me) {
+            Ok(key) => {
+                self.key = key;
+                tracing::info!(network = %self.name, "network key rotated");
+            }
+            Err(e) => tracing::warn!(network = %self.name, "cannot open the rotated key: {e}"),
+        }
+    }
+
+    fn submit(&mut self, op: Op, now_ms: u64, what: &str) {
+        let result = SignedOp::sign(&self.me, op).and_then(|op| self.engine.submit(op, now_ms));
+        if let Err(e) = result {
+            tracing::warn!(network = %self.name, "cannot {what}: {e}");
+        }
+    }
+
+    fn register_device(&mut self, now_ms: u64) {
+        let ledger = &self.engine.ledger;
+        if !ledger.is_member(&self.me.fingerprint)
+            || ledger.devices.contains_key(&self.me.peer_id.to_string())
             || now_ms < self.device_submitted_ms + RESUBMIT_MS
         {
             return;
         }
         self.device_submitted_ms = now_ms;
-        let op = SignedOp::sign(
-            identity,
-            Op::RegisterDevice {
-                cert: identity.cert.clone(),
-            },
-        );
-        if let Err(e) = op.and_then(|op| self.engine.submit(op, now_ms)) {
-            tracing::warn!(network = %self.name, "cannot register this device: {e}");
-        }
+        let cert = self.me.cert.clone();
+        self.submit(Op::RegisterDevice { cert }, now_ms, "register this device");
     }
 
-    fn report(&mut self, identity: &Identity, log: &ObservationLog, now_ms: u64) {
+    fn report(&mut self, log: &ObservationLog, now_ms: u64) {
         let epoch = epoch_of(now_ms);
         let into_epoch = (now_ms / 1000 % EPOCH_SECS) as f64 / EPOCH_SECS as f64;
         let ledger = &self.engine.ledger;
+        let me = &self.me.fingerprint;
         if into_epoch < REPORT_AT
             || self.reported_epoch == Some(epoch)
-            || !ledger.is_member(&identity.fingerprint)
-            || ledger
-                .reported
-                .contains(&(identity.fingerprint.clone(), epoch))
+            || !ledger.is_member(me)
+            || ledger.reported.contains(&(me.clone(), epoch))
         {
             return;
         }
@@ -256,7 +313,7 @@ impl Chain {
                     .filter(|(_, t)| t.epoch == epoch && t.sent > 0)
                     .filter_map(|(device, t)| {
                         let user = ledger.device_owner(device)?;
-                        (user != identity.fingerprint && ledger.is_member(user)).then(|| {
+                        (user != me && ledger.is_member(user)).then(|| {
                             let sent = t.sent.min(MAX_CHALLENGES_PER_DEVICE_PER_EPOCH);
                             Observation {
                                 device: device.clone(),
@@ -269,12 +326,59 @@ impl Chain {
                     .collect()
             })
             .unwrap_or_default();
-        if results.is_empty() {
+        if !results.is_empty() {
+            self.submit(
+                Op::Observations { epoch, results },
+                now_ms,
+                "report observations",
+            );
+        }
+    }
+
+    fn rotation_turn(&self, now_secs: u64) -> bool {
+        let ledger = &self.engine.ledger;
+        let Some(since) = ledger.rotation_due(now_secs) else {
+            return false;
+        };
+        let rotators: Vec<&String> = ledger
+            .snapshot
+            .users
+            .iter()
+            .filter(|(user, s)| s.weight > 0 && ledger.voting_device(user).is_some())
+            .map(|(user, _)| user)
+            .collect();
+        if rotators.is_empty() {
+            return false;
+        }
+        let slot = now_secs.saturating_sub(since) / ROTATION_SLOT_SECS;
+        let turn = (now_secs / EPOCH_SECS + slot) % rotators.len() as u64;
+        rotators[turn as usize] == &self.me.fingerprint
+            && ledger.voting_device(&self.me.fingerprint) == Some(&self.me.peer_id.to_string())
+    }
+
+    fn rotate(&mut self, now_ms: u64) {
+        if now_ms < self.rotation_submitted_ms + RESUBMIT_MS || !self.rotation_turn(now_ms / 1000) {
             return;
         }
-        let op = SignedOp::sign(identity, Op::Observations { epoch, results });
-        if let Err(e) = op.and_then(|op| self.engine.submit(op, now_ms)) {
-            tracing::warn!(network = %self.name, "cannot report observations: {e}");
+        self.rotation_submitted_ms = now_ms;
+        let key = new_key();
+        let wrapped: BpResult<BTreeMap<_, _>> = self
+            .engine
+            .ledger
+            .active_members()
+            .map(|(user, member)| Ok((user.clone(), wrap_for(&key, &member.key)?)))
+            .collect();
+        match wrapped {
+            Ok(wrapped) => self.submit(
+                Op::RotateKey {
+                    epoch: epoch_of(now_ms),
+                    wrapped,
+                    commitment: key_commitment(&key),
+                },
+                now_ms,
+                "rotate the network key",
+            ),
+            Err(e) => tracing::warn!(network = %self.name, "cannot wrap the new key: {e}"),
         }
     }
 
@@ -344,61 +448,122 @@ pub fn now_ms() -> u64 {
 mod tests {
     use super::*;
 
-    fn deliver(from: &mut Chain, to: &mut Chain, now: u64) {
-        for msg in from.outbox() {
-            to.handle(msg, now);
+    struct Net {
+        people: Vec<Identity>,
+        chains: Vec<Chain>,
+        log: ObservationLog,
+        now: u64,
+    }
+
+    impl Net {
+        fn new(n: usize) -> Self {
+            let people: Vec<Identity> =
+                (0..n).map(|_| Identity::in_memory(None).unwrap()).collect();
+            let first = Chain::create(&people[0], "amici").unwrap();
+            let now = first.ledger().time * 1000 + 1000;
+            let mut net = Self {
+                people,
+                chains: vec![first],
+                log: ObservationLog::default(),
+                now,
+            };
+            for i in 1..n {
+                let key = net.people[i].user_key.clone();
+                let invite = net.chains[0].invite(&key, net.now).unwrap();
+                let mut chain = Chain::from_invite(&net.people[i], invite).unwrap();
+                chain.apply_synced(net.chains[0].commits_from(0), net.now);
+                net.chains.push(chain);
+                net.settle();
+            }
+            net
+        }
+
+        fn settle(&mut self) {
+            for _ in 0..10 {
+                for i in 0..self.chains.len() {
+                    self.chains[i].tick(&self.log, self.now);
+                    let msgs = self.chains[i].outbox();
+                    for j in 0..self.chains.len() {
+                        if i != j {
+                            for msg in msgs.clone() {
+                                if self.chains[j].handle(msg, self.now) {
+                                    let from = self.chains[j].height();
+                                    let missing = self.chains[i].commits_from(from);
+                                    self.chains[j].apply_synced(missing, self.now);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        fn fp(&self, i: usize) -> String {
+            self.people[i].fingerprint.clone()
         }
     }
 
     #[test]
     fn invite_commits_and_the_invitee_catches_up_and_registers_its_device() {
-        let carlo = Identity::in_memory(None).unwrap();
-        let marco = Identity::in_memory(None).unwrap();
-        let log = ObservationLog::default();
-        let mut a = Chain::create(&carlo, "amici").unwrap();
-        let now = a.ledger().time * 1000 + 1000;
-        let invite = a.invite(&carlo, &marco.user_key, now).unwrap();
-        assert!(a.is_member(&marco.fingerprint));
-        assert_eq!(a.commits.len(), 1);
-
-        let mut b = Chain::from_invite(&marco, invite).unwrap();
-        assert!(!b.is_member(&marco.fingerprint));
-        b.apply_synced(a.commits_from(0), now);
-        assert!(b.is_member(&marco.fingerprint));
-
-        b.tick(&marco, &log, now);
-        deliver(&mut b, &mut a, now);
-        a.tick(&carlo, &log, now);
-        deliver(&mut a, &mut b, now);
-        let device = marco.peer_id.to_string();
-        assert!(a.ledger().devices.contains_key(&device));
-        assert!(b.ledger().devices.contains_key(&device));
-        assert_eq!(a.ledger().head, b.ledger().head);
+        let net = Net::new(2);
+        let device = net.people[1].peer_id.to_string();
+        assert!(net.chains[0].is_member(&net.fp(1)));
+        assert!(net.chains[0].ledger().devices.contains_key(&device));
+        assert!(net.chains[1].ledger().devices.contains_key(&device));
+        assert_eq!(net.chains[0].ledger().head, net.chains[1].ledger().head);
+        assert_eq!(net.chains[0].key, net.chains[1].key);
     }
 
     #[test]
     fn observations_are_reported_near_the_end_of_the_epoch() {
-        let carlo = Identity::in_memory(None).unwrap();
-        let marco = Identity::in_memory(None).unwrap();
-        let log = ObservationLog::default();
-        let mut a = Chain::create(&carlo, "amici").unwrap();
-        let start = a.ledger().time * 1000;
-        let invite = a.invite(&carlo, &marco.user_key, start).unwrap();
-        let mut b = Chain::from_invite(&marco, invite).unwrap();
-        b.apply_synced(a.commits_from(0), start);
-        b.tick(&marco, &log, start);
-        deliver(&mut b, &mut a, start);
-        a.tick(&carlo, &log, start);
-
-        let epoch_start = (epoch_of(start) + 1) * EPOCH_SECS * 1000;
-        let device = marco.peer_id.to_string();
+        let mut net = Net::new(2);
+        let epoch_start = (epoch_of(net.now) + 1) * EPOCH_SECS * 1000;
+        let device = net.people[1].peer_id.to_string();
         for i in 0..10 {
-            observe(&log, &device, i != 0, epoch_start + 1);
+            observe(&net.log, &device, i != 0, epoch_start + 1);
         }
-        a.tick(&carlo, &log, epoch_start + 1000);
-        assert_eq!(a.ledger().members[&marco.fingerprint].sent, 0);
-        a.tick(&carlo, &log, epoch_start + EPOCH_SECS * 950);
-        let member = &a.ledger().members[&marco.fingerprint];
+        net.now = epoch_start + 1000;
+        net.settle();
+        assert_eq!(net.chains[0].ledger().members[&net.fp(1)].sent, 0);
+        net.now = epoch_start + EPOCH_SECS * 950;
+        net.settle();
+        let member = &net.chains[0].ledger().members[&net.fp(1)];
         assert_eq!((member.sent, member.passed), (10, 9));
+    }
+
+    #[test]
+    fn the_key_rotates_every_epoch_for_every_member() {
+        let mut net = Net::new(3);
+        let old = net.chains[0].key;
+        net.now = (epoch_of(net.now) + 1) * EPOCH_SECS * 1000 + 1000;
+        net.settle();
+        assert_ne!(net.chains[0].key, old);
+        assert!(net.chains.iter().all(|c| c.key == net.chains[0].key));
+        let rotated = net.chains[0].key;
+        net.now += 3_600_000;
+        net.settle();
+        assert_eq!(net.chains[0].key, rotated);
+    }
+
+    #[test]
+    fn an_expelled_member_does_not_get_the_new_key() {
+        let mut net = Net::new(3);
+        let old = net.chains[0].key;
+        let lucia = net.fp(2);
+        net.chains[0].expel(&lucia, net.now).unwrap();
+        assert_eq!(
+            net.chains[0].expel_outcome(&lucia),
+            Some(ExpelOutcome::Expelled)
+        );
+        net.settle();
+        assert!(!net.chains[1].is_member(&lucia));
+        assert_ne!(net.chains[0].key, old);
+        assert_eq!(net.chains[0].key, net.chains[1].key);
+        assert_eq!(net.chains[2].key, old);
+
+        let key = Identity::in_memory(None).unwrap().user_key;
+        let entry = invite_entry(&net.people[0], &net.chains[0].genesis, &old, &key).unwrap();
+        let stale = SignedOp::sign(&net.people[0], Op::AddMember { entry }).unwrap();
+        assert!(net.chains[0].engine.submit(stale, net.now).is_err());
     }
 }

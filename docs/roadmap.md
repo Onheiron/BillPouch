@@ -12,7 +12,7 @@ Alpha. Current version in `version.txt`; history in [CHANGELOG.md](../CHANGELOG.
 - Ping and Proof-of-Storage loops → QoS, fault score, rerouting of fragments
   away from suspected peers.
 - Invite-only networks: network key wrapped per member, encrypted gossip, members-only fragment exchange.
-- Shared ledger per network, committed by weighted BFT consensus: members, devices, per-user reputation from PoS observations, epoch snapshots, capabilities, expulsion votes.
+- Shared ledger per network, committed by weighted BFT consensus: members, devices, per-user reputation from PoS observations, epoch snapshots, capabilities, expulsion votes, network key rotation every epoch and after each expulsion.
 - `pause` / `resume`, `farewell --evict`, `leave [--force]`, `ls`, `storage`, `status`.
 - REST gateway with dashboard; Docker smoke test and playground.
 
@@ -25,14 +25,12 @@ Alpha. Current version in `version.txt`; history in [CHANGELOG.md](../CHANGELOG.
 | State | QoS is in memory and resets when the daemon restarts |
 | Leave / evict | Neither fetches your files nor redistributes the evicted fragments; the network relies on PoS rerouting |
 | Placement | Round-robin; tiers and reputation do not influence where fragments go or how k/n is computed per tier |
-| Expulsion | An expelled member keeps the network key until it is rotated |
 | Available space | Comes out as 0 until enough reliable peers are known |
 | `bp-api` | No authentication; bind to localhost only |
 
 ## Next
 
-1. Expulsion with network key rotation: a new key wrapped for the remaining members, committed in the ledger.
-2. Envelope encryption: per-file key wrapped for every authorized key, encrypted personal index, sharing files with other users, adding devices.
-3. Deterministic placement: preferably one fragment per node, at most ⌊k/4⌋; exact Poisson-binomial k/n; owner-signed fetch and repair permissions.
-4. Proof-of-Storage by filling the bid with fragments or random data, Merkle challenges anyone can verify, credit = verified bytes.
-5. Real chunking and streaming for `put` / `get`.
+1. Envelope encryption: per-file key wrapped for every authorized key, encrypted personal index, sharing files with other users, adding devices.
+2. Deterministic placement: preferably one fragment per node, at most ⌊k/4⌋; exact Poisson-binomial k/n; owner-signed fetch and repair permissions.
+3. Proof-of-Storage by filling the bid with fragments or random data, Merkle challenges anyone can verify, credit = verified bytes.
+4. Real chunking and streaming for `put` / `get`.
