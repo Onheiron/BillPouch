@@ -355,7 +355,6 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             if service_type == ServiceType::Pouch {
                 let quota = metadata
                     .get("storage_bytes")
-                    .or_else(|| metadata.get("storage_bytes_bid"))
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0);
 
@@ -1017,19 +1016,6 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                                     break;
                                 }
                                 match EncodedFragment::from_bytes(frag_id, chunk_id.clone(), &bytes)
-                                {
-                                    Ok(f) => {
-                                        all_fragments.push(f);
-                                        fragments_remote += 1;
-                                    }
-                                    Err(e) => tracing::warn!("Remote fragment parse error: {e}"),
-                                }
-                            }
-                        }
-                        Ok(Ok(FragmentResponse::Found { data })) => {
-                            if all_fragments.len() < k_needed {
-                                let frag_id = uuid::Uuid::new_v4().to_string();
-                                match EncodedFragment::from_bytes(frag_id, chunk_id.clone(), &data)
                                 {
                                     Ok(f) => {
                                         all_fragments.push(f);

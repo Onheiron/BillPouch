@@ -35,11 +35,11 @@ use tracing::instrument;
     long_about = None
 )]
 struct Args {
-    /// TCP port to listen on.
+    #[arg(help = "TCP port to listen on")]
     #[arg(long, default_value_t = 3000)]
     port: u16,
 
-    /// Host address to bind.
+    #[arg(help = "Host address to bind")]
     #[arg(long, default_value = "127.0.0.1")]
     host: String,
 }

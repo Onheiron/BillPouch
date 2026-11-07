@@ -221,19 +221,8 @@ impl Identity {
         let peer_id = libp2p::PeerId::from_public_key(&keypair.public());
         let fp = fingerprint(&keypair);
 
-        let profile: UserProfile = {
-            let profile_path = config::profile_path()?;
-            if profile_path.exists() {
-                let json = std::fs::read_to_string(&profile_path).map_err(BpError::Io)?;
-                serde_json::from_str(&json)?
-            } else {
-                UserProfile {
-                    fingerprint: fp.clone(),
-                    alias: None,
-                    created_at: chrono::Utc::now(),
-                }
-            }
-        };
+        let profile: UserProfile =
+            serde_json::from_str(&std::fs::read_to_string(config::profile_path()?)?)?;
 
         Ok(Self {
             keypair,

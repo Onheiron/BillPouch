@@ -108,8 +108,6 @@ pub enum NetworkCommand {
         chunk_id: String,
         resp_tx: tokio::sync::oneshot::Sender<FragmentResponse>,
     },
-    /// Ask the network loop to exit cleanly.
-    Shutdown,
     /// Dial a relay node and create a circuit reservation.
     ///
     /// After a successful reservation the node becomes reachable at
@@ -272,11 +270,6 @@ pub async fn run_network_loop(
                 match cmd {
                     None => {
                         tracing::info!("Network command channel closed — shutting down");
-                        save_kad_peers(&local_kad_peers);
-                        break;
-                    }
-                    Some(NetworkCommand::Shutdown) => {
-                        tracing::info!("Network shutdown requested");
                         save_kad_peers(&local_kad_peers);
                         break;
                     }
@@ -684,30 +677,6 @@ fn serve_fragment_request(
 ) -> FragmentResponse {
     let managers = storage_managers.read().unwrap();
     match req {
-        FragmentRequest::Fetch {
-            chunk_id,
-            fragment_id,
-        } => {
-            for sm_arc in managers.values() {
-                let sm = sm_arc.read().unwrap();
-                if sm
-                    .index
-                    .fragments_for_chunk(chunk_id)
-                    .iter()
-                    .any(|m| m.fragment_id == *fragment_id)
-                {
-                    match sm.load_fragment(chunk_id, fragment_id) {
-                        Ok(fragment) => {
-                            return FragmentResponse::Found {
-                                data: fragment.to_bytes(),
-                            }
-                        }
-                        Err(e) => tracing::warn!("serve_fragment load error: {e}"),
-                    }
-                }
-            }
-            FragmentResponse::NotFound
-        }
         FragmentRequest::FetchChunkFragments { chunk_id } => {
             let mut fragments = Vec::new();
             for sm_arc in managers.values() {

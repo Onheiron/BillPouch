@@ -64,7 +64,6 @@ pub enum ControlRequest {
     Leave {
         network_id: String,
         /// Auto-evict all blocking services, then leave.
-        #[serde(default)]
         force: bool,
     },
     /// Return info about this daemon (identity, services, networks).
@@ -93,7 +92,6 @@ pub enum ControlRequest {
         network_id: String,
         /// Optional file name to record in the local file registry.
         /// Displayed by `bp ls`.
-        #[serde(default)]
         file_name: Option<String>,
     },
     /// Retrieve and decode a stored file chunk by its `chunk_id`.
@@ -134,7 +132,6 @@ pub enum ControlRequest {
     /// total bytes uploaded by this node's Bill services.
     StorageInfo {
         /// Filter to a specific network (empty string = all networks).
-        #[serde(default)]
         network_id: String,
     },
     /// List files uploaded by this node.
@@ -142,7 +139,6 @@ pub enum ControlRequest {
     /// Returns entries from the local file registry populated by `PutFile`.
     ListFiles {
         /// Filter to a specific network (empty string = all networks).
-        #[serde(default)]
         network_id: String,
     },
 }

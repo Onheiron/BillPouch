@@ -1572,7 +1572,7 @@ async fn network_loop_accetta_e_processa_comandi() {
     tokio::time::sleep(std::time::Duration::from_millis(150)).await;
 
     // ── Shutdown pulito ────────────────────────────────────────────────────
-    let _ = cmd_tx.send(NetworkCommand::Shutdown).await;
+    drop(cmd_tx);
 
     let result = tokio::time::timeout(std::time::Duration::from_secs(3), handle).await;
     match result {

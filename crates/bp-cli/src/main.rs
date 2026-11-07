@@ -38,12 +38,13 @@ const DEFAULT_NETWORK: &str = "public";
     long_about = None,
 )]
 struct Cli {
-    /// (Internal) Run as background daemon — not meant to be called directly.
+    #[arg(help = "(Internal) Run as background daemon — not meant to be called directly")]
     #[arg(long, hide = true)]
     daemon: bool,
 
-    /// Passphrase to unlock a passphrase-protected identity.
-    /// Can also be set via the `BP_PASSPHRASE` environment variable.
+    #[arg(
+        help = "Passphrase to unlock a passphrase-protected identity. Can also be set via the `BP_PASSPHRASE` environment variable"
+    )]
     #[arg(long, global = true, env = "BP_PASSPHRASE")]
     passphrase: Option<String>,
 
@@ -53,203 +54,203 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Create your identity (keypair) and log in to BillPouch.
+    #[command(about = "Create your identity (keypair) and log in to BillPouch")]
     Login {
-        /// Optional human-readable alias for this identity.
+        #[arg(help = "Optional human-readable alias for this identity")]
         #[arg(long, short)]
         alias: Option<String>,
-        /// Encrypt the identity key with a passphrase (Argon2id + ChaCha20-Poly1305).
-        /// Leave empty for a plaintext key (backwards-compatible).
+        #[arg(
+            help = "Encrypt the identity key with a passphrase (Argon2id + ChaCha20-Poly1305). Without it the key is stored unencrypted"
+        )]
         #[arg(long)]
         passphrase: Option<String>,
     },
 
-    /// Remove your identity from this machine.
+    #[command(about = "Remove your identity from this machine")]
     Logout,
 
-    /// Export your identity (keypair + profile) to a portable JSON file.
-    ///
-    /// Use this to move your identity to another machine.  On the target
-    /// machine run `bp import-identity <file>`.
+    #[command(
+        about = "Export your identity (keypair + profile) to a portable JSON file",
+        long_about = "Export your identity (keypair + profile) to a portable JSON file.\n\nUse this to move your identity to another machine.  On the target machine run `bp import-identity <file>`."
+    )]
     ExportIdentity {
-        /// File path to write the exported identity to.
+        #[arg(help = "File path to write the exported identity to")]
         #[arg(long, short)]
         out: String,
     },
 
-    /// Import an identity previously exported with `bp export-identity`.
-    ///
-    /// Installs the keypair and profile into the local XDG data directory.
-    /// Fails if an identity already exists unless `--force` is specified.
+    #[command(
+        about = "Import an identity previously exported with `bp export-identity`",
+        long_about = "Import an identity previously exported with `bp export-identity`.\n\nInstalls the keypair and profile into the local XDG data directory. Fails if an identity already exists unless `--force` is specified."
+    )]
     ImportIdentity {
-        /// Path to the identity export file.
+        #[arg(help = "Path to the identity export file")]
         path: String,
 
-        /// Overwrite any existing identity without prompting.
+        #[arg(help = "Overwrite any existing identity without prompting")]
         #[arg(long)]
         force: bool,
     },
 
-    /// Hatch (start) a new service: bill | pouch | post.
+    #[command(about = "Hatch (start) a new service: bill | pouch | post")]
     Hatch {
-        /// Service type to start: bill | pouch | post.
+        #[arg(help = "Service type to start: bill | pouch | post")]
         service_type: String,
 
-        /// Network ID to join (default: "public").
+        #[arg(help = "Network ID to join (default: \"public\")")]
         #[arg(long, short, default_value = DEFAULT_NETWORK)]
         network: String,
 
-        /// For pouch: storage tier to contribute
-        /// (T1=10 GiB, T2=100 GiB, T3=500 GiB, T4=1 TiB, T5=5 TiB).
+        #[arg(
+            help = "For pouch: storage tier to contribute (T1=10 GiB, T2=100 GiB, T3=500 GiB, T4=1 TiB, T5=5 TiB)"
+        )]
         #[arg(long)]
         tier: Option<String>,
     },
 
-    /// Show all known peers and network info.
+    #[command(about = "Show all known peers and network info")]
     Flock,
 
-    /// Show daemon identity and active services (compact view).
-    ///
-    /// For the full peer list and network summary use `bp flock`.
+    #[command(
+        about = "Show daemon identity and active services (compact view)",
+        long_about = "Show daemon identity and active services (compact view).\n\nFor the full peer list and network summary use `bp flock`."
+    )]
     Status,
 
-    /// Kill a running service by its service ID.
+    #[command(about = "Kill a running service by its service ID")]
     Farewell {
-        /// The service ID returned by `bp hatch`.
+        #[arg(help = "The service ID returned by `bp hatch`")]
         service_id: String,
-        /// Permanently evict a Pouch: purges all local fragment storage and
-        /// announces to the network that this node is going offline for good.
-        /// This is irreversible.
+        #[arg(
+            help = "Permanently evict a Pouch: purges all local fragment storage and announces to the network that this node is going offline for good. This is irreversible"
+        )]
         #[arg(long)]
         evict: bool,
     },
 
-    /// Pause a running service for planned maintenance.
-    ///
-    /// Announces to the network that this node will be temporarily offline.
-    /// If the service does not resume before the ETA expires, fault-score
-    /// increments will be applied by the quality monitor.
+    #[command(
+        about = "Pause a running service for planned maintenance",
+        long_about = "Pause a running service for planned maintenance.\n\nAnnounces to the network that this node will be temporarily offline. If the service does not resume before the ETA expires, fault-score increments will be applied by the quality monitor."
+    )]
     Pause {
-        /// The service ID to pause.
+        #[arg(help = "The service ID to pause")]
         service_id: String,
-        /// Estimated downtime in minutes.
+        #[arg(help = "Estimated downtime in minutes")]
         #[arg(long, short)]
         eta: u64,
     },
 
-    /// Resume a previously paused service.
-    ///
-    /// Re-announces the node as available and triggers an immediate
-    /// Proof-of-Storage challenge to clear any pending fault-score penalties.
+    #[command(
+        about = "Resume a previously paused service",
+        long_about = "Resume a previously paused service.\n\nRe-announces the node as available and triggers an immediate Proof-of-Storage challenge to clear any pending fault-score penalties."
+    )]
     Resume {
-        /// The service ID to resume.
+        #[arg(help = "The service ID to resume")]
         service_id: String,
     },
 
-    /// Subscribe to a network's gossip topic (used by scripts/automation).
+    #[command(about = "Subscribe to a network's gossip topic (used by scripts/automation)")]
     #[clap(hide = true)]
     Join {
-        /// The network identifier to subscribe to.
+        #[arg(help = "The network identifier to subscribe to")]
         network_id: String,
     },
 
-    /// Leave a network.
-    ///
-    /// Without `--force`: fails if any services are still active on the network.
-    /// Use `bp farewell <id> --evict` (Pouch) or `bp farewell <id>` (Bill/Post) first.
-    ///
-    /// With `--force`: automatically evicts all active services on the network,
-    /// then leaves.  Equivalent to running `bp farewell --evict` on each Pouch
-    /// and `bp farewell` on each Bill/Post, then leaving.
+    #[command(
+        about = "Leave a network",
+        long_about = "Leave a network.\n\nWithout `--force`: fails if any services are still active on the network. Use `bp farewell <id> --evict` (Pouch) or `bp farewell <id>` (Bill/Post) first.\n\nWith `--force`: automatically evicts all active services on the network, then leaves.  Equivalent to running `bp farewell --evict` on each Pouch and `bp farewell` on each Bill/Post, then leaving."
+    )]
     Leave {
-        /// The network to leave.
+        #[arg(help = "The network to leave")]
         network_id: String,
-        /// Auto-evict all blocking services before leaving.
+        #[arg(help = "Auto-evict all blocking services before leaving")]
         #[arg(long)]
         force: bool,
     },
 
-    /// Store a local file in the active Pouch (RLNC erasure-coded).
+    #[command(about = "Store a local file in the active Pouch (RLNC erasure-coded)")]
     Put {
-        /// Path to the file to store.
+        #[arg(help = "Path to the file to store")]
         file: std::path::PathBuf,
 
-        /// Network ID whose Pouch will store the fragments (default: "public").
+        #[arg(help = "Network ID whose Pouch will store the fragments (default: \"public\")")]
         #[arg(long, short, default_value = DEFAULT_NETWORK)]
         network: String,
 
-        /// Target recovery probability: probability of recovering the file at
-        /// any given moment (default: 0.999 = 99.9%).
+        #[arg(
+            help = "Target recovery probability: probability of recovering the file at any given moment (default: 0.999 = 99.9%)"
+        )]
         #[arg(long, default_value_t = 0.999)]
         ph: f64,
 
-        /// Redundancy overhead fraction on top of the recovery threshold
-        /// (default: 1.0 = one extra "copy-equivalent" of fragments).
+        #[arg(
+            help = "Redundancy overhead fraction on top of the recovery threshold (default: 1.0 = one extra \"copy-equivalent\" of fragments)"
+        )]
         #[arg(long, default_value_t = 1.0)]
         q_target: f64,
 
-        /// Human-readable name for the file (shown by `bp ls`).
-        /// Defaults to the file's original filename.
+        #[arg(
+            help = "Human-readable name for the file (shown by `bp ls`). Defaults to the file's original filename"
+        )]
         #[arg(long)]
         name: Option<String>,
     },
 
-    /// Retrieve and decode a stored chunk by its chunk_id.
+    #[command(about = "Retrieve and decode a stored chunk by its chunk_id")]
     Get {
-        /// The chunk_id returned by `bp put` (BLAKE3 prefix).
+        #[arg(help = "The chunk_id returned by `bp put` (BLAKE3 prefix)")]
         chunk_id: String,
 
-        /// Where to write the recovered file.
+        #[arg(help = "Where to write the recovered file")]
         output: std::path::PathBuf,
 
-        /// Network ID to search (default: "public").
+        #[arg(help = "Network ID to search (default: \"public\")")]
         #[arg(long, short, default_value = DEFAULT_NETWORK)]
         network: String,
     },
 
-    /// List files uploaded by this node.
-    ///
-    /// Shows all files recorded in the local file registry (populated on
-    /// `bp put`).  Use `--network` to filter to a specific network.
+    #[command(
+        about = "List files uploaded by this node",
+        long_about = "List files uploaded by this node.\n\nShows all files recorded in the local file registry (populated on `bp put`).  Use `--network` to filter to a specific network."
+    )]
     Ls {
-        /// Filter to a specific network (default: show all networks).
+        #[arg(help = "Filter to a specific network (default: show all networks)")]
         #[arg(long, short, default_value = "")]
         network: String,
     },
 
-    /// Show storage quota and uploaded-file statistics for this node.
-    ///
-    /// Displays per-Pouch bid / used / available bytes, aggregate totals,
-    /// and counts for all files uploaded.  Use `--network` to filter.
+    #[command(
+        about = "Show storage quota and uploaded-file statistics for this node",
+        long_about = "Show storage quota and uploaded-file statistics for this node.\n\nDisplays per-Pouch bid / used / available bytes, aggregate totals, and counts for all files uploaded.  Use `--network` to filter."
+    )]
     Storage {
-        /// Filter to a specific network (default: show all networks).
+        #[arg(help = "Filter to a specific network (default: show all networks)")]
         #[arg(long, short, default_value = "")]
         network: String,
     },
 
-    /// Manage WAN bootstrap nodes (stored in bootstrap.json).
-    ///
-    /// Bootstrap nodes let the daemon discover peers on the public internet
-    /// where mDNS multicast is not available.  Changes take effect on the
-    /// next daemon restart.
+    #[command(
+        about = "Manage WAN bootstrap nodes (stored in bootstrap.json)",
+        long_about = "Manage WAN bootstrap nodes (stored in bootstrap.json).\n\nBootstrap nodes let the daemon discover peers on the public internet where mDNS multicast is not available.  Changes take effect on the next daemon restart."
+    )]
     Bootstrap {
         #[command(subcommand)]
         action: BootstrapAction,
     },
 
-    /// NAT traversal — connect to a relay node for circuit-relay v2.
-    ///
-    /// Dials the given relay peer and establishes a reservation so this
-    /// node is reachable from the public internet even when behind NAT.
+    #[command(
+        about = "NAT traversal — connect to a relay node for circuit-relay v2",
+        long_about = "NAT traversal — connect to a relay node for circuit-relay v2.\n\nDials the given relay peer and establishes a reservation so this node is reachable from the public internet even when behind NAT."
+    )]
     Relay {
         #[command(subcommand)]
         action: RelayAction,
     },
 
-    /// Manage network invite tokens.
-    ///
-    /// Networks are private by default.  Use `bp invite create` to generate
-    /// a token for someone and `bp invite join` to accept one.
+    #[command(
+        about = "Manage network invite tokens",
+        long_about = "Manage network invite tokens.\n\nNetworks are private by default.  Use `bp invite create` to generate a token for someone and `bp invite join` to accept one."
+    )]
     Invite {
         #[command(subcommand)]
         action: InviteAction,
@@ -258,65 +259,66 @@ enum Cmd {
 
 #[derive(Subcommand)]
 enum BootstrapAction {
-    /// List all configured bootstrap nodes.
+    #[command(about = "List all configured bootstrap nodes")]
     List,
-    /// Add a bootstrap node (must include /p2p/`<PeerId>`).
+    #[command(about = "Add a bootstrap node (must include /p2p/`<PeerId>`)")]
     Add {
-        /// Multiaddr of the bootstrap node, e.g.
-        /// `/ip4/203.0.113.1/tcp/4001/p2p/12D3KooW...`
+        #[arg(
+            help = "Multiaddr of the bootstrap node, e.g. `/ip4/203.0.113.1/tcp/4001/p2p/12D3KooW...`"
+        )]
         addr: String,
     },
-    /// Remove a bootstrap node by its multiaddr string.
+    #[command(about = "Remove a bootstrap node by its multiaddr string")]
     Remove {
-        /// The exact multiaddr string to remove.
+        #[arg(help = "The exact multiaddr string to remove")]
         addr: String,
     },
 }
 
 #[derive(Subcommand)]
 enum RelayAction {
-    /// Dial a relay node and establish a circuit-relay v2 reservation.
-    ///
-    /// Once the reservation is accepted, this node becomes reachable at
-    /// `/p2p-circuit` addresses through the relay, enabling inbound
-    /// connections from peers on the public internet.
+    #[command(
+        about = "Dial a relay node and establish a circuit-relay v2 reservation",
+        long_about = "Dial a relay node and establish a circuit-relay v2 reservation.\n\nOnce the reservation is accepted, this node becomes reachable at `/p2p-circuit` addresses through the relay, enabling inbound connections from peers on the public internet."
+    )]
     Connect {
-        /// Full multiaddr of the relay node including its PeerId, e.g.
-        /// `/ip4/1.2.3.4/tcp/4001/p2p/12D3KooW...`
+        #[arg(
+            help = "Full multiaddr of the relay node including its PeerId, e.g. `/ip4/1.2.3.4/tcp/4001/p2p/12D3KooW...`"
+        )]
         addr: String,
     },
 }
 
 #[derive(Subcommand)]
 enum InviteAction {
-    /// Create a signed+encrypted invite token for a network.
-    ///
-    /// The token contains the network's secret key — share the blob AND
-    /// the invite-password with the invitee out-of-band (Signal, phone, etc.).
+    #[command(
+        about = "Create a signed+encrypted invite token for a network",
+        long_about = "Create a signed+encrypted invite token for a network.\n\nThe token contains the network's secret key — share the blob AND the invite-password with the invitee out-of-band (Signal, phone, etc.)."
+    )]
     Create {
-        /// Network to invite the recipient into.
+        #[arg(help = "Network to invite the recipient into")]
         #[arg(long, short, default_value = DEFAULT_NETWORK)]
         network: String,
 
-        /// Optional: fingerprint of the specific invitee. Omit for an open invite.
+        #[arg(help = "Optional: fingerprint of the specific invitee. Omit for an open invite")]
         #[arg(long)]
         for_fingerprint: Option<String>,
 
-        /// Token validity in hours (default: 24).
+        #[arg(help = "Token validity in hours (default: 24)")]
         #[arg(long, default_value_t = 24)]
         ttl: u64,
 
-        /// Password used to encrypt the token (share out-of-band).
+        #[arg(help = "Password used to encrypt the token (share out-of-band)")]
         #[arg(long)]
         invite_password: String,
     },
 
-    /// Redeem an invite token: decrypt, verify, save the network key and join.
+    #[command(about = "Redeem an invite token: decrypt, verify, save the network key and join")]
     Join {
-        /// The hex blob produced by `bp invite create`.
+        #[arg(help = "The hex blob produced by `bp invite create`")]
         blob: String,
 
-        /// Password used to decrypt the token.
+        #[arg(help = "Password used to decrypt the token")]
         #[arg(long)]
         invite_password: String,
     },

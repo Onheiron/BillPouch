@@ -21,11 +21,6 @@ use std::time::Duration;
 /// Request sent between Pouch nodes for fragment operations.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FragmentRequest {
-    /// Ask a remote Pouch for a specific fragment by id.
-    Fetch {
-        chunk_id: String,
-        fragment_id: String,
-    },
     /// Ask a remote Pouch for ALL fragments it holds for a chunk.
     FetchChunkFragments { chunk_id: String },
     /// Push a fragment to a remote Pouch for storage.
@@ -51,8 +46,6 @@ pub enum FragmentRequest {
 /// Response to a fragment request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FragmentResponse {
-    /// Single fragment found (response to Fetch).
-    Found { data: Vec<u8> },
     /// Multiple fragments found (response to FetchChunkFragments).
     FoundMany { fragments: Vec<(String, Vec<u8>)> },
     /// Fragment/chunk not found on this peer.
