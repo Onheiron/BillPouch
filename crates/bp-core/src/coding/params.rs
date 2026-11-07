@@ -11,8 +11,6 @@ pub struct NetworkCodingParams {
     pub sigma: f64,
 }
 
-impl NetworkCodingParams {}
-
 pub fn compute_coding_params(
     stabilities: &[f64],
     ph: f64,
