@@ -170,18 +170,6 @@ impl PeerQos {
         self.record_challenge(false);
     }
 
-    /// Current fault status derived from [`Self::fault_score`].
-    ///
-    /// Returns `"ok"`, `"degraded"`, `"suspected"`, or `"blacklisted"`.
-    pub fn fault_status(&self) -> &'static str {
-        match self.fault_score {
-            s if s >= FAULT_BLACKLISTED => "blacklisted",
-            s if s >= FAULT_SUSPECTED => "suspected",
-            s if s >= FAULT_DEGRADED => "degraded",
-            _ => "ok",
-        }
-    }
-
     // ── Derived scores ────────────────────────────────────────────────────
 
     /// Latency component of the stability score: `exp(−rtt_ewma / RTT_REF_MS)`.
@@ -261,16 +249,6 @@ impl QosRegistry {
         self.peers.values().map(PeerQos::stability_score).collect()
     }
 
-    /// Stability scores only for Pouch peers whose `peer_id` appears in
-    /// `pouch_peer_ids` — used to scope the k-calculation to active Pouches
-    /// in a specific network, rather than all connected peers.
-    pub fn stability_scores_for<'a>(
-        &self,
-        pouch_peer_ids: impl Iterator<Item = &'a str>,
-    ) -> Vec<f64> {
-        pouch_peer_ids.map(|id| self.stability_score(id)).collect()
-    }
-
     /// Total number of tracked peers.
     pub fn peer_count(&self) -> usize {
         self.peers.len()
@@ -279,12 +257,6 @@ impl QosRegistry {
     /// All peer IDs currently tracked.
     pub fn peer_ids(&self) -> impl Iterator<Item = &str> {
         self.peers.keys().map(String::as_str)
-    }
-
-    /// Fault status of a peer: `"ok"`, `"degraded"`, `"suspected"`, or
-    /// `"blacklisted"`.  Returns `"ok"` if the peer has never been seen.
-    pub fn fault_status(&self, peer_id: &str) -> &'static str {
-        self.peers.get(peer_id).map_or("ok", PeerQos::fault_status)
     }
 
     /// Fault score of a peer in `[0, 100]`.  Returns `0` if never seen.

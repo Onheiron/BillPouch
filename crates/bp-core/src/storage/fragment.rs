@@ -85,11 +85,6 @@ impl FragmentIndex {
     pub fn total_bytes(&self) -> u64 {
         self.total_bytes
     }
-
-    /// Whether the index holds any fragment for the given chunk.
-    pub fn contains_chunk(&self, chunk_id: &str) -> bool {
-        self.inner.contains_key(chunk_id)
-    }
 }
 
 #[cfg(test)]
@@ -137,7 +132,6 @@ mod tests {
         let mut idx = FragmentIndex::new();
         idx.insert(make_meta("c1", "f1", 100));
         idx.remove("c1", "f1");
-        assert!(!idx.contains_chunk("c1"));
         assert_eq!(idx.fragment_count(), 0);
     }
 

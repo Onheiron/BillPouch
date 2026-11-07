@@ -1,7 +1,7 @@
 ## BillPouch — Smoke-test cluster
 ## Usage:
 ##   docker compose -f docker-compose.smoke.yml up --build -d
-##   ./smoke/smoke-test.sh
+##   ./docker/smoke-test.sh
 ##   docker compose -f docker-compose.smoke.yml down
 
 services:

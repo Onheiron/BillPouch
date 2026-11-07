@@ -158,7 +158,7 @@ pub struct DaemonState {
     /// Per-peer reputation state (tier R0–R4, score, uptime, PoS pass rate).
     ///
     /// Updated by the quality monitor and by eviction events.
-    pub reputation: RwLock<ReputationStore>,
+    pub reputation: Arc<RwLock<ReputationStore>>,
     /// Local catalogue of files uploaded by this node's Bill services.
     ///
     /// Populated on each successful `PutFile`.
@@ -711,7 +711,8 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             // Ensure a NetworkMetaKey exists for this network.
             // If none was installed via an invite token, we generate a fresh
             // random one (this node is creating the network).
-            if let Err(e) = crate::storage::manifest::NetworkMetaKey::load_or_create(&network_id) {
+            if let Err(e) = crate::storage::network_key::NetworkMetaKey::load_or_create(&network_id)
+            {
                 tracing::warn!(network = %network_id, "Failed to ensure NetworkMetaKey: {e}");
             }
             let _ = state

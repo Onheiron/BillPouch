@@ -43,16 +43,6 @@ pub fn socket_path() -> BpResult<PathBuf> {
     Ok(base_dir()?.join("control.sock"))
 }
 
-/// Path to persisted service registry.
-pub fn services_path() -> BpResult<PathBuf> {
-    Ok(base_dir()?.join("services.json"))
-}
-
-/// Path to persisted network membership list.
-pub fn networks_path() -> BpResult<PathBuf> {
-    Ok(base_dir()?.join("networks.json"))
-}
-
 /// Path to the persisted Kademlia peer multi-addresses.
 ///
 /// Saved periodically and on daemon shutdown so the next startup can

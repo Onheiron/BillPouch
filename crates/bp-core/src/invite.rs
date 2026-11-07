@@ -48,7 +48,7 @@ use crate::{
     config,
     error::{BpError, BpResult},
     identity::{fingerprint_pubkey, Identity},
-    storage::manifest::NetworkMetaKey,
+    storage::network_key::NetworkMetaKey,
 };
 use argon2::Argon2;
 use chacha20poly1305::{
@@ -292,7 +292,7 @@ fn derive_key(password: &str, salt: &[u8]) -> BpResult<[u8; 32]> {
 mod tests {
     use super::*;
     use crate::identity::{Identity, UserProfile};
-    use crate::storage::manifest::NetworkMetaKey;
+    use crate::storage::network_key::NetworkMetaKey;
 
     /// Serialise every test that mutates `HOME`/`XDG_DATA_HOME` so parallel
     /// test threads don't trample each other's environment.

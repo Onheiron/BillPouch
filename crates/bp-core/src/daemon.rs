@@ -68,7 +68,7 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
         outgoing_assignments: Arc::clone(&outgoing_assignments),
         remote_fragment_index: Arc::clone(&remote_fragment_index),
         chunk_cek_hints: RwLock::new(load_cek_hints()),
-        reputation: RwLock::new(ReputationStore::new()),
+        reputation: Arc::new(RwLock::new(ReputationStore::new())),
         file_registry: RwLock::new(
             config::file_registry_path()
                 .map(|p| FileRegistry::load(&p))
@@ -206,8 +206,16 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
     let monitor_qos = Arc::clone(&daemon_state.qos);
     let monitor_tx = net_tx.clone();
     let monitor_outgoing = Arc::clone(&outgoing_assignments);
+    let monitor_rep = Arc::clone(&daemon_state.reputation);
     tokio::spawn(async move {
-        run_quality_monitor(monitor_state, monitor_qos, monitor_tx, monitor_outgoing).await;
+        run_quality_monitor(
+            monitor_state,
+            monitor_qos,
+            monitor_rep,
+            monitor_tx,
+            monitor_outgoing,
+        )
+        .await;
     });
 
     // ── Run control socket (blocks until daemon is killed) ────────────────

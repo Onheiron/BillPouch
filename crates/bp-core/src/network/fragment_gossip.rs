@@ -101,36 +101,6 @@ impl RemoteFragmentIndex {
             .unwrap_or_default()
     }
 
-    /// Pointers for a chunk hosted by a specific peer.
-    pub fn pointers_for_peer<'a, 'b>(
-        &'a self,
-        chunk_id: &'b str,
-        peer_id: &'b str,
-    ) -> impl Iterator<Item = &'a FragmentPointer> + use<'a, 'b> {
-        self.pointers_for(chunk_id)
-            .iter()
-            .filter(move |p| p.peer_id == peer_id)
-    }
-
-    /// Remove all pointer entries for a given `peer_id` (e.g. after it is
-    /// blacklisted or evicted from the network).
-    pub fn evict_peer(&mut self, peer_id: &str) {
-        for ptrs in self.inner.values_mut() {
-            ptrs.retain(|p| p.peer_id != peer_id);
-        }
-        self.inner.retain(|_, v| !v.is_empty());
-    }
-
-    /// Total number of chunks tracked.
-    pub fn chunk_count(&self) -> usize {
-        self.inner.len()
-    }
-
-    /// Total number of fragment pointers across all chunks.
-    pub fn pointer_count(&self) -> usize {
-        self.inner.values().map(Vec::len).sum()
-    }
-
     /// All chunk IDs for which at least one pointer is known.
     pub fn chunk_ids(&self) -> impl Iterator<Item = &str> {
         self.inner.keys().map(String::as_str)
@@ -175,8 +145,6 @@ mod tests {
         ));
         let ptrs = idx.pointers_for("chunk-1");
         assert_eq!(ptrs.len(), 2);
-        assert_eq!(idx.chunk_count(), 1);
-        assert_eq!(idx.pointer_count(), 2);
     }
 
     #[test]
@@ -196,44 +164,8 @@ mod tests {
     }
 
     #[test]
-    fn evict_peer_removes_entries() {
-        let mut idx = RemoteFragmentIndex::new();
-        idx.upsert(make_ann(
-            "chunk-1",
-            &[("peer-a", "frag-1"), ("peer-b", "frag-2")],
-        ));
-        idx.evict_peer("peer-a");
-        let ptrs = idx.pointers_for("chunk-1");
-        assert_eq!(ptrs.len(), 1);
-        assert_eq!(ptrs[0].peer_id, "peer-b");
-    }
-
-    #[test]
-    fn evict_last_peer_removes_chunk() {
-        let mut idx = RemoteFragmentIndex::new();
-        idx.upsert(make_ann("chunk-1", &[("peer-a", "frag-1")]));
-        idx.evict_peer("peer-a");
-        assert_eq!(idx.chunk_count(), 0);
-    }
-
-    #[test]
     fn pointers_for_unknown_chunk_is_empty() {
         let idx = RemoteFragmentIndex::new();
         assert!(idx.pointers_for("unknown").is_empty());
-    }
-
-    #[test]
-    fn pointers_for_peer_filters_correctly() {
-        let mut idx = RemoteFragmentIndex::new();
-        idx.upsert(make_ann(
-            "chunk-1",
-            &[
-                ("peer-a", "frag-1"),
-                ("peer-b", "frag-2"),
-                ("peer-a", "frag-3"),
-            ],
-        ));
-        let count = idx.pointers_for_peer("chunk-1", "peer-a").count();
-        assert_eq!(count, 2);
     }
 }

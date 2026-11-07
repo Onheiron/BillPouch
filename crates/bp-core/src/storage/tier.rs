@@ -84,30 +84,6 @@ impl StorageTier {
         }
     }
 
-    /// Return all tiers from T1 up to and including `self`.
-    ///
-    /// Used to determine which tier-buckets a Pouch participates in.
-    pub fn participating_tiers(self) -> &'static [StorageTier] {
-        match self {
-            StorageTier::T1 => &[StorageTier::T1],
-            StorageTier::T2 => &[StorageTier::T1, StorageTier::T2],
-            StorageTier::T3 => &[StorageTier::T1, StorageTier::T2, StorageTier::T3],
-            StorageTier::T4 => &[
-                StorageTier::T1,
-                StorageTier::T2,
-                StorageTier::T3,
-                StorageTier::T4,
-            ],
-            StorageTier::T5 => &[
-                StorageTier::T1,
-                StorageTier::T2,
-                StorageTier::T3,
-                StorageTier::T4,
-                StorageTier::T5,
-            ],
-        }
-    }
-
     /// Return all defined tiers in ascending order.
     pub fn all() -> &'static [StorageTier] {
         &[
@@ -131,25 +107,6 @@ impl StorageTier {
                 "unknown storage tier '{}'; valid values are T1, T2, T3, T4, T5",
                 other
             ))),
-        }
-    }
-
-    /// Return the minimum tier that can hold a file of the given byte size.
-    ///
-    /// Returns `None` if the file is too large even for T5.
-    pub fn for_file_size(bytes: u64) -> Option<Self> {
-        if bytes <= TIER_T1_BYTES {
-            Some(StorageTier::T1)
-        } else if bytes <= TIER_T2_BYTES {
-            Some(StorageTier::T2)
-        } else if bytes <= TIER_T3_BYTES {
-            Some(StorageTier::T3)
-        } else if bytes <= TIER_T4_BYTES {
-            Some(StorageTier::T4)
-        } else if bytes <= TIER_T5_BYTES {
-            Some(StorageTier::T5)
-        } else {
-            None
         }
     }
 }
@@ -199,40 +156,12 @@ mod tests {
     }
 
     #[test]
-    fn participating_tiers_correct() {
-        assert_eq!(StorageTier::T1.participating_tiers(), &[StorageTier::T1]);
-        assert_eq!(
-            StorageTier::T3.participating_tiers(),
-            &[StorageTier::T1, StorageTier::T2, StorageTier::T3]
-        );
-        assert_eq!(StorageTier::T5.participating_tiers().len(), 5);
-    }
-
-    #[test]
     fn parse_case_insensitive() {
         assert_eq!(StorageTier::parse("t1").unwrap(), StorageTier::T1);
         assert_eq!(StorageTier::parse("T3").unwrap(), StorageTier::T3);
         assert_eq!(StorageTier::parse("T5").unwrap(), StorageTier::T5);
         assert!(StorageTier::parse("T6").is_err());
         assert!(StorageTier::parse("pebble").is_err());
-    }
-
-    #[test]
-    fn for_file_size() {
-        assert_eq!(StorageTier::for_file_size(1024), Some(StorageTier::T1));
-        assert_eq!(
-            StorageTier::for_file_size(TIER_T1_BYTES),
-            Some(StorageTier::T1)
-        );
-        assert_eq!(
-            StorageTier::for_file_size(TIER_T1_BYTES + 1),
-            Some(StorageTier::T2)
-        );
-        assert_eq!(
-            StorageTier::for_file_size(TIER_T5_BYTES),
-            Some(StorageTier::T5)
-        );
-        assert_eq!(StorageTier::for_file_size(TIER_T5_BYTES + 1), None);
     }
 
     #[test]

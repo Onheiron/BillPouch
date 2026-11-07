@@ -62,18 +62,6 @@ pub fn inv(a: u8) -> u8 {
     mul(mul(mul(mul(mul(mul(a2, a4), a8), a16), a32), a64), a128)
 }
 
-/// Division in GF(2⁸): `a / b = a · b⁻¹`.
-///
-/// # Panics
-/// Panics if `b == 0`.
-#[inline]
-pub fn div(a: u8, b: u8) -> u8 {
-    if a == 0 {
-        return 0;
-    }
-    mul(a, inv(b))
-}
-
 /// `acc[i] ^= coeff * symbol[i]` over GF(2⁸) — the inner loop of RLNC encoding.
 ///
 /// # Panics
@@ -131,11 +119,6 @@ mod tests {
         for a in 1u8..=255 {
             assert_eq!(mul(a, inv(a)), 1, "a*inv(a) != 1 for a={a:#x}");
         }
-    }
-
-    #[test]
-    fn div_round_trip() {
-        assert_eq!(mul(div(0x53, 0x2b), 0x2b), 0x53);
     }
 
     #[test]
