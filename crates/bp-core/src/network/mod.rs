@@ -2,8 +2,8 @@
 //!
 //! This module owns the libp2p [`Swarm`] and exposes two public entry points:
 //!
-//! - [`build_swarm`] — constructs the swarm with all four behaviours
-//!   (gossipsub, Kademlia, Identify, mDNS) and the Noise+Yamux transport.
+//! - [`build_swarm`] — constructs the swarm (gossipsub, Kademlia, Identify,
+//!   mDNS, request-response, AutoNAT, relay client) over Noise + Yamux.
 //! - [`run_network_loop`] — async task that drives the swarm event loop and
 //!   processes [`NetworkCommand`]s sent by the daemon over a Tokio channel.
 //!

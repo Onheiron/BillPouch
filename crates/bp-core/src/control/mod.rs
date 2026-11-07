@@ -10,8 +10,10 @@
 //! ## Sub-modules
 //!
 //! - [`protocol`] — request/response types and typed data payloads.
+//! - [`client`]   — one-shot request helper used by `bp` and `bp-api`.
 //! - [`server`]   — async Unix listener, dispatcher, and `DaemonState`.
 
+pub mod client;
 pub mod protocol;
 pub mod server;
 

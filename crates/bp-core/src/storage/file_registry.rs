@@ -86,11 +86,6 @@ impl FileRegistry {
         }
     }
 
-    /// Total bytes of all uploaded files (across all networks).
-    pub fn total_uploaded_bytes(&self) -> u64 {
-        self.entries.iter().map(|e| e.size_bytes).sum()
-    }
-
     /// Total number of registered files.
     pub fn len(&self) -> usize {
         self.entries.len()

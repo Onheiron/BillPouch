@@ -36,8 +36,8 @@ use crate::{
     coding::rlnc,
     coding::rlnc::EncodedFragment,
     network::{
-        qos::QosRegistry, state::NetworkState, FragmentResponse, NetworkCommand,
-        OutgoingAssignments, OutgoingFragment, FAULT_DEGRADED, FAULT_SUSPECTED,
+        qos::QosRegistry, reputation::ReputationStore, state::NetworkState, FragmentResponse,
+        NetworkCommand, OutgoingAssignments, OutgoingFragment, FAULT_DEGRADED, FAULT_SUSPECTED,
     },
     service::ServiceType,
 };
@@ -70,11 +70,13 @@ const POS_TIMEOUT_SECS: u64 = 10;
 ///
 /// - `network_state`        — shared view of all known peers (read-only here).
 /// - `qos`                  — shared QoS registry updated after every challenge.
+/// - `reputation`           — reputation store updated after every PoS challenge.
 /// - `net_tx`               — channel to submit network commands.
 /// - `outgoing_assignments` — map of `peer_id → fragments pushed to that peer`.
 pub async fn run_quality_monitor(
     network_state: Arc<RwLock<NetworkState>>,
     qos: Arc<RwLock<QosRegistry>>,
+    reputation: Arc<RwLock<ReputationStore>>,
     net_tx: mpsc::Sender<NetworkCommand>,
     outgoing_assignments: OutgoingAssignments,
 ) {
@@ -98,7 +100,7 @@ pub async fn run_quality_monitor(
                 run_ping_round(&network_state, &qos, &net_tx).await;
             }
             _ = pos_interval.tick() => {
-                run_pos_round(&outgoing_assignments, &network_state, &qos, &net_tx).await;
+                run_pos_round(&outgoing_assignments, &network_state, &qos, &reputation, &net_tx).await;
             }
         }
     }
@@ -165,6 +167,7 @@ async fn run_pos_round(
     outgoing_assignments: &OutgoingAssignments,
     network_state: &Arc<RwLock<NetworkState>>,
     qos: &Arc<RwLock<QosRegistry>>,
+    reputation: &Arc<RwLock<ReputationStore>>,
     net_tx: &mpsc::Sender<NetworkCommand>,
 ) {
     // Snapshot the current assignments (peer_id → random fragment to challenge).
@@ -214,9 +217,21 @@ async fn run_pos_round(
     let mut handles = Vec::with_capacity(challenges.len());
     for (peer_id_str, peer_id, chunk_id, fragment_id) in challenges.iter().cloned() {
         let qos = Arc::clone(qos);
+        let reputation = Arc::clone(reputation);
         let net_tx = net_tx.clone();
         let handle = tokio::spawn(async move {
-            pos_one_peer(peer_id_str, peer_id, chunk_id, fragment_id, qos, net_tx).await;
+            let passed = pos_one_peer(
+                peer_id_str.clone(),
+                peer_id,
+                chunk_id,
+                fragment_id,
+                &qos,
+                net_tx,
+            )
+            .await;
+            if let Some(passed) = passed {
+                record_reputation(&peer_id_str, passed, &qos, &reputation);
+            }
         });
         handles.push(handle);
     }
@@ -427,14 +442,17 @@ async fn reroute_suspected_peer(
 
 // ── Per-peer PoS helper ───────────────────────────────────────────────────────
 
+/// Challenge one peer and record the outcome in the QoS registry.
+///
+/// Returns `Some(passed)`, or `None` if the challenge could not be sent.
 async fn pos_one_peer(
     peer_id_str: String,
     peer_id: PeerId,
     chunk_id: String,
     fragment_id: String,
-    qos: Arc<RwLock<QosRegistry>>,
+    qos: &Arc<RwLock<QosRegistry>>,
     net_tx: mpsc::Sender<NetworkCommand>,
-) {
+) -> Option<bool> {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -454,43 +472,51 @@ async fn pos_one_peer(
         .is_err()
     {
         tracing::warn!(peer = %peer_id_str, "quality_monitor: net_tx closed (PoS)");
-        return;
+        return None;
     }
 
-    match tokio::time::timeout(Duration::from_secs(POS_TIMEOUT_SECS), resp_rx).await {
-        Ok(Ok(true)) => {
-            tracing::debug!(
-                peer = %peer_id_str,
-                chunk = %chunk_id,
-                frag = %fragment_id,
-                "PoS challenge: proof received"
-            );
-            if let Ok(mut qos_guard) = qos.write() {
-                qos_guard.entry(peer_id_str).record_pos_success();
-            }
+    let passed = matches!(
+        tokio::time::timeout(Duration::from_secs(POS_TIMEOUT_SECS), resp_rx).await,
+        Ok(Ok(true))
+    );
+    tracing::debug!(
+        peer = %peer_id_str,
+        chunk = %chunk_id,
+        frag = %fragment_id,
+        passed,
+        "PoS challenge result"
+    );
+    if passed {
+        if let Ok(mut qos_guard) = qos.write() {
+            qos_guard.entry(peer_id_str).record_pos_success();
         }
-        Ok(Ok(false)) | Ok(Err(_)) => {
-            tracing::debug!(
-                peer = %peer_id_str,
-                chunk = %chunk_id,
-                frag = %fragment_id,
-                "PoS challenge: proof failed or fragment not found"
-            );
-            record_pos_failure(&peer_id_str, &qos);
-        }
-        Err(_) => {
-            tracing::debug!(
-                peer = %peer_id_str,
-                "PoS challenge: timeout (>{POS_TIMEOUT_SECS}s)"
-            );
-            record_pos_failure(&peer_id_str, &qos);
-        }
+    } else {
+        record_pos_failure(&peer_id_str, qos);
     }
+    Some(passed)
 }
 
 fn record_pos_failure(peer_id_str: &str, qos: &Arc<RwLock<QosRegistry>>) {
     if let Ok(mut qos_guard) = qos.write() {
         qos_guard.entry(peer_id_str).record_pos_failure();
+    }
+}
+
+/// Feed a PoS outcome into the peer's reputation record.
+fn record_reputation(
+    peer_id_str: &str,
+    passed: bool,
+    qos: &Arc<RwLock<QosRegistry>>,
+    reputation: &Arc<RwLock<ReputationStore>>,
+) {
+    let fault = qos.read().map(|g| g.fault_score(peer_id_str)).unwrap_or(0);
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    if let Ok(mut rep) = reputation.write() {
+        rep.get_or_create(peer_id_str, now)
+            .record_pos_challenge(passed, fault, now);
     }
 }
 
@@ -637,7 +663,7 @@ mod tests {
         // Run the monitor for a very short time — it should not panic.
         tokio::time::timeout(
             Duration::from_millis(200),
-            run_quality_monitor(ns, qos, net_tx, outgoing),
+            run_quality_monitor(ns, qos, Default::default(), net_tx, outgoing),
         )
         .await
         .ok(); // timeout is expected

@@ -17,7 +17,7 @@ services:
   carlo:
     image: onheirongithub/billpouch:latest
     volumes:
-      - ./playground/entrypoint.sh:/entrypoint.sh:ro
+      - ./docker/entrypoint.sh:/entrypoint.sh:ro
       - ./playground/data/carlo:/root/.local/share/billpouch
     container_name: bp-carlo
     hostname: bp-carlo
@@ -35,7 +35,7 @@ services:
   marco:
     image: onheirongithub/billpouch:latest
     volumes:
-      - ./playground/entrypoint.sh:/entrypoint.sh:ro
+      - ./docker/entrypoint.sh:/entrypoint.sh:ro
       - ./playground/data/marco:/root/.local/share/billpouch
     container_name: bp-marco
     hostname: bp-marco
@@ -53,7 +53,7 @@ services:
   lucia:
     image: onheirongithub/billpouch:latest
     volumes:
-      - ./playground/entrypoint.sh:/entrypoint.sh:ro
+      - ./docker/entrypoint.sh:/entrypoint.sh:ro
       - ./playground/data/lucia:/root/.local/share/billpouch
     container_name: bp-lucia
     hostname: bp-lucia
@@ -70,7 +70,7 @@ services:
   elena:
     image: onheirongithub/billpouch:latest
     volumes:
-      - ./playground/entrypoint.sh:/entrypoint.sh:ro
+      - ./docker/entrypoint.sh:/entrypoint.sh:ro
       - ./playground/data/elena:/root/.local/share/billpouch
     container_name: bp-elena
     hostname: bp-elena
@@ -88,7 +88,7 @@ services:
   paolo:
     image: onheirongithub/billpouch:latest
     volumes:
-      - ./playground/entrypoint.sh:/entrypoint.sh:ro
+      - ./docker/entrypoint.sh:/entrypoint.sh:ro
       - ./playground/data/paolo:/root/.local/share/billpouch
     container_name: bp-paolo
     hostname: bp-paolo
@@ -105,7 +105,7 @@ services:
   me:
     image: onheirongithub/billpouch:latest
     volumes:
-      - ./playground/entrypoint.sh:/entrypoint.sh:ro
+      - ./docker/entrypoint.sh:/entrypoint.sh:ro
       - ./playground/data/me:/root/.local/share/billpouch
     container_name: bp-me
     hostname: bp-me

@@ -97,7 +97,7 @@ fn decrypt_keypair_bytes(enc: &EncryptedKeyFile, passphrase: &str) -> BpResult<V
         .map_err(|_| BpError::Identity("Wrong passphrase or corrupted identity file".into()))
 }
 
-/// Human-readable fingerprint of a public key (hex-encoded SHA-256, first 16 bytes).
+/// Human-readable fingerprint: hex(SHA-256(public key))[0..8 bytes] = 16 hex chars.
 pub fn fingerprint(keypair: &Keypair) -> String {
     fingerprint_pubkey(&keypair.public())
 }

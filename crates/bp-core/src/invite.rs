@@ -5,8 +5,8 @@
 //! A BillPouch network is private by default.  The only way to join is to
 //! receive an invite token from an existing member.  The token:
 //!
-//! 1. **Contains the `NetworkMetaKey`** — the 32-byte random secret that
-//!    protects file metadata on the network.
+//! 1. **Contains the `NetworkMetaKey`** — the network's 32-byte random
+//!    shared secret.
 //! 2. **Is signed** by the inviter's Ed25519 key so the recipient can verify
 //!    the invite is authentic.
 //! 3. **Is encrypted** with a password shared out-of-band (Signal, phone call,
@@ -48,7 +48,7 @@ use crate::{
     config,
     error::{BpError, BpResult},
     identity::{fingerprint_pubkey, Identity},
-    storage::manifest::NetworkMetaKey,
+    storage::network_key::NetworkMetaKey,
 };
 use argon2::Argon2;
 use chacha20poly1305::{
@@ -292,7 +292,7 @@ fn derive_key(password: &str, salt: &[u8]) -> BpResult<[u8; 32]> {
 mod tests {
     use super::*;
     use crate::identity::{Identity, UserProfile};
-    use crate::storage::manifest::NetworkMetaKey;
+    use crate::storage::network_key::NetworkMetaKey;
 
     /// Serialise every test that mutates `HOME`/`XDG_DATA_HOME` so parallel
     /// test threads don't trample each other's environment.

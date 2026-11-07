@@ -51,39 +51,25 @@ impl FromStr for ServiceType {
 
 /// Runtime status of a local service instance.
 ///
-/// Transitions: `Starting` → `Running` → `Stopping` → `Stopped`.
-/// Any state can transition to `Error` if an unrecoverable fault occurs.
+/// Services are created `Running`; `bp pause` / `bp resume` toggle `Paused`;
+/// `bp farewell` removes them from the registry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ServiceStatus {
-    /// Service is initialising (e.g. subscribing to gossip topics).
-    Starting,
-    /// Service is fully operational and announcing itself to the network.
+    /// Operational and announcing itself to the network.
     Running,
-    /// Service is temporarily paused for maintenance.
-    ///
-    /// The service will resume within `eta_minutes`.
-    /// `paused_at` is a Unix timestamp (seconds).
+    /// Paused for maintenance; expected back within `eta_minutes`
+    /// (`paused_at` is a Unix timestamp in seconds).
     Paused { eta_minutes: u64, paused_at: u64 },
-    /// Graceful shutdown has been requested but not yet completed.
-    Stopping,
-    /// Service has shut down cleanly.
-    Stopped,
-    /// Service encountered an unrecoverable error; payload is a description.
-    Error(String),
 }
 
 impl std::fmt::Display for ServiceStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ServiceStatus::Starting => write!(f, "starting"),
             ServiceStatus::Running => write!(f, "running"),
             ServiceStatus::Paused { eta_minutes, .. } => {
                 write!(f, "paused (ETA {} min)", eta_minutes)
             }
-            ServiceStatus::Stopping => write!(f, "stopping"),
-            ServiceStatus::Stopped => write!(f, "stopped"),
-            ServiceStatus::Error(msg) => write!(f, "error: {}", msg),
         }
     }
 }
@@ -104,12 +90,12 @@ pub struct ServiceInfo {
     pub status: ServiceStatus,
     /// UTC timestamp when the service was started.
     pub started_at: chrono::DateTime<chrono::Utc>,
-    /// Extensible metadata (e.g. `storage_bytes` for Pouch, `mount_path` for Bill).
+    /// Extensible metadata (e.g. `tier` and `storage_bytes` for Pouch).
     pub metadata: HashMap<String, serde_json::Value>,
 }
 
 impl ServiceInfo {
-    /// Construct a new `ServiceInfo` in the [`ServiceStatus::Starting`] state.
+    /// Construct a new, running `ServiceInfo`.
     ///
     /// Generates a fresh UUID v4 `service_id` and records the current UTC time
     /// as `started_at`.
@@ -122,7 +108,7 @@ impl ServiceInfo {
             id: Uuid::new_v4().to_string(),
             service_type,
             network_id,
-            status: ServiceStatus::Starting,
+            status: ServiceStatus::Running,
             started_at: chrono::Utc::now(),
             metadata,
         }

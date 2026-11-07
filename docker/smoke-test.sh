@@ -73,7 +73,9 @@ hatch_service() {
     local svc_type="$2"
     info "Hatching '${svc_type}' on ${container}..."
     local OUT
-    OUT=$(docker exec "${container}" bp hatch "${svc_type}" --network smoketest 2>&1) || true
+    local extra=()
+    [ "${svc_type}" = "pouch" ] && extra=(--tier T1)
+    OUT=$(docker exec "${container}" bp hatch "${svc_type}" --network smoketest "${extra[@]}" 2>&1) || true
     if echo "${OUT}" | grep -qi "hatched\|service_id\|running"; then
         pass "${container} hatched '${svc_type}' successfully"
     else

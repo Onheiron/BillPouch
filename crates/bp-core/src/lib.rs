@@ -16,13 +16,16 @@
 //! ```
 //!
 //! ## Modules
-//! - [`identity`]  — Ed25519 keypair management (login/logout)
-//! - [`service`]   — Service types (bill / pouch / post) and registry
-//! - [`network`]   — libp2p swarm, gossipsub, Kademlia DHT, mDNS
-//! - [`control`]   — Unix socket control protocol (CLI ↔ daemon)
-//! - [`daemon`]    — Main daemon task orchestrating the above
-//! - [`config`]    — Configuration file paths
-//! - [`error`]     — Unified error type
+//! - [`identity`] — Ed25519 keypair, passphrase encryption, export/import
+//! - [`service`]  — service types (bill / pouch / post) and registry
+//! - [`network`]  — libp2p swarm, gossip, QoS, Proof-of-Storage, reputation
+//! - [`coding`]   — RLNC erasure coding over GF(2⁸), adaptive k/n
+//! - [`storage`]  — Pouch fragment storage, tiers, chunk encryption
+//! - [`invite`]   — signed + encrypted network invite tokens
+//! - [`control`]  — Unix socket control protocol (CLI ↔ daemon)
+//! - [`daemon`]   — daemon entry point wiring the above together
+//! - [`config`]   — XDG file paths
+//! - [`error`]    — unified error type
 
 pub mod coding;
 pub mod config;

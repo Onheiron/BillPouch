@@ -10,11 +10,8 @@ path = "src/main.rs"
 [dependencies]
 bp-core    = { path = "../bp-core" }
 tokio      = { workspace = true }
-serde      = { workspace = true }
 serde_json = { workspace = true }
 anyhow     = { workspace = true }
-tracing    = { workspace = true }
-uuid       = { workspace = true }
 chrono     = { workspace = true }
 
 clap              = { version = "4", features = ["derive", "color", "env"] }

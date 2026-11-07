@@ -390,12 +390,9 @@ dependencies = [
  "bp-core",
  "chrono",
  "clap",
- "serde",
  "serde_json",
  "tokio",
- "tracing",
  "tracing-subscriber",
- "uuid",
 ]
 
 [[package]]

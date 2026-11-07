@@ -17,7 +17,7 @@
 //! ```
 //!
 //! The CEK is deterministic for a given `(identity, plaintext chunk)` pair.
-//! The daemon stores `(chunk_id → plaintext_hash)` in memory so that
+//! The daemon persists `chunk_id → plaintext_hash` in `cek_hints.json` so that
 //! [`ChunkCipher::for_user`] can be re-derived at GetFile time.
 //!
 //! ## On-disk / on-wire format
@@ -66,36 +66,9 @@ impl ChunkCipher {
     }
 
     /// Build a cipher from a raw 32-byte key.
-    ///
-    /// Useful for tests and for future key-wrapping schemes.
     pub fn from_raw_key(key: [u8; 32]) -> Self {
         let cipher = ChaCha20Poly1305::new(Key::from_slice(&key));
         Self { cipher }
-    }
-
-    /// **Test/legacy only** — derive a cipher from a network-scoped key.
-    ///
-    /// <div class="warning">
-    /// Not for production: uses the insecure deterministic
-    /// [`NetworkMetaKey::for_network`] derivation.  Use [`for_user`](Self::for_user)
-    /// in production code.
-    /// </div>
-    #[doc(hidden)]
-    pub fn for_network(network_id: &str) -> Self {
-        use crate::storage::manifest::NetworkMetaKey;
-        let net_key = NetworkMetaKey::for_network(network_id);
-        Self::from_meta_key(&net_key)
-    }
-
-    /// Build a cipher from an already-computed [`NetworkMetaKey`].
-    ///
-    /// **Test/legacy only** — prefer [`for_user`](Self::for_user).
-    #[doc(hidden)]
-    pub fn from_meta_key(meta_key: &crate::storage::manifest::NetworkMetaKey) -> Self {
-        let mut h = blake3::Hasher::new_keyed(&meta_key.0);
-        h.update(b"billpouch/chunk-enc/v1");
-        let chunk_key: [u8; 32] = *h.finalize().as_bytes();
-        Self::from_raw_key(chunk_key)
     }
 
     /// Encrypt `plaintext` and return `nonce(12) || ciphertext_with_tag(len+16)`.
@@ -120,7 +93,7 @@ impl ChunkCipher {
     /// Decrypt a blob produced by [`encrypt`](Self::encrypt).
     ///
     /// Returns the original plaintext or an error if the tag verification
-    /// fails (wrong key, wrong network, or corrupted data).
+    /// fails (wrong key or corrupted data).
     pub fn decrypt(&self, blob: &[u8]) -> BpResult<Vec<u8>> {
         if blob.len() < NONCE_LEN + 16 {
             return Err(BpError::Storage(
@@ -130,7 +103,7 @@ impl ChunkCipher {
         let nonce = Nonce::from_slice(&blob[..NONCE_LEN]);
         let ciphertext = &blob[NONCE_LEN..];
         self.cipher.decrypt(nonce, ciphertext).map_err(|_| {
-            BpError::Storage("Chunk decryption failed — wrong network key or corrupted data".into())
+            BpError::Storage("Chunk decryption failed — wrong key or corrupted data".into())
         })
     }
 }
@@ -201,17 +174,6 @@ mod tests {
         let c = cipher("amici");
         assert!(c.decrypt(&[0u8; 20]).is_err());
         assert!(c.decrypt(&[]).is_err());
-    }
-
-    #[test]
-    fn different_keys_are_isolated() {
-        let c1 = cipher("amici");
-        let c2 = cipher("lavoro");
-        let plain = b"cross-key probe";
-        let blob1 = c1.encrypt(plain).unwrap();
-        let blob2 = c2.encrypt(plain).unwrap();
-        assert!(c2.decrypt(&blob1).is_err());
-        assert!(c1.decrypt(&blob2).is_err());
     }
 
     #[test]

@@ -57,9 +57,8 @@ use crate::error::{BpError, BpResult};
 
 /// Coding parameters computed for a specific network state and target `Ph`.
 ///
-/// Stored in the [`FileManifest`](crate::storage::manifest::FileManifest)
-/// at upload time and used by the daemon to determine how many fragments to
-/// generate and distribute per chunk.
+/// Used by `PutFile` to decide how many fragments to generate and
+/// distribute per chunk.
 #[derive(Debug, Clone)]
 pub struct NetworkCodingParams {
     /// Target recovery probability requested at computation time.
@@ -78,18 +77,7 @@ pub struct NetworkCodingParams {
     pub sigma: f64,
 }
 
-impl NetworkCodingParams {
-    /// Effective recovery probability given the same set of stability scores.
-    ///
-    /// Useful for re-evaluating `pe` with updated QoS data after upload.
-    pub fn effective_probability(&self) -> f64 {
-        if self.sigma < 1e-9 {
-            return if self.k as f64 <= self.mu { 1.0 } else { 0.0 };
-        }
-        let z = (self.k as f64 - 0.5 - self.mu) / self.sigma;
-        1.0 - standard_normal_cdf(z)
-    }
-}
+impl NetworkCodingParams {}
 
 // ── Main entry point ──────────────────────────────────────────────────────────
 
@@ -218,11 +206,8 @@ pub fn compute_network_storage_factor(stabilities: &[f64], ph: f64) -> f64 {
     k as f64 / n as f64
 }
 
-/// Recompute the **rolling effective recovery probability** `Pe` for a file
-/// that was uploaded with threshold `k`, given the current stability scores.
-///
-/// This is called periodically by the daemon to update `pe` in the
-/// [`FileManifest`](crate::storage::manifest::FileManifest).
+/// Effective recovery probability `Pe` for threshold `k` given the current
+/// stability scores (reported by `PutFile`).
 ///
 /// ```text
 /// Pe = P(X ≥ k)  ≈  1 − Φ((k − 0.5 − μ) / σ)
@@ -399,8 +384,6 @@ mod tests {
         assert!(params.k >= 1);
         assert!(params.n >= params.k);
         assert!(params.ph == 0.99);
-        // Effective probability should be close to or above ph
-        assert!(params.effective_probability() >= 0.9);
     }
 
     #[test]
