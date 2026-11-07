@@ -4,11 +4,13 @@ services:
     image: onheirongithub/billpouch:latest
     volumes:
       - ./docker/entrypoint.sh:/entrypoint.sh:ro
+      - shared:/shared
       - ./playground/data/carlo:/root/.local/share/billpouch
     container_name: bp-carlo
     hostname: bp-carlo
     environment:
       NODE_NAME: "carlo"
+      FOUNDER: "true"
       SERVICES: "pouch,bill"
       NETWORK: "playground"
       BP_LISTEN_PORT: "4001"
@@ -21,6 +23,7 @@ services:
     image: onheirongithub/billpouch:latest
     volumes:
       - ./docker/entrypoint.sh:/entrypoint.sh:ro
+      - shared:/shared
       - ./playground/data/marco:/root/.local/share/billpouch
     container_name: bp-marco
     hostname: bp-marco
@@ -38,6 +41,7 @@ services:
     image: onheirongithub/billpouch:latest
     volumes:
       - ./docker/entrypoint.sh:/entrypoint.sh:ro
+      - shared:/shared
       - ./playground/data/lucia:/root/.local/share/billpouch
     container_name: bp-lucia
     hostname: bp-lucia
@@ -54,6 +58,7 @@ services:
     image: onheirongithub/billpouch:latest
     volumes:
       - ./docker/entrypoint.sh:/entrypoint.sh:ro
+      - shared:/shared
       - ./playground/data/elena:/root/.local/share/billpouch
     container_name: bp-elena
     hostname: bp-elena
@@ -71,6 +76,7 @@ services:
     image: onheirongithub/billpouch:latest
     volumes:
       - ./docker/entrypoint.sh:/entrypoint.sh:ro
+      - shared:/shared
       - ./playground/data/paolo:/root/.local/share/billpouch
     container_name: bp-paolo
     hostname: bp-paolo
@@ -87,6 +93,7 @@ services:
     image: onheirongithub/billpouch:latest
     volumes:
       - ./docker/entrypoint.sh:/entrypoint.sh:ro
+      - shared:/shared
       - ./playground/data/me:/root/.local/share/billpouch
     container_name: bp-me
     hostname: bp-me
@@ -104,3 +111,6 @@ services:
 networks:
   bp-playground:
     driver: bridge
+
+volumes:
+  shared:

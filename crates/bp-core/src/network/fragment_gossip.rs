@@ -15,12 +15,6 @@ pub struct FragmentIndexAnnouncement {
     pub pointers: Vec<FragmentPointer>,
 }
 
-impl FragmentIndexAnnouncement {
-    pub fn topic_name(network_id: &str) -> String {
-        format!("billpouch/v1/{}/index", network_id)
-    }
-}
-
 #[derive(Debug, Default)]
 pub struct RemoteFragmentIndex {
     inner: HashMap<String, Vec<FragmentPointer>>,
@@ -69,14 +63,6 @@ mod tests {
                 })
                 .collect(),
         }
-    }
-
-    #[test]
-    fn topic_name_format() {
-        assert_eq!(
-            FragmentIndexAnnouncement::topic_name("amici"),
-            "billpouch/v1/amici/index"
-        );
     }
 
     #[test]

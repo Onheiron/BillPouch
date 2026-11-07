@@ -180,13 +180,56 @@ struct NetworkBody {
     force: bool,
 }
 
+#[derive(Deserialize)]
+struct CreateNetworkBody {
+    name: String,
+}
+
 #[instrument(skip_all)]
-async fn network_join(State(state): State<AppState>, Json(body): Json<NetworkBody>) -> Response {
+async fn network_create(
+    State(state): State<AppState>,
+    Json(body): Json<CreateNetworkBody>,
+) -> Response {
     respond(
         &state,
-        ControlRequest::Join {
-            network_id: body.network_id,
+        ControlRequest::CreateNetwork { name: body.name },
+        StatusCode::CREATED,
+    )
+    .await
+}
+
+#[derive(Deserialize)]
+struct InviteBody {
+    member_key: String,
+}
+
+#[instrument(skip_all)]
+async fn network_invite(
+    State(state): State<AppState>,
+    Path(network_id): Path<String>,
+    Json(body): Json<InviteBody>,
+) -> Response {
+    respond(
+        &state,
+        ControlRequest::Invite {
+            network_id,
+            member_key: body.member_key,
         },
+        StatusCode::CREATED,
+    )
+    .await
+}
+
+#[derive(Deserialize)]
+struct JoinBody {
+    token: String,
+}
+
+#[instrument(skip_all)]
+async fn network_join(State(state): State<AppState>, Json(body): Json<JoinBody>) -> Response {
+    respond(
+        &state,
+        ControlRequest::JoinNetwork { token: body.token },
         StatusCode::OK,
     )
     .await
@@ -208,15 +251,10 @@ async fn network_leave(State(state): State<AppState>, Json(body): Json<NetworkBo
 #[derive(Deserialize)]
 struct PutFileBody {
     chunk_data: String,
-    #[serde(default = "default_network")]
     network_id: String,
     ph: Option<f64>,
     q_target: Option<f64>,
     file_name: Option<String>,
-}
-
-fn default_network() -> String {
-    "public".into()
 }
 
 #[instrument(skip_all)]
@@ -244,7 +282,6 @@ async fn put_file(State(state): State<AppState>, Json(body): Json<PutFileBody>) 
 
 #[derive(Deserialize)]
 struct GetFileQuery {
-    #[serde(default = "default_network")]
     network: String,
 }
 
@@ -273,71 +310,6 @@ async fn get_file(
         .into_response(),
         Err(e) => api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
-}
-
-#[derive(Deserialize)]
-struct CreateInviteBody {
-    network_id: String,
-    invite_password: String,
-    #[serde(default)]
-    invitee_fingerprint: Option<String>,
-    #[serde(default)]
-    ttl_hours: Option<u64>,
-}
-
-#[instrument(skip_all)]
-async fn create_invite(
-    State(state): State<AppState>,
-    Json(body): Json<CreateInviteBody>,
-) -> Response {
-    respond(
-        &state,
-        ControlRequest::CreateInvite {
-            network_id: body.network_id,
-            invitee_fingerprint: body.invitee_fingerprint,
-            invite_password: body.invite_password,
-            ttl_hours: body.ttl_hours,
-        },
-        StatusCode::OK,
-    )
-    .await
-}
-
-#[derive(Deserialize)]
-struct RedeemInviteBody {
-    blob: String,
-    invite_password: String,
-}
-
-#[instrument(skip_all)]
-async fn redeem_invite(
-    State(state): State<AppState>,
-    Json(body): Json<RedeemInviteBody>,
-) -> Response {
-    let payload = match bp_core::invite::redeem_invite(&body.blob, &body.invite_password) {
-        Ok(p) => p,
-        Err(e) => return api_error(StatusCode::UNPROCESSABLE_ENTITY, e.to_string()),
-    };
-
-    if let Err(e) = bp_core::invite::save_invite_key(&payload) {
-        return api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
-    }
-
-    let network_id = payload.network_id.clone();
-
-    let _ = call_daemon(
-        &state,
-        ControlRequest::Join {
-            network_id: network_id.clone(),
-        },
-    )
-    .await;
-    Json(serde_json::json!({
-        "status": "joined",
-        "network_id": network_id,
-        "inviter_fingerprint": payload.inviter_fingerprint,
-    }))
-    .into_response()
 }
 
 #[derive(Deserialize)]
@@ -386,13 +358,13 @@ async fn main() -> anyhow::Result<()> {
         .route("/services/:service_id", delete(farewell))
         .route("/services/:service_id/pause", post(pause_service))
         .route("/services/:service_id/resume", post(resume_service))
+        .route("/networks", post(network_create))
+        .route("/networks/:network_id/invites", post(network_invite))
         .route("/networks/join", post(network_join))
         .route("/networks/leave", post(network_leave))
         .route("/files", post(put_file))
         .route("/files/:chunk_id", get(get_file))
         .route("/relay/connect", post(relay_connect))
-        .route("/invites", post(create_invite))
-        .route("/invites/redeem", post(redeem_invite))
         .with_state(state);
 
     let addr: SocketAddr = format!("{}:{}", args.host, args.port)

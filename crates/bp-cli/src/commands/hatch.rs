@@ -15,15 +15,7 @@ pub async fn hatch(
     metadata: HashMap<String, serde_json::Value>,
     passphrase: Option<String>,
 ) -> anyhow::Result<()> {
-    if !Identity::exists()? {
-        anyhow::bail!("Not logged in. Run `bp login` first.");
-    }
-
-    if !daemon::is_running() {
-        start_daemon_background(passphrase).await?;
-        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
-    }
-
+    ensure_daemon(passphrase).await?;
     let mut client = ControlClient::connect().await?;
     let data = client
         .request(ControlRequest::Hatch {
@@ -39,6 +31,17 @@ pub async fn hatch(
         println!("   Service ID  : {}", hatch.service_id);
         println!("   Type        : {}", hatch.service_type);
         println!("   Network     : {}", hatch.network_id);
+    }
+    Ok(())
+}
+
+pub async fn ensure_daemon(passphrase: Option<String>) -> anyhow::Result<()> {
+    if !Identity::exists()? {
+        anyhow::bail!("Not logged in. Run `bp login` first.");
+    }
+    if !daemon::is_running() {
+        start_daemon_background(passphrase).await?;
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
     }
     Ok(())
 }
