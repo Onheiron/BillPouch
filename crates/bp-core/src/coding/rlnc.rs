@@ -143,28 +143,15 @@ pub fn decode(fragments: &[EncodedFragment]) -> BpResult<Vec<u8>> {
         )));
     }
 
-    for (i, f) in fragments[..k].iter().enumerate() {
-        if f.k != k {
+    for (i, f) in fragments.iter().enumerate() {
+        if f.k != k || f.data.len() != sym_size || f.coding_vector.len() != k {
             return Err(BpError::Coding(format!(
-                "decode: fragment {i} has k={}, expected {k}",
-                f.k
-            )));
-        }
-        if f.data.len() != sym_size {
-            return Err(BpError::Coding(format!(
-                "decode: fragment {i} data len={}, expected {sym_size}",
-                f.data.len()
-            )));
-        }
-        if f.coding_vector.len() != k {
-            return Err(BpError::Coding(format!(
-                "decode: fragment {i} coding_vector len={}, expected {k}",
-                f.coding_vector.len()
+                "decode: fragment {i} does not match k={k}, symbol size={sym_size}"
             )));
         }
     }
 
-    let mut matrix: Vec<Vec<u8>> = fragments[..k]
+    let mut matrix: Vec<Vec<u8>> = fragments
         .iter()
         .map(|f| {
             let mut row = f.coding_vector.clone();
@@ -174,36 +161,33 @@ pub fn decode(fragments: &[EncodedFragment]) -> BpResult<Vec<u8>> {
         .collect();
 
     for col in 0..k {
-        let pivot = (col..k).find(|&r| matrix[r][col] != 0).ok_or_else(|| {
-            BpError::Coding(format!(
-                "decode: matrix is singular at column {col} (linearly dependent fragments)"
-            ))
-        })?;
+        let pivot = (col..matrix.len())
+            .find(|&r| matrix[r][col] != 0)
+            .ok_or_else(|| {
+                BpError::Coding(format!(
+                    "decode: fragments span rank {col} < k={k} (linearly dependent)"
+                ))
+            })?;
         matrix.swap(col, pivot);
 
-        let pivot_val = matrix[col][col];
-        let pivot_inv = gf256::inv(pivot_val);
+        let pivot_inv = gf256::inv(matrix[col][col]);
         for elem in matrix[col].iter_mut() {
             *elem = gf256::mul(*elem, pivot_inv);
         }
 
-        for row in 0..k {
-            if row == col {
-                continue;
-            }
-            let factor = matrix[row][col];
-            if factor == 0 {
-                continue;
-            }
-            let pivot_row: Vec<u8> = matrix[col].clone();
-            for (dst, &src) in matrix[row].iter_mut().zip(pivot_row.iter()) {
-                *dst ^= gf256::mul(factor, src);
+        let pivot_row = matrix[col].clone();
+        for (r, row) in matrix.iter_mut().enumerate() {
+            let factor = row[col];
+            if r != col && factor != 0 {
+                for (dst, &src) in row.iter_mut().zip(pivot_row.iter()) {
+                    *dst ^= gf256::mul(factor, src);
+                }
             }
         }
     }
 
     let mut framed = Vec::with_capacity(k * sym_size);
-    for row in &matrix {
+    for row in &matrix[..k] {
         framed.extend_from_slice(&row[k..]);
     }
     let len = framed
@@ -379,9 +363,19 @@ mod tests {
         for len in [1usize, 2, 7, 1000, 1028, 4097] {
             let chunk: Vec<u8> = (0..len).map(|i| (i * 31 % 251) as u8).collect();
             for k in 1..=5 {
-                let frags = encode(&chunk, k, k + 3).unwrap();
-                assert_eq!(decode(&frags[3..]).unwrap(), chunk, "len={len} k={k}");
+                let frags = encode(&chunk, k, 2 * k + 4).unwrap();
+                assert_eq!(decode(&frags[k..]).unwrap(), chunk, "len={len} k={k}");
             }
         }
+    }
+
+    #[test]
+    fn decode_skips_dependent_fragments() {
+        let chunk = b"dependent fragments must not break decoding".to_vec();
+        let frags = encode(&chunk, 3, 6).unwrap();
+        let mut input = vec![frags[0].clone(), frags[0].clone()];
+        input.extend_from_slice(&frags[1..3]);
+        assert_eq!(decode(&input).unwrap(), chunk);
+        assert!(decode(&[frags[0].clone(), frags[0].clone(), frags[1].clone()]).is_err());
     }
 }
