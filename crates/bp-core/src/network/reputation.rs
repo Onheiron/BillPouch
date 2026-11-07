@@ -1,37 +1,19 @@
-//! Peer reputation — R0..R4 tiers derived from Proof-of-Storage history.
-//!
-//! | Tier | Name       | Criteria                                                  |
-//! |------|------------|-----------------------------------------------------------|
-//! | R0   | Quarantine | `fault_score ≥ FAULT_BLACKLISTED`, or evicted (30-day lock) |
-//! | R1   | Fledgling  | Default; new or not yet meeting R2                         |
-//! | R2   | Reliable   | Known ≥ 30 d, PoS pass rate ≥ 98 %                         |
-//! | R3   | Trusted    | Known ≥ 90 d, PoS pass rate ≥ 99.5 %                       |
-//! | R4   | Pillar     | Known ≥ 365 d, PoS pass rate ≥ 99.9 %                      |
-//!
-//! Records are updated by the quality monitor after every PoS challenge and
-//! live in memory for the daemon's lifetime.  `reputation_score` is a
-//! running counter (+[`PASS_INC`] / −[`FAIL_DEC`]) shown by `bp status`.
-
 use crate::network::qos::FAULT_BLACKLISTED;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Score increment per passed PoS challenge.
 pub const PASS_INC: i64 = 2;
-/// Score decrement per failed PoS challenge.
 pub const FAIL_DEC: i64 = 10;
 
 const DAY: u64 = 86_400;
 const R0_LOCK_DAYS: u64 = 30;
 
-/// `(tier, minimum days known, minimum PoS pass rate)`, best tier first.
 const PROMOTIONS: [(ReputationTier, u64, f64); 3] = [
     (ReputationTier::R4, 365, 0.999),
     (ReputationTier::R3, 90, 0.995),
     (ReputationTier::R2, 30, 0.98),
 ];
 
-/// Discrete reputation tier for a Pouch peer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum ReputationTier {
@@ -43,7 +25,6 @@ pub enum ReputationTier {
 }
 
 impl ReputationTier {
-    /// Human-readable name.
     pub fn name(self) -> &'static str {
         match self {
             Self::R0 => "Quarantine",
@@ -54,9 +35,6 @@ impl ReputationTier {
         }
     }
 
-    /// Target recovery probability `Ph` used to compute the effective
-    /// available storage of a Pouch with this tier
-    /// (see [`crate::coding::params::compute_network_storage_factor`]).
     pub fn qos_target_ph(self) -> f64 {
         match self {
             Self::R0 => 0.0,
@@ -74,22 +52,14 @@ impl std::fmt::Display for ReputationTier {
     }
 }
 
-/// Per-peer reputation state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReputationRecord {
-    /// libp2p PeerId (base58).
     pub peer_id: String,
-    /// Running score: +PASS_INC per passed challenge, −FAIL_DEC per failure.
     pub reputation_score: i64,
-    /// Current tier.
     pub tier: ReputationTier,
-    /// Unix timestamp (s) when this peer was first seen.
     pub first_seen_at: u64,
-    /// If set, the peer is locked in R0 until this Unix timestamp.
     pub r0_lock_until: Option<u64>,
-    /// Total PoS challenges sent to this peer.
     pub pos_challenges_sent: u64,
-    /// PoS challenges answered successfully.
     pub pos_challenges_passed: u64,
 }
 
@@ -106,7 +76,6 @@ impl ReputationRecord {
         }
     }
 
-    /// Record a PoS challenge outcome and recompute the tier.
     pub fn record_pos_challenge(&mut self, passed: bool, fault_score: u8, now_secs: u64) {
         self.pos_challenges_sent += 1;
         if passed {
@@ -118,14 +87,12 @@ impl ReputationRecord {
         self.recompute_tier(fault_score, now_secs);
     }
 
-    /// Eviction without notice: score reset and R0 lock for 30 days.
     pub fn evict_without_notice(&mut self, now_secs: u64) {
         self.reputation_score = 0;
         self.tier = ReputationTier::R0;
         self.r0_lock_until = Some(now_secs + R0_LOCK_DAYS * DAY);
     }
 
-    /// Recompute the tier from the current counters.
     pub fn recompute_tier(&mut self, fault_score: u8, now_secs: u64) {
         if let Some(lock_until) = self.r0_lock_until {
             if now_secs < lock_until {
@@ -151,7 +118,6 @@ impl ReputationRecord {
     }
 }
 
-/// In-memory registry of per-peer [`ReputationRecord`]s.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ReputationStore {
     records: HashMap<String, ReputationRecord>,
@@ -162,7 +128,6 @@ impl ReputationStore {
         Self::default()
     }
 
-    /// Return or create the record for `peer_id`.
     pub fn get_or_create(&mut self, peer_id: &str, now_secs: u64) -> &mut ReputationRecord {
         self.records
             .entry(peer_id.to_string())
@@ -173,7 +138,6 @@ impl ReputationStore {
         self.records.get(peer_id)
     }
 
-    /// Current tier for `peer_id` (R1 for unknown peers).
     pub fn tier(&self, peer_id: &str) -> ReputationTier {
         self.get(peer_id).map_or(ReputationTier::R1, |r| r.tier)
     }
@@ -208,7 +172,7 @@ mod tests {
         r.recompute_tier(0, NOW);
         assert_eq!(r.tier, ReputationTier::R4);
 
-        let mut r = veteran(400, 100, 90); // too many failures
+        let mut r = veteran(400, 100, 90);
         r.recompute_tier(0, NOW);
         assert_eq!(r.tier, ReputationTier::R1);
     }
@@ -238,7 +202,7 @@ mod tests {
         r.record_pos_challenge(true, 0, NOW);
         assert_eq!(r.reputation_score, PASS_INC);
         r.record_pos_challenge(false, 0, NOW);
-        assert_eq!(r.reputation_score, 0); // clamped at zero
+        assert_eq!(r.reputation_score, 0);
         assert_eq!((r.pos_challenges_sent, r.pos_challenges_passed), (2, 1));
     }
 }

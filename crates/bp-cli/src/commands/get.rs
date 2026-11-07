@@ -1,12 +1,8 @@
-//! `bp get <chunk_id>` — decode and retrieve a stored file chunk.
-
 use bp_core::{control::protocol::ControlRequest, daemon, identity::Identity};
 use std::path::PathBuf;
 
 use crate::client::ControlClient;
 
-/// Fetch and decode the chunk identified by `chunk_id` from the local Pouch,
-/// writing the recovered bytes to `output`.
 pub async fn get(chunk_id: String, network: String, output: PathBuf) -> anyhow::Result<()> {
     if !Identity::exists()? {
         anyhow::bail!("Not logged in. Run `bp login` first.");

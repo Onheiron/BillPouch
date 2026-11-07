@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# BillPouch playground — 5 simulated users + 1 interactive node ("me").
-# See docker-compose.playground.yml for who runs which services.
 set -euo pipefail
 
 COMPOSE="docker compose -f docker-compose.playground.yml"

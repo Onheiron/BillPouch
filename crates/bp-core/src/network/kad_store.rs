@@ -1,39 +1,10 @@
-//! Persistence for the Kademlia routing table.
-//!
-//! On every save tick (600 s) and on daemon shutdown, the set of peer
-//! multi-addresses discovered via mDNS or Identify is written to
-//! `~/.local/share/billpouch/kad_peers.json`.
-//!
-//! On the next daemon startup, [`KadPeers::load`] reads that file and the
-//! network loop dials each saved address.  This lets the node reconnect to
-//! previously-known peers instantly, without waiting for mDNS multicast.
-//!
-//! ## File format
-//!
-//! Plain JSON object mapping `peer_id_string → [multiaddr_string, ...]`.
-//!
-//! ```json
-//! {
-//!   "12D3KooW...": ["/ip4/192.168.1.10/tcp/41000", "/ip6/.../tcp/41001"],
-//!   ...
-//! }
-//! ```
-
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, path::Path};
 
-// ── KadPeers ──────────────────────────────────────────────────────────────────
-
-/// Persisted map of `peer_id → [multiaddr_string, ...]`.
-///
-/// Wraps a plain [`HashMap`] so we can implement load/save once and reuse the
-/// type in the network loop.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct KadPeers(pub HashMap<String, Vec<String>>);
 
 impl KadPeers {
-    /// Load from `path`.  Returns an empty [`KadPeers`] if the file does not
-    /// exist or cannot be parsed.
     pub fn load(path: &Path) -> Self {
         std::fs::read_to_string(path)
             .ok()
@@ -41,8 +12,6 @@ impl KadPeers {
             .unwrap_or_default()
     }
 
-    /// Write to `path` as pretty-printed JSON.  Logs a warning on failure
-    /// (never panics).
     pub fn save(&self, path: &Path) {
         match serde_json::to_string_pretty(self) {
             Ok(s) => {
@@ -56,7 +25,6 @@ impl KadPeers {
         }
     }
 
-    /// Add `addr_str` to the entry for `peer_id_str`, deduplicating in place.
     pub fn add(&mut self, peer_id_str: String, addr_str: String) {
         let entry = self.0.entry(peer_id_str).or_default();
         if !entry.contains(&addr_str) {
@@ -64,8 +32,6 @@ impl KadPeers {
         }
     }
 }
-
-// ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {

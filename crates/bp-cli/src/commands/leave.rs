@@ -1,12 +1,6 @@
-//! `bp leave <network>` — leave a network safely.
-
 use crate::client::ControlClient;
 use bp_core::control::protocol::ControlRequest;
 
-/// Leave a network.
-///
-/// Without `force`: fails with a clear error if any services are active.
-/// With `force`: auto-evicts all blocking services, then leaves.
 pub async fn leave(network_id: String, force: bool) -> anyhow::Result<()> {
     let mut client = ControlClient::connect().await?;
     let data = client
@@ -17,7 +11,6 @@ pub async fn leave(network_id: String, force: bool) -> anyhow::Result<()> {
         if let Some(msg) = v.get("message").and_then(|m| m.as_str()) {
             println!("🚪 {}", msg);
         }
-        // Blocked (force=false, active services present).
         if let Some(arr) = v.get("blocking_services").and_then(|a| a.as_array()) {
             if !arr.is_empty() {
                 println!("   Blocking services:");
@@ -36,7 +29,6 @@ pub async fn leave(network_id: String, force: bool) -> anyhow::Result<()> {
                 );
             }
         }
-        // Auto-evicted services (force=true).
         if let Some(arr) = v.get("services_auto_evicted").and_then(|a| a.as_array()) {
             if !arr.is_empty() {
                 println!("   Auto-evicted services:");

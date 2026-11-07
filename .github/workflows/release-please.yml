@@ -14,7 +14,6 @@ env:
   BINARY_NAME: bp
 
 jobs:
-  # ── Step 1: Release Please creates/updates PR and optionally tags ──────────
   release-please:
     name: Release Please
     runs-on: ubuntu-latest
@@ -29,7 +28,6 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
-  # ── Step 2: Build cross-platform binaries (only when release is created) ───
   build:
     name: Build ${{ matrix.target }}
     needs: release-please
@@ -83,7 +81,6 @@ jobs:
           path: ${{ matrix.artifact }}
           if-no-files-found: error
 
-  # ── Step 3: Attach binaries to the GitHub Release ──────────────────────────
   upload-assets:
     name: Upload release binaries
     needs: [release-please, build]
@@ -115,7 +112,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # ── Step 4: Build and push the Docker image for the release ────────────────
   docker:
     name: Docker image
     needs: release-please

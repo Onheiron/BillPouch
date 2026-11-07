@@ -1,50 +1,13 @@
-//! Bootstrap node list for initial WAN peer discovery.
-//!
-//! mDNS works only within a single LAN segment.  For nodes running on
-//! different networks, a list of well-known "bootstrap" peers with stable
-//! addresses is required to seed the Kademlia DHT and gossipsub mesh.
-//!
-//! ## File format
-//!
-//! `~/.local/share/billpouch/bootstrap.json` — a JSON array of multiaddr
-//! strings, each including a `/p2p/<PeerId>` suffix:
-//!
-//! ```json
-//! [
-//!   "/ip4/203.0.113.1/tcp/4001/p2p/12D3KooWExamplePeerIdAAAAA",
-//!   "/dns4/bootstrap.billpouch.io/tcp/4001/p2p/12D3KooWExampleBBBBB"
-//! ]
-//! ```
-//!
-//! The file is optional.  If it is absent or empty the daemon starts with
-//! mDNS-only discovery (suitable for purely local deployments).
-//!
-//! ## Runtime
-//!
-//! [`BootstrapList::apply`] is called once during [`run_network_loop`]
-//! initialisation.  For each entry it:
-//! 1. Parses the multiaddr.
-//! 2. Extracts the `/p2p/<PeerId>` component.
-//! 3. Registers the address in the Kademlia routing table.
-//! 4. Dials the peer.
-//!
-//! [`run_network_loop`]: crate::network::run_network_loop
-
 use libp2p::{multiaddr::Protocol, Multiaddr, PeerId, Swarm};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 use crate::network::behaviour::BillPouchBehaviour;
 
-// ── BootstrapList ──────────────────────────────────────────────────────────────
-
-/// A list of bootstrap node multiaddrs loaded from disk.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct BootstrapList(pub Vec<String>);
 
 impl BootstrapList {
-    /// Load from `path`.  Returns an empty list if the file is absent or
-    /// cannot be parsed (never fails hard).
     pub fn load(path: &Path) -> Self {
         std::fs::read_to_string(path)
             .ok()
@@ -52,7 +15,6 @@ impl BootstrapList {
             .unwrap_or_default()
     }
 
-    /// Write the current list to `path` as a pretty JSON array.
     pub fn save(&self, path: &Path) {
         match serde_json::to_string_pretty(self) {
             Ok(s) => {
@@ -64,22 +26,16 @@ impl BootstrapList {
         }
     }
 
-    /// Add an address string, deduplicating in place.
     pub fn add(&mut self, addr: String) {
         if !self.0.contains(&addr) {
             self.0.push(addr);
         }
     }
 
-    /// Remove an address string if present.
     pub fn remove(&mut self, addr: &str) {
         self.0.retain(|a| a != addr);
     }
 
-    /// Apply the list to `swarm`: parse each addr, add to Kademlia, and dial.
-    ///
-    /// Entries that cannot be parsed or that lack a `/p2p/<PeerId>` component
-    /// are skipped with a warning log.
     pub fn apply(&self, swarm: &mut Swarm<BillPouchBehaviour>) {
         if self.0.is_empty() {
             return;
@@ -115,10 +71,6 @@ impl BootstrapList {
     }
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
-
-/// Extract the [`PeerId`] from the `/p2p/<peer_id>` tail of a multiaddr, if
-/// present.
 fn peer_id_from_multiaddr(addr: &Multiaddr) -> Option<PeerId> {
     addr.iter().find_map(|proto| {
         if let Protocol::P2p(peer_id) = proto {
@@ -128,8 +80,6 @@ fn peer_id_from_multiaddr(addr: &Multiaddr) -> Option<PeerId> {
         }
     })
 }
-
-// ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -186,9 +136,6 @@ mod tests {
 
     #[test]
     fn peer_id_from_multiaddr_with_p2p() {
-        // A real-looking (but fake) multiaddr with a valid PeerId base58 suffix.
-        // We just check that the function returns Some for a well-formed addr
-        // and None for one without /p2p/.
         let addr_no_p2p: Multiaddr = "/ip4/1.2.3.4/tcp/4001".parse().unwrap();
         assert!(peer_id_from_multiaddr(&addr_no_p2p).is_none());
     }

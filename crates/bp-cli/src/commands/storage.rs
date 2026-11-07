@@ -1,9 +1,6 @@
-//! `bp storage [--network <id>]` — show storage info for this node.
-
 use crate::client::ControlClient;
 use bp_core::control::protocol::{ControlRequest, StorageInfoData};
 
-/// Query the daemon for storage info and print a human-readable summary.
 pub async fn storage_info(network_id: String) -> anyhow::Result<()> {
     let mut client = ControlClient::connect().await?;
     let data = client
@@ -28,7 +25,6 @@ fn print_storage(d: &StorageInfoData) {
     println!("╚══════════════════════════════════════════════════════╝");
     println!();
 
-    // ── Per-Pouch breakdown ───────────────────────────────────────────────
     if d.pouches.is_empty() {
         println!("💼 Pouches  (none — run `bp hatch pouch --network <id>`)");
     } else {
@@ -58,7 +54,6 @@ fn print_storage(d: &StorageInfoData) {
         println!();
     }
 
-    // ── Aggregate ─────────────────────────────────────────────────────────
     println!("📊 Aggregate");
     println!("─────────────────────────────────────────────────────");
     println!("   Total bid       : {}", fmt_bytes(d.total_bid_bytes));
@@ -69,7 +64,6 @@ fn print_storage(d: &StorageInfoData) {
     );
     println!();
 
-    // ── Uploaded files ────────────────────────────────────────────────────
     println!("📤 Uploaded Files");
     println!("─────────────────────────────────────────────────────");
     println!("   Files   : {}", d.total_files_uploaded);

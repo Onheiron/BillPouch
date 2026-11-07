@@ -1,5 +1,3 @@
-//! Daemon connection used by every CLI command.
-
 use anyhow::{bail, Context};
 use bp_core::{
     config,
@@ -15,7 +13,6 @@ pub struct ControlClient {
 }
 
 impl ControlClient {
-    /// Locate the daemon control socket (fails if the daemon is not running).
     pub async fn connect() -> anyhow::Result<Self> {
         let socket_path = config::socket_path()?;
         if !socket_path.exists() {
@@ -24,14 +21,12 @@ impl ControlClient {
         Ok(Self { socket_path })
     }
 
-    /// Send a request and receive the raw response.
     pub async fn send(&mut self, req: ControlRequest) -> anyhow::Result<ControlResponse> {
         client::send(&self.socket_path, &req)
             .await
             .context("Daemon request failed")
     }
 
-    /// Send a request; return its data on `Ok`, bail on `Error`.
     pub async fn request(
         &mut self,
         req: ControlRequest,
