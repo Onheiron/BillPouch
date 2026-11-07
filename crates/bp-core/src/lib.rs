@@ -1,5 +1,6 @@
 pub mod coding;
 pub mod config;
+pub mod consensus;
 pub mod control;
 pub mod daemon;
 pub mod error;
