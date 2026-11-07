@@ -1,12 +1,6 @@
-//! `bp farewell <service_id>` and `bp farewell <service_id> --evict`.
-
 use crate::client::ControlClient;
 use bp_core::control::protocol::ControlRequest;
 
-/// Send a `Farewell` request to the daemon to stop the service identified by
-/// `service_id` (the UUID returned by `bp hatch`).
-///
-/// Prints a confirmation message if the daemon responds with `Ok`.
 pub async fn farewell(service_id: String) -> anyhow::Result<()> {
     let mut client = ControlClient::connect().await?;
     let data = client
@@ -24,11 +18,6 @@ pub async fn farewell(service_id: String) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Permanently evict a Pouch: announces to the network, purges local storage,
-/// and removes the service from the daemon registry.
-///
-/// This is irreversible. The network will detect missing fragments via
-/// Proof-of-Storage challenges and trigger preventive rebalancing.
 pub async fn farewell_evict(service_id: String) -> anyhow::Result<()> {
     let mut client = ControlClient::connect().await?;
     let data = client

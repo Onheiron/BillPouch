@@ -1,11 +1,7 @@
-//! `bp ls [--network <id>]` — list files stored by this node.
-
 use crate::client::ControlClient;
 use bp_core::control::protocol::{ControlRequest, ListFilesData};
 use chrono::{TimeZone, Utc};
 
-/// Query the daemon for the list of files uploaded by this node and print
-/// a human-readable table.
 pub async fn ls(network_id: String) -> anyhow::Result<()> {
     let mut client = ControlClient::connect().await?;
     let data = client

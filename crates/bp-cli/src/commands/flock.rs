@@ -1,12 +1,6 @@
-//! `bp flock` — show all connected peers and network summary.
-
 use crate::client::ControlClient;
 use bp_core::control::protocol::{ControlRequest, FlockData};
 
-/// Query the daemon for peer and network summary, then pretty-print it.
-///
-/// Sends a `Flock` request and renders local services, joined networks,
-/// and all known peers (with alias, fingerprint, service type, and network).
 pub async fn flock() -> anyhow::Result<()> {
     let mut client = ControlClient::connect().await?;
     let data = client.request(ControlRequest::Flock).await?;
@@ -22,7 +16,6 @@ pub async fn flock() -> anyhow::Result<()> {
 }
 
 fn print_flock(flock: &FlockData) {
-    // ── Local services ────────────────────────────────────────────────────
     println!("╔══════════════════════════════════════════════════════╗");
     println!("║             🦤  BillPouch — Flock View               ║");
     println!("╚══════════════════════════════════════════════════════╝");
@@ -33,7 +26,6 @@ fn print_flock(flock: &FlockData) {
         println!("   (none)");
     } else {
         for svc in &flock.local_services {
-            // Show tier for Pouch services if available.
             let tier_info = if svc.service_type == bp_core::service::ServiceType::Pouch {
                 match svc.metadata.get("tier").and_then(|v| v.as_str()) {
                     Some(t) => format!("  tier: {t}"),
@@ -53,7 +45,6 @@ fn print_flock(flock: &FlockData) {
         }
     }
 
-    // ── Networks ──────────────────────────────────────────────────────────
     println!();
     println!("🌐 Joined Networks  ({})", flock.networks.len());
     println!("─────────────────────────────────────────────────────");
@@ -70,7 +61,6 @@ fn print_flock(flock: &FlockData) {
         }
     }
 
-    // ── Known peers ───────────────────────────────────────────────────────
     println!();
     println!("🐦 Known Peers  ({})", flock.peer_count);
     println!("─────────────────────────────────────────────────────");

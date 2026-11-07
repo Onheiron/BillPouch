@@ -1,7 +1,3 @@
-//! JSON-RPC–style control protocol between the CLI and the daemon.
-//!
-//! Messages are newline-delimited JSON frames exchanged over a Unix socket.
-
 use crate::{
     network::state::NodeInfo,
     service::{ServiceInfo, ServiceType},
@@ -9,145 +5,66 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Request sent from CLI → daemon.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum ControlRequest {
-    /// Spawn a new service of `service_type` in `network_id`.
     Hatch {
         service_type: ServiceType,
         network_id: String,
-        /// Optional extra config (e.g. `{"storage_bytes": 10737418240}` for Pouch).
         metadata: HashMap<String, serde_json::Value>,
     },
-    /// Return all known peers and network summary.
     Flock,
-    /// Kill a running service by ID.
-    Farewell { service_id: String },
-    /// Permanently evict a Pouch from the network.
-    ///
-    /// Announces to the network that this Pouch is going offline permanently,
-    /// records a reputation eviction, removes the service from `ServiceRegistry`,
-    /// and purges all on-disk fragment storage.
-    ///
-    /// Fragment redistribution to other peers is not yet automated — the
-    /// remaining network peers will detect missing fragments via Proof-of-Storage
-    /// challenges and trigger preventive recoding.
-    FarewellEvict { service_id: String },
-    /// Pause a running Pouch service for planned maintenance.
-    ///
-    /// Announces via gossip that peers should mark this node's fragments as
-    /// `temporarily_unavailable`.  If the service does not resume within
-    /// `eta_minutes`, the quality monitor will apply fault-score increments.
-    Pause {
-        /// Service ID to pause (UUID returned by `bp hatch`).
+    Farewell {
         service_id: String,
-        /// Estimated downtime in minutes.
+    },
+    FarewellEvict {
+        service_id: String,
+    },
+    Pause {
+        service_id: String,
         eta_minutes: u64,
     },
-    /// Resume a previously paused service.
-    ///
-    /// Triggers an immediate gossip announcement and clears the Paused status.
     Resume {
-        /// Service ID to resume.
         service_id: String,
     },
-    /// Join an existing network (subscribe to gossip topics).
-    Join { network_id: String },
-    /// Leave a network.
-    ///
-    /// If `force` is `true` the daemon automatically evicts all active services
-    /// on the network before leaving instead of returning a blocking error.
-    /// Pouch services are evicted permanently (equivalent to
-    /// `bp farewell --evict`); Bill and Post services are stopped gracefully
-    /// (equivalent to `bp farewell`).
+    Join {
+        network_id: String,
+    },
     Leave {
         network_id: String,
-        /// Auto-evict all blocking services, then leave.
-        #[serde(default)]
         force: bool,
     },
-    /// Return info about this daemon (identity, services, networks).
     Status,
-    /// Announce all active services via gossip and wait 2 s for propagation.
-    ///
-    /// Used by `bp status` to ensure the peer list is fresh before
-    /// displaying it.  Returns `Ok("announced")` once the wait is done.
     AnnounceNow,
-    /// Ping — used to check if daemon is alive.
     Ping,
-    /// Encode `chunk_data` with RLNC and store fragments in the local Pouch.
-    ///
-    /// `k` and `n` are derived automatically by the daemon from live QoS data
-    /// and the `ph` target recovery probability.
-    /// Returns a `chunk_id` (BLAKE3 hash prefix) that can be used with `GetFile`.
     PutFile {
-        /// Raw bytes to encode and store.
         chunk_data: Vec<u8>,
-        /// Target recovery probability (default: 0.999).
-        /// The daemon derives k/n from live peer QoS and this target.
         ph: Option<f64>,
-        /// Redundancy overhead fraction (default: 1.0 = k extra fragments).
         q_target: Option<f64>,
-        /// Network ID whose Pouch should hold the fragments.
         network_id: String,
-        /// Optional file name to record in the local file registry.
-        /// Displayed by `bp ls`.
-        #[serde(default)]
         file_name: Option<String>,
     },
-    /// Retrieve and decode a stored file chunk by its `chunk_id`.
     GetFile {
-        /// BLAKE3 chunk hash prefix (16 hex chars) returned by `PutFile`.
         chunk_id: String,
-        /// Network ID to search for the chunk.
         network_id: String,
     },
-    /// Dial a relay node to enable NAT traversal via circuit relay v2.
-    ///
-    /// The daemon dials `relay_addr`, establishes a reservation, and
-    /// subsequently becomes reachable through the relay at
-    /// `/p2p-circuit` addresses.
     ConnectRelay {
-        /// Full multiaddr of the relay node, e.g.
-        /// `/ip4/1.2.3.4/tcp/4001/p2p/12D3KooW...`
         relay_addr: String,
     },
-    /// Generate a signed + password-encrypted invite token for `network_id`.
-    ///
-    /// The token contains the `NetworkMetaKey` for the network, signed with
-    /// the daemon's Ed25519 key and encrypted with `invite_password`.  Share
-    /// the blob and the password with the invitee out-of-band.
     CreateInvite {
-        /// Network to invite the recipient into.
         network_id: String,
-        /// Optional: fingerprint of the specific invitee.  `None` = open invite.
         invitee_fingerprint: Option<String>,
-        /// Password used to encrypt the token — shared out-of-band.
         invite_password: String,
-        /// Token validity in hours (default: 24).
         ttl_hours: Option<u64>,
     },
-    /// Return storage statistics for all local Pouch services.
-    ///
-    /// Includes per-Pouch quota, usage, tier, plus aggregate totals and
-    /// total bytes uploaded by this node's Bill services.
     StorageInfo {
-        /// Filter to a specific network (empty string = all networks).
-        #[serde(default)]
         network_id: String,
     },
-    /// List files uploaded by this node.
-    ///
-    /// Returns entries from the local file registry populated by `PutFile`.
     ListFiles {
-        /// Filter to a specific network (empty string = all networks).
-        #[serde(default)]
         network_id: String,
     },
 }
 
-/// Response sent from daemon → CLI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum ControlResponse {
@@ -172,8 +89,6 @@ impl ControlResponse {
         }
     }
 }
-
-// ── Typed data payloads returned in ControlResponse::Ok.data ─────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HatchData {
@@ -200,122 +115,77 @@ pub struct StatusData {
     pub networks: Vec<String>,
     pub known_peers: usize,
     pub version: String,
-    /// This node's own reputation tier (R0–R4).
     pub reputation_tier: String,
-    /// Continuous reputation score underlying the tier.
     pub reputation_score: i64,
-    /// Storage stats for each active Pouch on this node.
     pub pouch_stats: Vec<PouchStat>,
-    /// Summary of network-wide QoS (if any peers are known).
     pub network_qos: Option<NetworkQosSummary>,
 }
 
-/// Returned by [`ControlRequest::PutFile`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PutFileData {
-    /// BLAKE3 chunk hash prefix identifying this chunk.
     pub chunk_id: String,
-    /// Recovery threshold: minimum fragments needed to reconstruct.
     pub k: usize,
-    /// Total fragments generated per chunk.
     pub n: usize,
-    /// Effective redundancy overhead: `(n − k) / k`.
     pub q: f64,
-    /// Target recovery probability declared at upload time.
     pub ph: f64,
-    /// Rolling effective recovery probability at upload time.
     pub pe: f64,
-    /// How many fragments were stored locally.
     pub fragments_stored: usize,
-    /// How many fragments were pushed to remote Pouches.
     pub fragments_distributed: usize,
-    /// Human-readable summary.
     pub message: String,
 }
 
-/// Returned by [`ControlRequest::GetFile`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetFileData {
-    /// BLAKE3 chunk hash prefix of the retrieved chunk.
     pub chunk_id: String,
-    /// Recovered raw bytes.
     pub data: Vec<u8>,
-    /// How many fragments were used for decoding.
     pub fragments_used: usize,
-    /// How many of those fragments came from remote Pouches.
     pub fragments_remote: usize,
 }
 
-/// Returned by [`ControlRequest::CreateInvite`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InviteData {
-    /// Hex-encoded invite blob to share with the invitee.
     pub blob: String,
-    /// Network this invite grants access to.
     pub network_id: String,
-    /// Unix timestamp when the token expires.
     pub expires_at: u64,
-    /// Fingerprint of the inviter (for display).
     pub inviter_fingerprint: String,
 }
 
-// ── Storage / file-listing types ────────────────────────────────────────────
-
-/// Storage statistics for a single local Pouch service.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PouchStat {
     pub service_id: String,
     pub network_id: String,
-    /// Named storage tier (e.g. "T2 — Stone"), if declared at hatch time.
     pub storage_tier: Option<String>,
-    /// Bytes offered to the network at bid time.
     pub storage_bid_bytes: u64,
-    /// Bytes currently occupied by stored fragments.
     pub storage_used_bytes: u64,
-    /// Bytes still available for new fragments.
     pub available_bytes: u64,
 }
 
-/// High-level QoS summary for the connected network peers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkQosSummary {
-    /// Number of peers with known QoS data.
     pub observed_peers: usize,
-    /// Average stability score across all observed peers (0.0–1.0).
     pub avg_stability: f64,
-    /// Number of peers at each reputation tier.
     pub tier_counts: std::collections::HashMap<String, usize>,
 }
 
-/// Returned by [`ControlRequest::StorageInfo`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorageInfoData {
-    /// Per-Pouch breakdown.
     pub pouches: Vec<PouchStat>,
-    /// Sum of all Pouch bids.
     pub total_bid_bytes: u64,
-    /// Sum of all fragment bytes currently stored.
     pub total_used_bytes: u64,
-    /// Total bytes still available across all Pouches.
     pub total_available_bytes: u64,
-    /// Total number of files in the local file registry.
     pub total_files_uploaded: usize,
-    /// Total original bytes of all uploaded files.
     pub total_uploaded_bytes: u64,
 }
 
-/// A single file entry returned by [`ControlRequest::ListFiles`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileEntry {
     pub file_name: String,
     pub size_bytes: u64,
     pub chunk_id: String,
     pub network_id: String,
-    /// Unix timestamp (seconds) when the file was uploaded.
     pub uploaded_at: u64,
 }
 
-/// Returned by [`ControlRequest::ListFiles`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ListFilesData {
     pub files: Vec<FileEntry>,

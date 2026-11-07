@@ -1,5 +1,3 @@
-//! Client side of the control protocol, shared by `bp` and `bp-api`.
-
 use crate::{
     control::protocol::{ControlRequest, ControlResponse},
     error::{BpError, BpResult},
@@ -10,9 +8,6 @@ use tokio::{
     net::UnixStream,
 };
 
-/// Send one request to the daemon listening on `socket_path` and return its
-/// response.  `Err` means the daemon could not be reached or replied with
-/// invalid JSON; daemon-side failures come back as [`ControlResponse::Error`].
 pub async fn send(socket_path: &Path, req: &ControlRequest) -> BpResult<ControlResponse> {
     let mut stream = UnixStream::connect(socket_path)
         .await

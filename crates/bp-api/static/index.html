@@ -92,7 +92,6 @@ async function refresh() {
   const dot = document.getElementById('status-dot');
   const ts  = document.getElementById('refresh-ts');
 
-  // ── Status + Identity ────────────────────────────────────────────────────
   try {
     const s = await api('/status');
     dot.className = 'ok';
@@ -130,7 +129,6 @@ async function refresh() {
     document.getElementById('card-services').innerHTML  = '<h2>Services</h2>'  + err;
   }
 
-  // ── Peers ────────────────────────────────────────────────────────────────
   try {
     const p = await api('/peers');
     const peers = p.known_peers ?? (Array.isArray(p) ? p : []);

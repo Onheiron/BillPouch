@@ -1,9 +1,3 @@
-//! # bp-api — BillPouch REST API gateway
-//!
-//! Thin HTTP adapter that forwards requests to the running daemon over the
-//! Unix control socket, plus an embedded dashboard at `GET /`.
-//! Endpoints: see `docs/api.md`.
-
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -25,8 +19,6 @@ use serde::Deserialize;
 use std::{collections::HashMap, net::SocketAddr, path::PathBuf, sync::Arc};
 use tracing::instrument;
 
-// ── CLI args ──────────────────────────────────────────────────────────────────
-
 #[derive(Parser)]
 #[command(
     name = "bp-api",
@@ -35,26 +27,20 @@ use tracing::instrument;
     long_about = None
 )]
 struct Args {
-    /// TCP port to listen on.
+    #[arg(help = "TCP port to listen on")]
     #[arg(long, default_value_t = 3000)]
     port: u16,
 
-    /// Host address to bind.
+    #[arg(help = "Host address to bind")]
     #[arg(long, default_value = "127.0.0.1")]
     host: String,
 }
-
-// ── App state ─────────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
 struct AppState {
     socket_path: Arc<PathBuf>,
 }
 
-// ── Daemon calls ──────────────────────────────────────────────────────────────
-
-/// Send `req` to the daemon; `Ok(data)` on success, or a ready HTTP error
-/// (503 if the daemon is unreachable, 500 if it returned an error).
 async fn call_daemon(
     state: &AppState,
     req: ControlRequest,
@@ -69,7 +55,6 @@ async fn call_daemon(
     }
 }
 
-/// Call the daemon and wrap its data as a JSON response with `status`.
 async fn respond(state: &AppState, req: ControlRequest, status: StatusCode) -> Response {
     match call_daemon(state, req).await {
         Ok(data) => (status, Json(data)).into_response(),
@@ -88,37 +73,26 @@ fn api_error(status: StatusCode, message: String) -> Response {
     (status, Json(serde_json::json!({ "error": message }))).into_response()
 }
 
-// ── Dashboard (embedded) ─────────────────────────────────────────────────────
-
-/// The single-page dashboard, embedded at compile time from `static/index.html`.
 const DASHBOARD_HTML: &str = include_str!("../static/index.html");
 
-/// `GET /` — serve the web dashboard.
 async fn dashboard() -> impl IntoResponse {
     Html(DASHBOARD_HTML)
 }
 
-// ── Liveness ──────────────────────────────────────────────────────────────────
-
-/// `GET /ping` — liveness check.
 #[instrument(skip_all)]
 async fn ping(State(state): State<AppState>) -> Response {
     respond(&state, ControlRequest::Ping, StatusCode::OK).await
 }
 
-/// `GET /status` — daemon identity and local services.
 #[instrument(skip_all)]
 async fn status(State(state): State<AppState>) -> Response {
     respond(&state, ControlRequest::Status, StatusCode::OK).await
 }
 
-/// `GET /peers` — all known gossip peers.
 #[instrument(skip_all)]
 async fn peers(State(state): State<AppState>) -> Response {
     respond(&state, ControlRequest::Flock, StatusCode::OK).await
 }
-
-// ── /services ─────────────────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
 struct HatchBody {
@@ -128,7 +102,6 @@ struct HatchBody {
     metadata: HashMap<String, serde_json::Value>,
 }
 
-/// `POST /services` — hatch (start) a new service.
 #[instrument(skip_all)]
 async fn hatch(State(state): State<AppState>, Json(body): Json<HatchBody>) -> Response {
     let req = ControlRequest::Hatch {
@@ -139,15 +112,12 @@ async fn hatch(State(state): State<AppState>, Json(body): Json<HatchBody>) -> Re
     respond(&state, req, StatusCode::CREATED).await
 }
 
-/// Optional query parameters for `DELETE /services/:service_id`.
 #[derive(Deserialize, Default)]
 struct FarewellQuery {
-    /// If `true`, the daemon also evicts all fragments stored by this service.
     #[serde(default)]
     evict: bool,
 }
 
-/// `DELETE /services/:service_id[?evict=true]` — stop (and optionally evict) a service.
 #[instrument(skip_all)]
 async fn farewell(
     State(state): State<AppState>,
@@ -171,16 +141,11 @@ async fn farewell(
     }
 }
 
-// ── /services/:id/pause  /services/:id/resume ─────────────────────────────────
-
 #[derive(Deserialize)]
 struct PauseBody {
     eta_minutes: u64,
 }
 
-/// `POST /services/:service_id/pause` — pause a running service.
-///
-/// Body JSON: `{ "eta_minutes": 30 }`
 #[instrument(skip_all)]
 async fn pause_service(
     State(state): State<AppState>,
@@ -198,7 +163,6 @@ async fn pause_service(
     .await
 }
 
-/// `POST /services/:service_id/resume` — resume a paused service.
 #[instrument(skip_all)]
 async fn resume_service(State(state): State<AppState>, Path(service_id): Path<String>) -> Response {
     respond(
@@ -209,17 +173,13 @@ async fn resume_service(State(state): State<AppState>, Path(service_id): Path<St
     .await
 }
 
-// ── /networks ─────────────────────────────────────────────────────────────────
-
 #[derive(Deserialize)]
 struct NetworkBody {
     network_id: String,
-    /// Auto-evict all active services before leaving (only used by `POST /networks/leave`).
     #[serde(default)]
     force: bool,
 }
 
-/// `POST /networks/join` — subscribe to a gossip network.
 #[instrument(skip_all)]
 async fn network_join(State(state): State<AppState>, Json(body): Json<NetworkBody>) -> Response {
     respond(
@@ -232,7 +192,6 @@ async fn network_join(State(state): State<AppState>, Json(body): Json<NetworkBod
     .await
 }
 
-/// `POST /networks/leave` — unsubscribe from a gossip network.
 #[instrument(skip_all)]
 async fn network_leave(State(state): State<AppState>, Json(body): Json<NetworkBody>) -> Response {
     respond(
@@ -246,20 +205,13 @@ async fn network_leave(State(state): State<AppState>, Json(body): Json<NetworkBo
     .await
 }
 
-// ── /files ────────────────────────────────────────────────────────────────────
-
 #[derive(Deserialize)]
 struct PutFileBody {
-    /// Base64-encoded bytes of the file to store.
     chunk_data: String,
-    /// Network whose Pouches will store the fragments.
     #[serde(default = "default_network")]
     network_id: String,
-    /// Target recovery probability (default: 0.999).
     ph: Option<f64>,
-    /// Redundancy overhead (default: 1.0).
     q_target: Option<f64>,
-    /// Human-readable name for the file (shown by `bp ls`).
     file_name: Option<String>,
 }
 
@@ -267,10 +219,6 @@ fn default_network() -> String {
     "public".into()
 }
 
-/// `POST /files` — encode and store a file chunk.
-///
-/// Body JSON: `{ "chunk_data": "<base64>", "network_id": "public", "ph": 0.999, "q_target": 1.0 }`
-/// Returns: `{ "chunk_id": "<hex>" }`
 #[instrument(skip_all)]
 async fn put_file(State(state): State<AppState>, Json(body): Json<PutFileBody>) -> Response {
     let raw = match B64.decode(&body.chunk_data) {
@@ -300,10 +248,6 @@ struct GetFileQuery {
     network: String,
 }
 
-/// `GET /files/:chunk_id` — retrieve and decode a stored file.
-///
-/// Query: `?network=public` (optional, defaults to "public")
-/// Returns: `{ "chunk_id": "...", "data": "<base64>" }` or HTTP 404.
 #[instrument(skip_all)]
 async fn get_file(
     State(state): State<AppState>,
@@ -319,7 +263,6 @@ async fn get_file(
         Ok(data) => data,
         Err(resp) => return *resp,
     };
-    // `data` is serialized by serde as a JSON array of u8 — return base64.
     match serde_json::from_value::<GetFileData>(data) {
         Ok(d) => Json(serde_json::json!({
             "chunk_id": d.chunk_id,
@@ -332,8 +275,6 @@ async fn get_file(
     }
 }
 
-// ── /invites ─────────────────────────────────────────────────────────────────
-
 #[derive(Deserialize)]
 struct CreateInviteBody {
     network_id: String,
@@ -344,10 +285,6 @@ struct CreateInviteBody {
     ttl_hours: Option<u64>,
 }
 
-/// `POST /invites` — create a signed invite token for a network.
-///
-/// Body JSON: `{ "network_id": "friends", "invite_password": "secret" }`
-/// Returns: `{ "blob": "<hex>", "network_id": "...", ... }`
 #[instrument(skip_all)]
 async fn create_invite(
     State(state): State<AppState>,
@@ -372,32 +309,22 @@ struct RedeemInviteBody {
     invite_password: String,
 }
 
-/// `POST /invites/redeem` — redeem an invite token and join the network.
-///
-/// Body JSON: `{ "blob": "<hex>", "invite_password": "secret" }`
-///
-/// The crypto (decrypt + verify) runs locally inside bp-api.  After saving
-/// the NetworkMetaKey the daemon is asked to subscribe to the network topics.
 #[instrument(skip_all)]
 async fn redeem_invite(
     State(state): State<AppState>,
     Json(body): Json<RedeemInviteBody>,
 ) -> Response {
-    // 1. Decrypt and verify the invite token locally.
     let payload = match bp_core::invite::redeem_invite(&body.blob, &body.invite_password) {
         Ok(p) => p,
         Err(e) => return api_error(StatusCode::UNPROCESSABLE_ENTITY, e.to_string()),
     };
 
-    // 2. Persist the NetworkMetaKey.
     if let Err(e) = bp_core::invite::save_invite_key(&payload) {
         return api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
     }
 
     let network_id = payload.network_id.clone();
 
-    // 3. Ask the daemon to join (subscribe gossip topics).
-    // Ignore join errors (e.g. already joined) — the key is already saved.
     let _ = call_daemon(
         &state,
         ControlRequest::Join {
@@ -413,19 +340,11 @@ async fn redeem_invite(
     .into_response()
 }
 
-// ── Entry point ───────────────────────────────────────────────────────────────
-
-/// Body for `POST /relay/connect`.
 #[derive(Deserialize)]
 struct RelayConnectBody {
-    /// Full multiaddr of the relay node, e.g.
-    /// `/ip4/1.2.3.4/tcp/4001/p2p/12D3KooW...`
     relay_addr: String,
 }
 
-/// `POST /relay/connect` — dial a relay node for NAT traversal.
-///
-/// Body: `{ "relay_addr": "/ip4/..." }`
 #[instrument(skip(state, body))]
 async fn relay_connect(
     State(state): State<AppState>,

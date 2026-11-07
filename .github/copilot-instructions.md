@@ -14,7 +14,9 @@ P2P social distributed filesystem in Rust. Read `README.md`, then `docs/`
 
 ## Rules
 
-- Logging with `tracing` only. Comments, docs and identifiers in English.
+- No comments in code: names and small functions carry the meaning; explanations go in `docs/`.
+- Logging with `tracing` only. Identifiers and docs in English.
+- No backward-compatibility shims or fallbacks for old formats.
 - Keep it minimal: no speculative APIs, no code without a caller, no
   duplicated logic — extend the existing helper instead.
 - A new `ControlRequest` needs: handler in `dispatch`, CLI command, REST route

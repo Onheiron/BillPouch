@@ -1,15 +1,8 @@
-//! `bp put <file>` — encode and store a file in a local Pouch.
-
 use bp_core::{control::protocol::ControlRequest, daemon, identity::Identity};
 use std::path::PathBuf;
 
 use crate::client::ControlClient;
 
-/// Read `path` from disk, encode it with RLNC and store the fragments in the
-/// local Pouch for `network_id`.
-///
-/// `k` and `n` are computed by the daemon from live peer QoS data and the
-/// `ph` target recovery probability.
 pub async fn put(
     path: PathBuf,
     network: String,
@@ -35,7 +28,6 @@ pub async fn put(
 
     let file_bytes = chunk_data.len();
 
-    // If no name given, fall back to the file name from the path.
     let file_name = name.or_else(|| {
         path.file_name()
             .and_then(|n| n.to_str())

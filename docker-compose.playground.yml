@@ -1,19 +1,5 @@
-## ═══════════════════════════════════════════════════════════════════════════════
-## BillPouch Playground — simulated P2P network
-## ═══════════════════════════════════════════════════════════════════════════════
-## 5 simulated users with different service profiles + 1 interactive node (you).
-##
-## Usage:
-##   ./playground.sh up        — start the network
-##   ./playground.sh enter     — enter as yourself
-##   ./playground.sh enter carlo — enter carlo's node
-##   ./playground.sh status    — see each node's view
-##   ./playground.sh down      — stop everything
-## ═══════════════════════════════════════════════════════════════════════════════
-
 services:
 
-  # ── Carlo: storage + personal I/O ──────────────────────────────────────────
   carlo:
     image: onheirongithub/billpouch:latest
     volumes:
@@ -31,7 +17,6 @@ services:
     networks:
       - bp-playground
 
-  # ── Marco: relay + storage ─────────────────────────────────────────────────
   marco:
     image: onheirongithub/billpouch:latest
     volumes:
@@ -49,7 +34,6 @@ services:
     networks:
       - bp-playground
 
-  # ── Lucia: personal I/O + relay ────────────────────────────────────────────
   lucia:
     image: onheirongithub/billpouch:latest
     volumes:
@@ -66,7 +50,6 @@ services:
     networks:
       - bp-playground
 
-  # ── Elena: heavy storage node ──────────────────────────────────────────────
   elena:
     image: onheirongithub/billpouch:latest
     volumes:
@@ -84,7 +67,6 @@ services:
     networks:
       - bp-playground
 
-  # ── Paolo: file I/O only ───────────────────────────────────────────────────
   paolo:
     image: onheirongithub/billpouch:latest
     volumes:
@@ -101,7 +83,6 @@ services:
     networks:
       - bp-playground
 
-  # ── YOU: interactive node ──────────────────────────────────────────────────
   me:
     image: onheirongithub/billpouch:latest
     volumes:

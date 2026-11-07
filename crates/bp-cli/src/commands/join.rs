@@ -1,10 +1,3 @@
-//! `bp join` — subscribe to a network's gossipsub topic.
-//!
-//! This command is used by scripts and automation to subscribe to the gossipsub
-//! topic before hatching a service, ensuring peer connections stay alive.
-//! It is hidden from the public help output; end users join networks via
-//! `bp invite join`.
-
 use crate::client::ControlClient;
 use anyhow::Result;
 use bp_core::control::protocol::ControlRequest;

@@ -1,13 +1,6 @@
-//! `bp bootstrap` — manage the WAN bootstrap node list.
-//!
-//! These commands operate directly on
-//! `~/.local/share/billpouch/bootstrap.json` without requiring a running
-//! daemon.  Changes take effect the next time the daemon starts.
-
 use anyhow::{bail, Context, Result};
 use bp_core::{config, network::BootstrapList};
 
-/// Print all currently configured bootstrap addresses.
 pub fn list() -> Result<()> {
     let path = config::bootstrap_path()?;
     let list = BootstrapList::load(&path);
@@ -23,12 +16,7 @@ pub fn list() -> Result<()> {
     Ok(())
 }
 
-/// Add `addr` to the bootstrap list (idempotent).
-///
-/// `addr` must be a valid multiaddr string.  A `/p2p/<PeerId>` suffix is
-/// required for the daemon to register the peer in Kademlia correctly.
 pub fn add(addr: String) -> Result<()> {
-    // Basic validation: must start with '/' and contain a '/p2p/' component.
     if !addr.starts_with('/') {
         bail!("Invalid multiaddr '{addr}': must start with '/'");
     }
@@ -54,7 +42,6 @@ pub fn add(addr: String) -> Result<()> {
     Ok(())
 }
 
-/// Remove `addr` from the bootstrap list.
 pub fn remove(addr: &str) -> Result<()> {
     let path = config::bootstrap_path().context("Cannot resolve bootstrap path")?;
     let mut list = BootstrapList::load(&path);

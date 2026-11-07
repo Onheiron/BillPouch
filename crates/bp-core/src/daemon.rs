@@ -1,8 +1,3 @@
-//! BillPouch daemon entry point.
-//!
-//! The daemon is started by the CLI (`bp hatch <type>`) when no running daemon
-//! is detected.  It owns the libp2p Swarm and the control Unix socket.
-
 use crate::{
     config,
     control::server::{load_cek_hints, run_control_server, DaemonState},
@@ -21,21 +16,13 @@ use std::{
 };
 use tokio::sync::mpsc;
 
-/// Start the daemon process.  This function blocks until the daemon is killed.
-///
-/// `passphrase` is forwarded to [`Identity::load`].  Pass `None` for
-/// plaintext identities; pass `Some(p)` when the identity was created with
-/// `--passphrase`.  As a convenience the daemon also checks the
-/// `BP_PASSPHRASE` environment variable when `passphrase` is `None`.
 pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
     config::ensure_dirs()?;
 
-    // Resolve passphrase: explicit arg → BP_PASSPHRASE env var → None.
     let resolved_pass = passphrase
         .or_else(|| std::env::var("BP_PASSPHRASE").ok())
         .filter(|s| !s.is_empty());
 
-    // ── Load identity ─────────────────────────────────────────────────────
     let identity = Identity::load(resolved_pass.as_deref())?;
     tracing::info!(
         peer_id = %identity.peer_id,
@@ -43,14 +30,11 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
         "BillPouch daemon starting"
     );
 
-    // Write PID file so the CLI can detect a running daemon.
     write_pid()?;
 
-    // ── Build shared state ────────────────────────────────────────────────
     let network_state = Arc::new(RwLock::new(NetworkState::new()));
     let (net_tx, net_rx) = mpsc::channel::<crate::network::NetworkCommand>(64);
 
-    // Shared storage managers: populated when Pouch services are hatched.
     let storage_managers: StorageManagerMap = Arc::new(RwLock::new(HashMap::new()));
 
     let qos = Arc::new(RwLock::new(crate::network::QosRegistry::new()));
@@ -76,13 +60,9 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
         ),
     });
 
-    // ── Build libp2p swarm ────────────────────────────────────────────────
     let swarm = network::build_swarm(identity.keypair.clone())
         .map_err(|e| BpError::Network(e.to_string()))?;
 
-    // Allow the operator to bind a fixed port via BP_LISTEN_PORT (useful for
-    // Docker playgrounds and bootstrap peers).  Defaults to 0 (OS assigns a
-    // random port, which is fine for normal use and mDNS-based discovery).
     let listen_port: u16 = std::env::var("BP_LISTEN_PORT")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -91,7 +71,6 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
         .parse()
         .map_err(|e: libp2p::multiaddr::Error| BpError::Network(e.to_string()))?;
 
-    // ── Spawn network loop ────────────────────────────────────────────────
     let net_state = Arc::clone(&network_state);
     let net_storage = Arc::clone(&storage_managers);
     let net_outgoing = Arc::clone(&outgoing_assignments);
@@ -112,22 +91,17 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
         }
     });
 
-    // ── Gossip eviction task — remove stale peers every 60 s ─────────────
     let evict_state = Arc::clone(&network_state);
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
         loop {
             interval.tick().await;
             if let Ok(mut ns) = evict_state.write() {
-                ns.evict_stale(120); // evict nodes silent for >2 min
+                ns.evict_stale(120);
             }
         }
     });
 
-    // ── Periodic NodeInfo re-announce — keep gossip state fresh ──────────
-    // Peers evict nodes silent for >120 s, and peers joining the mesh late
-    // only learn about us from a later announcement.  Re-announce at 10, 20
-    // and 30 s after start (mesh formation), then every 30 s.
     let reannounce_state = Arc::clone(&daemon_state);
     tokio::spawn(async move {
         for delay in [10, 10, 10].into_iter().chain(std::iter::repeat(30)) {
@@ -136,7 +110,6 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
         }
     });
 
-    // ── Network quality monitor — Ping all Pouch peers, update QoS ──────
     let monitor_state = Arc::clone(&network_state);
     let monitor_qos = Arc::clone(&daemon_state.qos);
     let monitor_tx = net_tx.clone();
@@ -153,7 +126,6 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
         .await;
     });
 
-    // ── Run control socket (blocks until daemon is killed) ────────────────
     let socket_path = config::socket_path()?;
     run_control_server(socket_path, daemon_state).await?;
 
@@ -173,8 +145,6 @@ fn remove_pid() {
     }
 }
 
-/// Returns true if a daemon process is currently running (PID file exists and
-/// process is alive).
 pub fn is_running() -> bool {
     let path = match config::pid_path() {
         Ok(p) => p,
@@ -188,7 +158,6 @@ pub fn is_running() -> bool {
         Ok(p) => p,
         Err(_) => return false,
     };
-    // Check if process exists — kill(pid, 0) equivalent via /proc on Linux.
     let proc_path = format!("/proc/{}", pid);
     std::path::Path::new(&proc_path).exists()
 }
