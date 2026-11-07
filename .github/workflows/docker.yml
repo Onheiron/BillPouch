@@ -1,11 +1,5 @@
 name: Docker
 
-# Triggers:
-# - release-please.yml calls this workflow after a release is created
-#   (tags pushed with GITHUB_TOKEN do not trigger other workflows).
-# - Manual run from the Actions tab (workflow_dispatch) for ad-hoc images:
-#   no need to push throwaway version tags anymore.
-# - Tag push, kept for manually created release tags.
 on:
   push:
     tags:

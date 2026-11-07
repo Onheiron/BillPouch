@@ -1,12 +1,5 @@
-//! `bp login` / `bp logout` / `bp export-identity` / `bp import-identity`
-
 use bp_core::identity::Identity;
 
-/// Create or load the user's identity and display their fingerprint.
-///
-/// If `passphrase` is `Some`, new identities are stored encrypted
-/// (Argon2id + AES-256-GCM).  Existing encrypted identities also require
-/// `passphrase` to display current identity info.
 pub async fn login(alias: Option<String>, passphrase: Option<&str>) -> anyhow::Result<()> {
     if Identity::exists()? {
         let id = Identity::load(passphrase)?;
@@ -38,17 +31,12 @@ pub async fn login(alias: Option<String>, passphrase: Option<&str>) -> anyhow::R
     Ok(())
 }
 
-/// Remove the stored identity from disk.
-///
-/// Logout does not require the passphrase — the fingerprint is read from the
-/// plaintext `profile.json` and both key files are deleted.
 pub async fn logout() -> anyhow::Result<()> {
     if !Identity::exists()? {
         println!("You are not logged in.");
         return Ok(());
     }
 
-    // Read fingerprint from profile without decrypting the key.
     let fp = bp_core::config::profile_path()
         .ok()
         .and_then(|p| std::fs::read_to_string(p).ok())
@@ -65,16 +53,6 @@ pub async fn logout() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Export the current identity to a portable JSON file.
-///
-/// The exported file carries the keypair (plaintext or encrypted) and the
-/// user profile.  Transfer it to another machine and use `bp import-identity`
-/// to install it there.
-///
-/// ⚠️  A **plaintext** key export contains raw private-key material.
-///     Keep the file confidential.  A passphrase-protected identity exports
-///     the encrypted ciphertext — the original passphrase is still required
-///     to use the key on the new machine.
 pub async fn export_identity(out: &str) -> anyhow::Result<()> {
     let dest = std::path::Path::new(out);
     Identity::export_to_file(dest)?;
@@ -84,11 +62,6 @@ pub async fn export_identity(out: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Import an identity exported with `bp export-identity`.
-///
-/// Installs the keypair and profile from `path` into the local XDG data
-/// directory.  If `force` is `true`, any existing identity is overwritten
-/// without prompting.
 pub async fn import_identity(path: &str, force: bool) -> anyhow::Result<()> {
     let src = std::path::Path::new(path);
     let profile = Identity::import_from_file(src, force)?;

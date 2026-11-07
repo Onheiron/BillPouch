@@ -1,37 +1,3 @@
-//! Network quality monitor — Ping and Proof-of-Storage challenge loops.
-//!
-//! ## What it does
-//!
-//! The monitor runs as a background Tokio task spawned by the daemon.
-//!
-//! **Ping loop (every 60 s)**:
-//! 1. Reads the live [`NetworkState`] to enumerate all known Pouch peers.
-//! 2. Sends a [`NetworkCommand::Ping`] for each Pouch (fire-and-forget per peer).
-//! 3. Each Ping waits up to 5 seconds for a Pong from the network loop.
-//! 4. On success: records the RTT into [`QosRegistry`] via
-//!    [`crate::network::qos::PeerQos::record_ping`] and
-//!    [`crate::network::qos::PeerQos::record_challenge`].
-//! 5. On timeout: records a timeout via
-//!    [`crate::network::qos::PeerQos::record_ping_timeout`] and a failed challenge.
-//!
-//! **Proof-of-Storage loop (every 300 s)**:
-//! 1. For each Pouch peer that has entries in [`OutgoingAssignments`]:
-//!    picks one random fragment ID assigned to that peer.
-//! 2. Sends a [`NetworkCommand::ProofOfStorage`] challenge.
-//! 3. Waits up to 10 s for a `bool` proof result.
-//! 4. On success: calls [`crate::network::qos::PeerQos::record_pos_success`].
-//! 5. On failure/timeout: calls
-//!    [`crate::network::qos::PeerQos::record_pos_failure`] — increments
-//!    `fault_score` toward the `degraded`/`suspected`/`blacklisted` thresholds.
-//!
-//! The `QosRegistry` populated here is consumed by `PutFile` in the control
-//! server to compute adaptive `k`/`n` coding parameters.
-//!
-//! ## Concurrency model
-//!
-//! All per-peer tasks within a round are spawned concurrently so a slow or
-//! dead peer does not delay the others.
-
 use crate::{
     coding::rlnc,
     coding::rlnc::EncodedFragment,
@@ -46,33 +12,14 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 
-// ── Configuration constants ───────────────────────────────────────────────────
-
-/// How often (in seconds) a full Ping round is run against all known Pouches.
 const PING_INTERVAL_SECS: u64 = 60;
 
-/// Maximum time (in seconds) to wait for a Pong before declaring a timeout.
 const PING_TIMEOUT_SECS: u64 = 5;
 
-/// How often (in seconds) a Proof-of-Storage round is run.
 const POS_INTERVAL_SECS: u64 = 300;
 
-/// Maximum time (in seconds) to wait for a PoS proof response.
 const POS_TIMEOUT_SECS: u64 = 10;
 
-// ── Entry point ───────────────────────────────────────────────────────────────
-
-/// Run the quality monitor loop indefinitely.
-///
-/// Spawned by [`crate::daemon::run_daemon`] as a background Tokio task.
-///
-/// # Arguments
-///
-/// - `network_state`        — shared view of all known peers (read-only here).
-/// - `qos`                  — shared QoS registry updated after every challenge.
-/// - `reputation`           — reputation store updated after every PoS challenge.
-/// - `net_tx`               — channel to submit network commands.
-/// - `outgoing_assignments` — map of `peer_id → fragments pushed to that peer`.
 pub async fn run_quality_monitor(
     network_state: Arc<RwLock<NetworkState>>,
     qos: Arc<RwLock<QosRegistry>>,
@@ -81,8 +28,6 @@ pub async fn run_quality_monitor(
     outgoing_assignments: OutgoingAssignments,
 ) {
     let mut ping_interval = tokio::time::interval(Duration::from_secs(PING_INTERVAL_SECS));
-    // Skip the first (immediate) tick so the monitor waits a full interval
-    // after daemon startup before the first round.
     ping_interval.reset();
 
     let mut pos_interval = tokio::time::interval(Duration::from_secs(POS_INTERVAL_SECS));
@@ -106,14 +51,11 @@ pub async fn run_quality_monitor(
     }
 }
 
-// ── Ping round ────────────────────────────────────────────────────────────────
-
 async fn run_ping_round(
     network_state: &Arc<RwLock<NetworkState>>,
     qos: &Arc<RwLock<QosRegistry>>,
     net_tx: &mpsc::Sender<NetworkCommand>,
 ) {
-    // Collect Pouch peer IDs from the current NetworkState snapshot.
     let pouch_peers: Vec<(String, PeerId)> = {
         let ns = match network_state.read() {
             Ok(g) => g,
@@ -161,8 +103,6 @@ async fn run_ping_round(
     tracing::debug!("quality_monitor: Ping round complete");
 }
 
-// ── PoS round ─────────────────────────────────────────────────────────────────
-
 async fn run_pos_round(
     outgoing_assignments: &OutgoingAssignments,
     network_state: &Arc<RwLock<NetworkState>>,
@@ -170,7 +110,6 @@ async fn run_pos_round(
     reputation: &Arc<RwLock<ReputationStore>>,
     net_tx: &mpsc::Sender<NetworkCommand>,
 ) {
-    // Snapshot the current assignments (peer_id → random fragment to challenge).
     let challenges: Vec<(String, PeerId, String, String)> = {
         let assignments = match outgoing_assignments.read() {
             Ok(g) => g,
@@ -185,7 +124,6 @@ async fn run_pos_round(
                 if fragments.is_empty() {
                     return None;
                 }
-                // Pick a random fragment index using a simple modular approach.
                 let idx = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()
@@ -242,10 +180,6 @@ async fn run_pos_round(
 
     tracing::debug!("quality_monitor: PoS round complete");
 
-    // ── Preventive rerouting ────────────────────────────────────────────────
-    // After all PoS results are recorded, check if any challenged peer has
-    // crossed the FAULT_SUSPECTED threshold.  If so, recode its assigned
-    // fragments and push new copies to a healthy peer.
     let suspected: Vec<(String, PeerId)> = challenges
         .iter()
         .filter(|(peer_id_str, _, _, _)| {
@@ -254,7 +188,6 @@ async fn run_pos_round(
                 .unwrap_or(false)
         })
         .map(|(peer_id_str, peer_id, _, _)| (peer_id_str.clone(), *peer_id))
-        // Deduplicate by peer_id_str.
         .fold(Vec::<(String, PeerId)>::new(), |mut acc, (s, p)| {
             if !acc.iter().any(|(x, _)| x == &s) {
                 acc.push((s, p));
@@ -275,17 +208,6 @@ async fn run_pos_round(
     }
 }
 
-// ── Preventive rerouting ──────────────────────────────────────────────────────
-
-/// Recode fragments assigned to `suspected_peer` and push new copies to a
-/// healthy peer when `fault_score` has crossed [`FAULT_SUSPECTED`].
-///
-/// Steps
-/// 1. Collect unique `chunk_id`s assigned to the suspected peer.
-/// 2. Find a healthy Pouch whose `fault_score < FAULT_DEGRADED`.
-/// 3. For each chunk: fetch all fragments → [`rlnc::recode`] (1 new fragment)
-///    → [`NetworkCommand::PushFragment`] to the healthy peer → record the new
-///    assignment in [`OutgoingAssignments`].
 async fn reroute_suspected_peer(
     suspected_peer_str: &str,
     suspected_peer: PeerId,
@@ -294,7 +216,6 @@ async fn reroute_suspected_peer(
     qos: &Arc<RwLock<QosRegistry>>,
     net_tx: &mpsc::Sender<NetworkCommand>,
 ) {
-    // 1. Collect unique chunk_ids assigned to the suspected peer.
     let chunks: Vec<String> = {
         let guard = match outgoing.read() {
             Ok(g) => g,
@@ -319,7 +240,6 @@ async fn reroute_suspected_peer(
         return;
     }
 
-    // 2. Find a healthy replacement peer (not the suspected one, fault < FAULT_DEGRADED).
     let healthy_peer: Option<(String, PeerId)> = {
         let ns = match network_state.read() {
             Ok(g) => g,
@@ -361,7 +281,6 @@ async fn reroute_suspected_peer(
         "reroute: starting preventive fragment rerouting"
     );
 
-    // 3. For each chunk: fetch → recode → push.
     for chunk_id in chunks {
         let (tx, rx) = tokio::sync::oneshot::channel();
         if net_tx
@@ -440,11 +359,6 @@ async fn reroute_suspected_peer(
     }
 }
 
-// ── Per-peer PoS helper ───────────────────────────────────────────────────────
-
-/// Challenge one peer and record the outcome in the QoS registry.
-///
-/// Returns `Some(passed)`, or `None` if the challenge could not be sent.
 async fn pos_one_peer(
     peer_id_str: String,
     peer_id: PeerId,
@@ -502,7 +416,6 @@ fn record_pos_failure(peer_id_str: &str, qos: &Arc<RwLock<QosRegistry>>) {
     }
 }
 
-/// Feed a PoS outcome into the peer's reputation record.
 fn record_reputation(
     peer_id_str: &str,
     passed: bool,
@@ -533,7 +446,6 @@ async fn ping_one_peer(
 
     let (resp_tx, resp_rx) = tokio::sync::oneshot::channel::<u64>();
 
-    // Send the Ping command to the network loop.
     if net_tx
         .send(NetworkCommand::Ping {
             peer_id,
@@ -547,7 +459,6 @@ async fn ping_one_peer(
         return;
     }
 
-    // Wait for the Pong (RTT in ms) or time out.
     match tokio::time::timeout(Duration::from_secs(PING_TIMEOUT_SECS), resp_rx).await {
         Ok(Ok(rtt_ms)) => {
             tracing::debug!(peer = %peer_id_str, rtt_ms = %rtt_ms, "Ping OK");
@@ -558,7 +469,6 @@ async fn ping_one_peer(
             }
         }
         Ok(Err(_)) => {
-            // Oneshot dropped by network loop (peer unreachable / send failed).
             tracing::debug!(peer = %peer_id_str, "Ping: no response (channel dropped)");
             record_timeout(&peer_id_str, &qos);
         }
@@ -577,8 +487,6 @@ fn record_timeout(peer_id_str: &str, qos: &Arc<RwLock<QosRegistry>>) {
     }
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -587,7 +495,6 @@ mod tests {
     #[test]
     fn record_timeout_degrades_score() {
         let qos = Arc::new(RwLock::new(QosRegistry::new()));
-        // Prime with a good ping.
         {
             let mut g = qos.write().unwrap();
             let e = g.entry("p1");
@@ -596,7 +503,6 @@ mod tests {
         }
         let score_before = qos.read().unwrap().stability_score("p1");
 
-        // Record several timeouts.
         for _ in 0..5 {
             record_timeout("p1", &qos);
         }
@@ -609,8 +515,6 @@ mod tests {
         let qos = Arc::new(RwLock::new(QosRegistry::new()));
         record_timeout("new-peer", &qos);
         let score = qos.read().unwrap().stability_score("new-peer");
-        // After one timeout: challenge_success < 1.0, latency still 0.0
-        // → stability < 0.4 (pure reliability component capped by β=0.10)
         assert!(
             score < 0.95,
             "new peer after one timeout should have degraded score"
@@ -620,7 +524,6 @@ mod tests {
     #[test]
     fn pos_failure_increments_fault_score() {
         let qos = Arc::new(RwLock::new(QosRegistry::new()));
-        // Initial fault score is 0.
         assert_eq!(qos.read().unwrap().fault_score("p1"), 0);
 
         for _ in 0..3 {
@@ -633,13 +536,11 @@ mod tests {
     #[test]
     fn pos_success_decays_fault_score() {
         let qos = Arc::new(RwLock::new(QosRegistry::new()));
-        // Prime with some failures.
         for _ in 0..4 {
             record_pos_failure("p1", &qos);
         }
         let fault_after_failures = qos.read().unwrap().fault_score("p1");
 
-        // A success should decay the fault score.
         {
             let mut g = qos.write().unwrap();
             g.entry("p1").record_pos_success();
@@ -651,8 +552,6 @@ mod tests {
         );
     }
 
-    /// Ensure `run_quality_monitor` can be started and does not panic
-    /// immediately when there are no peers and no assignments.
     #[tokio::test]
     async fn monitor_noop_with_no_peers() {
         let ns = Arc::new(RwLock::new(NetworkState::new()));
@@ -660,18 +559,16 @@ mod tests {
         let (net_tx, _net_rx) = mpsc::channel(8);
         let outgoing = Arc::new(RwLock::new(std::collections::HashMap::new()));
 
-        // Run the monitor for a very short time — it should not panic.
         tokio::time::timeout(
             Duration::from_millis(200),
             run_quality_monitor(ns, qos, Default::default(), net_tx, outgoing),
         )
         .await
-        .ok(); // timeout is expected
+        .ok();
     }
 
     #[test]
     fn outgoing_assignment_structure() {
-        // Verify we can build OutgoingAssignments and look up entries.
         let outgoing: OutgoingAssignments = Arc::new(RwLock::new(std::collections::HashMap::new()));
         {
             let mut g = outgoing.write().unwrap();

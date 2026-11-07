@@ -1,18 +1,11 @@
-//! `bp status` — compact view of daemon identity and local services.
-
 use crate::client::ControlClient;
 use bp_core::control::protocol::{ControlRequest, StatusData};
 use std::io::Write as _;
 
-/// Query the daemon for identity + service status and pretty-print a compact
-/// summary.  Triggers a gossip re-announce before reading so that `known_peers`
-/// reflects the live network state.
 pub async fn status() -> anyhow::Result<()> {
-    // ── Phase 1: gossip refresh with spinner ─────────────────────────────
     {
         let mut client = ControlClient::connect().await?;
 
-        // Spinner task — runs until the AnnounceNow response arrives.
         let spinner = tokio::spawn(async {
             let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
             let mut i: usize = 0;
@@ -27,16 +20,13 @@ pub async fn status() -> anyhow::Result<()> {
             }
         });
 
-        // Ask the daemon to re-announce all services and wait 2 s.
         let _ = client.request(ControlRequest::AnnounceNow).await;
 
         spinner.abort();
-        // Erase the spinner line.
         print!("\r\x1b[K");
         let _ = std::io::stdout().flush();
     }
 
-    // ── Phase 2: fetch and display status ────────────────────────────────
     let mut client = ControlClient::connect().await?;
     let data = client.request(ControlRequest::Status).await?;
 
@@ -56,7 +46,6 @@ fn print_status(s: &StatusData) {
     println!("╚══════════════════════════════════════════════════════╝");
     println!();
 
-    // ── Identity ──────────────────────────────────────────────────────────
     println!("🔑 Identity");
     println!("   fingerprint  : {}", s.fingerprint);
     if let Some(alias) = &s.alias {
@@ -73,7 +62,6 @@ fn print_status(s: &StatusData) {
     println!("   daemon version : {}", s.version);
     println!();
 
-    // ── Services ──────────────────────────────────────────────────────────
     println!("🔌 Services  ({})", s.local_services.len());
     println!("─────────────────────────────────────────────────────");
     if s.local_services.is_empty() {
@@ -100,7 +88,6 @@ fn print_status(s: &StatusData) {
     }
     println!();
 
-    // ── Reputation ────────────────────────────────────────────────────────
     println!("⭐ Reputation");
     println!(
         "   tier   : {}   score: {}",
@@ -108,7 +95,6 @@ fn print_status(s: &StatusData) {
     );
     println!();
 
-    // ── Pouch storage stats ───────────────────────────────────────────────
     if !s.pouch_stats.is_empty() {
         println!("💾 Storage (Pouches)");
         println!("─────────────────────────────────────────────────────");
@@ -130,7 +116,6 @@ fn print_status(s: &StatusData) {
         println!();
     }
 
-    // ── Networks & peers ──────────────────────────────────────────────────
     if s.networks.is_empty() {
         println!("🌐 Networks  (none — use `bp invite join <token>`)");
     } else {
@@ -138,7 +123,6 @@ fn print_status(s: &StatusData) {
     }
     println!("📡 Known peers  {}", s.known_peers);
 
-    // ── Network QoS ───────────────────────────────────────────────────────
     if let Some(qos) = &s.network_qos {
         println!();
         println!("📶 Network QoS  ({} observed peers)", qos.observed_peers);

@@ -1,28 +1,10 @@
-//! Arithmetic in GF(2⁸) — the Galois field with 256 elements.
-//!
-//! Uses the standard AES irreducible polynomial:
-//!   **p(x) = x⁸ + x⁴ + x³ + x + 1** (0x11b)
-//!
-//! ## Operations
-//! - [`add`] — addition = XOR (free)
-//! - [`mul`] — multiplication via Russian-peasant (8 iterations, no lookup tables)
-//! - [`inv`] — multiplicative inverse via Fermat: a⁻¹ = a²⁵⁴
-//! - [`mul_acc`] — `acc ^= coeff · symbol`, the RLNC inner loop
-//!
-//! Element 0 is the additive identity. Element 1 is the multiplicative identity.
-//! Calling [`inv`] with 0 panics.
-
-/// Lower 8 bits of the AES reduction polynomial (x⁸ + x⁴ + x³ + x + 1).
 const POLY: u8 = 0x1b;
 
-/// Addition in GF(2⁸) — identical to XOR.
 #[inline(always)]
 pub fn add(a: u8, b: u8) -> u8 {
     a ^ b
 }
 
-/// Multiplication in GF(2⁸) using the Russian-peasant algorithm.
-/// Runs in exactly 8 iterations regardless of input values.
 #[inline]
 pub fn mul(mut a: u8, mut b: u8) -> u8 {
     let mut result = 0u8;
@@ -40,18 +22,9 @@ pub fn mul(mut a: u8, mut b: u8) -> u8 {
     result
 }
 
-/// Multiplicative inverse of `a` via Fermat's little theorem: a⁻¹ = a^254.
-///
-/// # Panics
-/// Panics if `a == 0`.
 #[inline]
 pub fn inv(a: u8) -> u8 {
     assert!(a != 0, "gf256::inv: inverse of 0 is undefined");
-    // Compute a^254 using repeated squaring.
-    // 254 = 0b11111110 → exponents: 2, 4, 8, 16, 32, 64, 128 → product = 2^1*...*2^7 = 2^(1+2+...+7)
-    // But we need exactly a^254:
-    //   a^2 * a^4 * a^8 * a^16 * a^32 * a^64 * a^128
-    //   = a^(2+4+8+16+32+64+128) = a^254 ✓
     let a2 = mul(a, a);
     let a4 = mul(a2, a2);
     let a8 = mul(a4, a4);
@@ -62,10 +35,6 @@ pub fn inv(a: u8) -> u8 {
     mul(mul(mul(mul(mul(mul(a2, a4), a8), a16), a32), a64), a128)
 }
 
-/// `acc[i] ^= coeff * symbol[i]` over GF(2⁸) — the inner loop of RLNC encoding.
-///
-/// # Panics
-/// Panics if `acc.len() != symbol.len()`.
 pub fn mul_acc(acc: &mut [u8], symbol: &[u8], coeff: u8) {
     assert_eq!(acc.len(), symbol.len(), "gf256::mul_acc: length mismatch");
     if coeff == 0 {
@@ -93,7 +62,6 @@ mod tests {
 
     #[test]
     fn mul_known_value() {
-        // 0x53 * 0xca == 0x01 in GF(2^8) with poly 0x11b — verified by hand
         assert_eq!(mul(0x53, 0xca), 0x01);
     }
 

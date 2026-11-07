@@ -1,7 +1,3 @@
-//! Unix socket control server — runs inside the daemon.
-//! Each CLI invocation connects, sends one JSON request, reads one JSON response,
-//! then closes the connection.
-
 use crate::{
     coding::{params as coding_params, rlnc},
     control::protocol::{
@@ -32,13 +28,6 @@ use tokio::{
     sync::mpsc,
 };
 
-// ── CEK hint persistence ──────────────────────────────────────────────────────
-
-/// Load persisted CEK hints from `cek_hints.json`.
-///
-/// Returns an empty map if the file does not exist or cannot be parsed.
-/// Called once at daemon startup so files encrypted in previous sessions
-/// remain decryptable.
 pub fn load_cek_hints() -> HashMap<String, [u8; 32]> {
     let path = match crate::config::cek_hints_path() {
         Ok(p) => p,
@@ -50,7 +39,6 @@ pub fn load_cek_hints() -> HashMap<String, [u8; 32]> {
     load_cek_hints_at(&path)
 }
 
-/// Core deserialization logic — reads from an explicit `path`.
 fn load_cek_hints_at(path: &std::path::Path) -> HashMap<String, [u8; 32]> {
     if !path.exists() {
         return HashMap::new();
@@ -83,11 +71,6 @@ fn load_cek_hints_at(path: &std::path::Path) -> HashMap<String, [u8; 32]> {
         .collect()
 }
 
-/// Persist CEK hints to `cek_hints.json`.
-///
-/// Failures are logged as warnings and silently ignored — a missing hint
-/// means the file cannot be decrypted after restart, but it does not
-/// corrupt any other state.
 fn persist_cek_hints(hints: &HashMap<String, [u8; 32]>) {
     let path = match crate::config::cek_hints_path() {
         Ok(p) => p,
@@ -99,9 +82,7 @@ fn persist_cek_hints(hints: &HashMap<String, [u8; 32]>) {
     persist_cek_hints_at(&path, hints);
 }
 
-/// Core serialization logic — writes to an explicit `path`.
 fn persist_cek_hints_at(path: &std::path::Path, hints: &HashMap<String, [u8; 32]>) {
-    // Ensure the parent directory exists before writing.
     if let Some(parent) = path.parent() {
         if let Err(e) = std::fs::create_dir_all(parent) {
             tracing::warn!("Failed to create cek_hints dir: {e}");
@@ -122,55 +103,25 @@ fn persist_cek_hints_at(path: &std::path::Path, hints: &HashMap<String, [u8; 32]
     }
 }
 
-/// Shared daemon state accessible from the control server.
 pub struct DaemonState {
     pub identity: Identity,
     pub services: RwLock<ServiceRegistry>,
     pub network_state: Arc<RwLock<crate::network::state::NetworkState>>,
     pub networks: RwLock<Vec<String>>,
     pub net_tx: mpsc::Sender<NetworkCommand>,
-    /// One `StorageManager` per active Pouch service, keyed by `service_id`.
-    ///
-    /// Shared with the network loop so incoming fragment-fetch requests can
-    /// be served directly from the P2P event handler.
     pub storage_managers: StorageManagerMap,
-    /// Per-peer QoS data updated by the network quality monitor.
-    /// Used by `PutFile` to derive adaptive k/n from live stability scores.
     pub qos: Arc<RwLock<QosRegistry>>,
-    /// Tracks which fragments were pushed to which remote Pouch peer.
-    ///
-    /// Updated by the network loop on every `PushFragment`; read by the
-    /// quality monitor to select Proof-of-Storage challenge targets.
     pub outgoing_assignments: OutgoingAssignments,
-    /// In-memory index of `chunk_id → [(peer_id, fragment_id)]` learned from
-    /// gossipped [`FragmentIndexAnnouncement`]s.
-    ///
-    /// Populated when received from the network; used by `GetFile` to issue
-    /// targeted `FetchChunkFragments` requests instead of broadcasting to all
-    /// known Pouches.
     pub remote_fragment_index: Arc<RwLock<RemoteFragmentIndex>>,
-    /// Maps `chunk_id → BLAKE3(plaintext_chunk)` so that `GetFile` can
-    /// re-derive the per-user CEK for decryption after RLNC decode.
-    ///
-    /// Populated by `PutFile`; persisted to `cek_hints.json`.
     pub chunk_cek_hints: RwLock<HashMap<String, [u8; 32]>>,
-    /// Per-peer reputation state (tier R0–R4, score, uptime, PoS pass rate).
-    ///
-    /// Updated by the quality monitor and by eviction events.
     pub reputation: Arc<RwLock<ReputationStore>>,
-    /// Local catalogue of files uploaded by this node's Bill services.
-    ///
-    /// Populated on each successful `PutFile`.
-    /// Persisted to `file_registry.json`.
     pub file_registry: RwLock<FileRegistry>,
 }
 
-/// Accept connections on the Unix socket and dispatch requests.
 pub async fn run_control_server(
     socket_path: impl AsRef<Path>,
     state: Arc<DaemonState>,
 ) -> BpResult<()> {
-    // Remove stale socket from a previous run.
     let path = socket_path.as_ref();
     if path.exists() {
         std::fs::remove_file(path).ok();
@@ -233,13 +184,10 @@ async fn send_response(
     Ok(())
 }
 
-/// Dispatch a `ControlRequest` to the appropriate handler.
 async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlResponse {
     match req {
-        // ── Ping ──────────────────────────────────────────────────────────
         ControlRequest::Ping => ControlResponse::ok("pong"),
 
-        // ── Status ────────────────────────────────────────────────────────
         ControlRequest::Status => {
             let services = state.services.read().unwrap();
             let networks = state.networks.read().unwrap();
@@ -255,7 +203,6 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             };
             let pouch_stats = pouch_stats(state, &services, "");
 
-            // Network QoS summary.
             let qos_peer_count = state.qos.read().unwrap().peer_count();
             let network_qos = {
                 let qos = state.qos.read().unwrap();
@@ -300,21 +247,17 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             ControlResponse::ok(data)
         }
 
-        // ── AnnounceNow ───────────────────────────────────────────────────
         ControlRequest::AnnounceNow => {
-            // Re-broadcast every service, then give gossipsub 2 s to deliver.
             announce_all(state).await;
             tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
             ControlResponse::ok("announced")
         }
 
-        // ── Hatch ─────────────────────────────────────────────────────────
         ControlRequest::Hatch {
             service_type,
             network_id,
             metadata,
         } => {
-            // Ensure we're subscribed to that network's gossip
             let already_joined = {
                 let nets = state.networks.read().unwrap();
                 nets.contains(&network_id)
@@ -329,8 +272,6 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 state.networks.write().unwrap().push(network_id.clone());
             }
 
-            // Enforce one-Pouch-per-network: two correlated Pouches on the
-            // same node defeat distributed redundancy.
             if service_type == ServiceType::Pouch {
                 let already_exists =
                     state.services.read().unwrap().all().iter().any(|s| {
@@ -348,10 +289,8 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             let info = ServiceInfo::new(service_type, network_id.clone(), metadata.clone());
             let service_id = info.id.clone();
 
-            // Statement-scoped guard: released before the .await below.
             state.services.write().unwrap().register(info);
 
-            // Initialise a StorageManager when hatching a Pouch service.
             if service_type == ServiceType::Pouch {
                 let quota = metadata
                     .get("storage_bytes")
@@ -373,7 +312,6 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 }
             }
 
-            // Announce to the network (await-safe: no lock held)
             announce_service_id(state, &service_id).await;
 
             ControlResponse::ok(HatchData {
@@ -384,7 +322,6 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             })
         }
 
-        // ── Farewell ──────────────────────────────────────────────────────
         ControlRequest::Farewell { service_id } => {
             let mut reg = state.services.write().unwrap();
             match reg.remove(&service_id) {
@@ -396,7 +333,6 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 None => ControlResponse::err(format!("No service with id '{}'", service_id)),
             }
         }
-        // ── FarewellEvict ─────────────────────────────────────────────────
         ControlRequest::FarewellEvict { service_id } => {
             let Some(info) = state.services.read().unwrap().get(&service_id).cloned() else {
                 return ControlResponse::err(format!("No service with id '{}'", service_id));
@@ -415,7 +351,6 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 ),
             }))
         }
-        // ── Pause ─────────────────────────────────────────────────────────
         ControlRequest::Pause {
             service_id,
             eta_minutes,
@@ -466,7 +401,6 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             }))
         }
 
-        // ── Resume ────────────────────────────────────────────────────────
         ControlRequest::Resume { service_id } => {
             {
                 let mut reg = state.services.write().unwrap();
@@ -500,7 +434,6 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             }))
         }
 
-        // ── Flock ─────────────────────────────────────────────────────────
         ControlRequest::Flock => {
             let services = state.services.read().unwrap();
             let networks = state.networks.read().unwrap();
@@ -514,7 +447,6 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             ControlResponse::ok(data)
         }
 
-        // ── Join ──────────────────────────────────────────────────────────
         ControlRequest::Join { network_id } => {
             {
                 let nets = state.networks.read().unwrap();
@@ -525,9 +457,6 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                     ));
                 }
             }
-            // Ensure a NetworkMetaKey exists for this network.
-            // If none was installed via an invite token, we generate a fresh
-            // random one (this node is creating the network).
             if let Err(e) = crate::storage::network_key::NetworkMetaKey::load_or_create(&network_id)
             {
                 tracing::warn!(network = %network_id, "Failed to ensure NetworkMetaKey: {e}");
@@ -545,9 +474,7 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             }))
         }
 
-        // ── Leave ─────────────────────────────────────────────────────────
         ControlRequest::Leave { network_id, force } => {
-            // Collect blocking services on this network.
             let blocking: Vec<ServiceInfo> = {
                 let reg = state.services.read().unwrap();
                 reg.all()
@@ -558,7 +485,6 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             };
 
             if !blocking.is_empty() && !force {
-                // v1: return helpful error with per-service hints.
                 let blocking_json: Vec<serde_json::Value> = blocking
                     .iter()
                     .map(|s| {
@@ -587,7 +513,6 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 }));
             }
 
-            // force=true (or no blocking services): auto-evict then leave.
             let mut evicted: Vec<serde_json::Value> = Vec::new();
             for svc in &blocking {
                 if svc.service_type == ServiceType::Pouch {
@@ -603,7 +528,6 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 }));
             }
 
-            // Unsubscribe gossip and remove from active_networks.
             let _ = state
                 .net_tx
                 .send(NetworkCommand::LeaveNetwork {
@@ -628,7 +552,6 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             }))
         }
 
-        // ── ConnectRelay ──────────────────────────────────────────────────
         ControlRequest::ConnectRelay { relay_addr } => {
             let addr: Multiaddr = match relay_addr.parse() {
                 Ok(a) => a,
@@ -645,7 +568,6 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 "message": format!("Dialing relay '{}'", relay_addr),
             }))
         }
-        // ── CreateInvite ──────────────────────────────────────────────────
         ControlRequest::CreateInvite {
             network_id,
             invitee_fingerprint,
@@ -671,7 +593,6 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 Err(e) => ControlResponse::err(format!("Failed to create invite: {e}")),
             }
         }
-        // ── PutFile ───────────────────────────────────────────────────────
         ControlRequest::PutFile {
             chunk_data,
             ph,
@@ -682,7 +603,6 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             let ph = ph.unwrap_or(0.999);
             let q_target = q_target.unwrap_or(1.0);
 
-            // Find a Pouch StorageManager for this network.
             let managers_snap: Vec<(String, Arc<RwLock<StorageManager>>)> = {
                 let map = state.storage_managers.read().unwrap();
                 map.iter()
@@ -690,7 +610,6 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                     .collect()
             };
 
-            // Filter to managers whose network matches (or any if network_id is empty).
             let candidates: Vec<_> = managers_snap
                 .iter()
                 .filter(|(_, sm)| {
@@ -699,12 +618,8 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 })
                 .collect();
 
-            // bill/post nodes have no local Pouch — they act as pure coordinators
-            // that encode the chunk and distribute all fragments to remote Pouches.
-            // We only fail if there are neither local nor remote Pouches.
             let has_local_pouch = !candidates.is_empty();
 
-            // ── Compute adaptive k/n from live QoS data ──────────────────────
             let pouch_peer_ids: Vec<String> = {
                 let ns = state.network_state.read().unwrap();
                 ns.in_network(&network_id)
@@ -714,8 +629,6 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                     .collect()
             };
 
-            // For peers not yet observed via Ping, assume 0.8 stability
-            // (benefit of the doubt for new entries).
             let stabilities: Vec<f64> = {
                 let qos = state.qos.read().unwrap();
                 if pouch_peer_ids.is_empty() {
@@ -754,9 +667,6 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 "PutFile: computed coding params"
             );
 
-            // Encrypt the chunk with a per-user CEK before RLNC encoding.
-            // The CEK is derived from the owner’s secret material and the
-            // BLAKE3 hash of the plaintext — Pouch nodes never see plaintext.
             let plaintext_hash: [u8; 32] = *blake3::hash(&chunk_data).as_bytes();
             let secret_mat = state.identity.secret_material();
             let cipher = ChunkCipher::for_user(&secret_mat, &plaintext_hash);
@@ -775,19 +685,16 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 None => return ControlResponse::err("Encoding produced no fragments"),
             };
 
-            // Store the plaintext hash so GetFile can re-derive the CEK.
             state
                 .chunk_cek_hints
                 .write()
                 .unwrap()
                 .insert(chunk_id.clone(), plaintext_hash);
-            // Persist hints so the CEK survives a daemon restart.
             {
                 let hints = state.chunk_cek_hints.read().unwrap();
                 persist_cek_hints(&hints);
             }
 
-            // Store all fragments locally if a local Pouch is available.
             let mut stored = 0usize;
             if has_local_pouch {
                 let (_, sm_arc) = candidates[0];
@@ -801,9 +708,8 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                         }
                     }
                 }
-            } // write lock released before async work
+            }
 
-            // ── Distribute fragments to remote Pouch peers (round-robin) ────
             let remote_pouches: Vec<PeerId> = {
                 let ns = state.network_state.read().unwrap();
                 let local_peer = state.identity.peer_id.to_string();
@@ -814,7 +720,6 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                     .collect()
             };
 
-            // Fail only if there is nowhere to store fragments at all.
             if stored == 0 && remote_pouches.is_empty() {
                 return ControlResponse::err(format!(
                     "No Pouches available on network '{}' — hatch a Pouch or wait for Pouch peers to join",
@@ -847,8 +752,6 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 }
             }
 
-            // Publish the fragment-index announcement so peers learn which
-            // Pouch holds each fragment.
             if !index_pointers.is_empty() {
                 let ann = FragmentIndexAnnouncement {
                     network_id: network_id.clone(),
@@ -864,7 +767,6 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                             payload,
                         })
                         .await;
-                    // Also update our own local index eagerly.
                     if let Ok(mut idx) = state.remote_fragment_index.write() {
                         idx.upsert(ann);
                     }
@@ -876,7 +778,6 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 total=%fragments.len(), "PutFile stored + distributed"
             );
 
-            // Record the upload in the local file registry so `bp ls` can list it.
             if let Some(name) = file_name {
                 let entry = crate::storage::StoredFileEntry {
                     file_name: name,
@@ -911,7 +812,6 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             })
         }
 
-        // ── GetFile ───────────────────────────────────────────────────────
         ControlRequest::GetFile {
             chunk_id,
             network_id,
@@ -927,11 +827,8 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                     .collect()
             };
 
-            // bill/post nodes have no local Pouch: skip the local load step and
-            // go straight to remote fragment fetching.
             let remote_only = managers_snap.is_empty();
 
-            // Collect fragments from all matching local managers.
             let mut all_fragments = Vec::new();
             for sm_arc in &managers_snap {
                 let sm = sm_arc.read().unwrap();
@@ -946,24 +843,16 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
 
             let local_count = all_fragments.len();
 
-            // Determine k from existing fragments (if any) to know if we need more.
             let k_needed = all_fragments.first().map(|f| f.k).unwrap_or(0);
 
-            // ── Fetch from remote Pouches if local fragments < k ────────────
-            // When there is no local Pouch (remote_only), always attempt remote fetch
-            // since k_needed == 0 would otherwise skip this block entirely.
             let mut fragments_remote = 0usize;
             if remote_only || (k_needed > 0 && all_fragments.len() < k_needed) {
                 let local_peer = state.identity.peer_id.to_string();
 
-                // Build list of remote peers to query: prefer the fragment
-                // index (targeted fetch) and fall back to broadcasting to all
-                // known Pouches if the index has no entries for this chunk.
                 let target_peers: Vec<PeerId> = {
                     let idx = state.remote_fragment_index.read().unwrap();
                     let ptrs = idx.pointers_for(&chunk_id);
                     if !ptrs.is_empty() {
-                        // Deduplicate peer IDs from the index.
                         let mut seen = std::collections::HashSet::new();
                         ptrs.iter()
                             .filter(|p| p.peer_id != local_peer)
@@ -976,7 +865,6 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                             })
                             .collect()
                     } else {
-                        // Fallback: broadcast to all known Pouches in the network.
                         let ns = state.network_state.read().unwrap();
                         ns.in_network(&network_id)
                             .into_iter()
@@ -988,7 +876,6 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                     }
                 };
 
-                // Send FetchChunkFragments to each target peer.
                 let mut receivers = Vec::new();
                 for peer in &target_peers {
                     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -1006,7 +893,6 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                     }
                 }
 
-                // Await responses with a timeout.
                 use crate::coding::rlnc::EncodedFragment;
                 for rx in receivers {
                     match tokio::time::timeout(std::time::Duration::from_secs(10), rx).await {
@@ -1025,7 +911,7 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                                 }
                             }
                         }
-                        Ok(Ok(_)) => {} // NotFound, Stored, StoreFailed — skip
+                        Ok(Ok(_)) => {}
                         Ok(Err(_)) => tracing::debug!("Remote fetch: oneshot dropped"),
                         Err(_) => tracing::debug!("Remote fetch: timeout"),
                     }
@@ -1044,8 +930,6 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             let fragments_used = all_fragments.len();
             match rlnc::decode(&all_fragments) {
                 Ok(encrypted_data) => {
-                    // Decrypt the recovered chunk using the per-user CEK.
-                    // Re-derive the CEK from the stored plaintext hash hint.
                     let plaintext_hash = {
                         state
                             .chunk_cek_hints
@@ -1090,7 +974,6 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             }
         }
 
-        // ── StorageInfo ───────────────────────────────────────────────────
         ControlRequest::StorageInfo { network_id } => {
             let services = state.services.read().unwrap();
             let registry = state.file_registry.read().unwrap();
@@ -1120,7 +1003,6 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             })
         }
 
-        // ── ListFiles ─────────────────────────────────────────────────────
         ControlRequest::ListFiles { network_id } => {
             let registry = state.file_registry.read().unwrap();
             let net_filter = if network_id.is_empty() {
@@ -1151,8 +1033,6 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
     }
 }
 
-/// Fraction of a Pouch's free space that is usable as recoverable content:
-/// the k/N coding rate the network can sustain at this node's reputation `Ph`.
 fn availability_factor(state: &DaemonState) -> f64 {
     let own_peer = state.identity.peer_id.to_string();
     let tier = state.reputation.read().unwrap().tier(&own_peer);
@@ -1160,14 +1040,12 @@ fn availability_factor(state: &DaemonState) -> f64 {
         return 0.0;
     }
     let qos = state.qos.read().unwrap();
-    // N = remote Pouch peers + own node (score 0.4 if unobserved).
     let own_score = qos.get(&own_peer).map_or(0.4, |q| q.stability_score());
     let mut stabilities = qos.all_stability_scores();
     stabilities.push(own_score);
     coding_params::compute_network_storage_factor(&stabilities, tier.qos_target_ph())
 }
 
-/// Per-Pouch storage stats, optionally filtered by network (`""` = all).
 fn pouch_stats(
     state: &DaemonState,
     services: &ServiceRegistry,
@@ -1209,7 +1087,6 @@ fn pouch_stats(
         .collect()
 }
 
-/// Broadcast a [`NodeInfo`] for `svc` (including its metadata) via gossipsub.
 async fn announce_service(state: &DaemonState, svc: &ServiceInfo) {
     let info = NodeInfo {
         peer_id: state.identity.peer_id.to_string(),
@@ -1236,7 +1113,6 @@ async fn announce_service(state: &DaemonState, svc: &ServiceInfo) {
     }
 }
 
-/// Announce the registered service `service_id`, if it exists.
 async fn announce_service_id(state: &DaemonState, service_id: &str) {
     let svc = state.services.read().unwrap().get(service_id).cloned();
     if let Some(svc) = svc {
@@ -1244,8 +1120,6 @@ async fn announce_service_id(state: &DaemonState, service_id: &str) {
     }
 }
 
-/// Announce every registered service (used by `AnnounceNow` and the
-/// daemon's periodic re-announce loop).
 pub async fn announce_all(state: &DaemonState) {
     let services: Vec<ServiceInfo> = state
         .services
@@ -1260,10 +1134,6 @@ pub async fn announce_all(state: &DaemonState) {
     }
 }
 
-/// Permanently evict a service: purge its storage, gossip an `evicting`
-/// notice, apply the reputation eviction penalty and unregister it.
-///
-/// Returns `(chunks, fragments, bytes)` removed from local storage.
 async fn evict_service(state: &DaemonState, svc: &ServiceInfo) -> (usize, usize, u64) {
     let summary = match state.storage_managers.write().unwrap().remove(&svc.id) {
         Some(sm) => {
@@ -1300,16 +1170,11 @@ async fn evict_service(state: &DaemonState, svc: &ServiceInfo) -> (usize, usize,
     summary
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Unit tests
-// ─────────────────────────────────────────────────────────────────────────────
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::HashMap;
 
-    /// `load_cek_hints_at` on a non-existent path returns an empty map.
     #[test]
     fn load_cek_hints_missing_file_returns_empty() {
         let dir = tempdir();
@@ -1318,7 +1183,6 @@ mod tests {
         assert!(hints.is_empty(), "expected empty map for missing file");
     }
 
-    /// `persist_cek_hints_at` + `load_cek_hints_at` round-trip.
     #[test]
     fn cek_hints_persist_load_roundtrip() {
         let dir = tempdir();
@@ -1338,7 +1202,6 @@ mod tests {
         assert_eq!(loaded["chunk-bbb"], key_b);
     }
 
-    /// `load_cek_hints_at` with a corrupt JSON file returns an empty map without panicking.
     #[test]
     fn load_cek_hints_corrupt_file_returns_empty() {
         let dir = tempdir();
@@ -1348,8 +1211,6 @@ mod tests {
         let hints = load_cek_hints_at(&path);
         assert!(hints.is_empty(), "corrupt file must yield empty map");
     }
-
-    // ── helpers ───────────────────────────────────────────────────────────
 
     fn tempdir() -> std::path::PathBuf {
         let mut path = std::env::temp_dir();

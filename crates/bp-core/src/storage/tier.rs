@@ -1,55 +1,24 @@
-//! Storage tiers: a Pouch offers exactly one fixed quota.
-//!
-//! | Tier | Name     | Quota   |
-//! |------|----------|---------|
-//! | T1   | Pebble   | 10 GiB  |
-//! | T2   | Stone    | 100 GiB |
-//! | T3   | Boulder  | 500 GiB |
-//! | T4   | Rock     | 1 TiB   |
-//! | T5   | Monolith | 5 TiB   |
-//!
-//! The daemon rejects a second `hatch pouch --network X` on the same node:
-//! two Pouches on one machine fail together and defeat redundancy.
-
 use crate::error::{BpError, BpResult};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-// ── Tier constants ────────────────────────────────────────────────────────────
-
-/// 10 GiB in bytes.
 pub const TIER_T1_BYTES: u64 = 10 * 1024 * 1024 * 1024;
-/// 100 GiB in bytes.
 pub const TIER_T2_BYTES: u64 = 100 * 1024 * 1024 * 1024;
-/// 500 GiB in bytes.
 pub const TIER_T3_BYTES: u64 = 500 * 1024 * 1024 * 1024;
-/// 1 TiB in bytes.
 pub const TIER_T4_BYTES: u64 = 1024 * 1024 * 1024 * 1024;
-/// 5 TiB in bytes.
 pub const TIER_T5_BYTES: u64 = 5 * 1024 * 1024 * 1024 * 1024;
 
-// ── StorageTier enum ──────────────────────────────────────────────────────────
-
-/// A fixed storage tier for a Pouch service.
-///
-/// Tiers are ordered: `T1 < T2 < T3 < T4 < T5`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum StorageTier {
-    /// 10 GiB — "Pebble"
     T1,
-    /// 100 GiB — "Stone"
     T2,
-    /// 500 GiB — "Boulder"
     T3,
-    /// 1 TiB — "Rock"
     T4,
-    /// 5 TiB — "Monolith"
     T5,
 }
 
 impl StorageTier {
-    /// Return the exact quota in bytes for this tier.
     pub fn quota_bytes(self) -> u64 {
         match self {
             StorageTier::T1 => TIER_T1_BYTES,
@@ -60,7 +29,6 @@ impl StorageTier {
         }
     }
 
-    /// Human-readable name for this tier.
     pub fn name(self) -> &'static str {
         match self {
             StorageTier::T1 => "Pebble",
@@ -71,7 +39,6 @@ impl StorageTier {
         }
     }
 
-    /// Return all defined tiers in ascending order.
     pub fn all() -> &'static [StorageTier] {
         &[
             StorageTier::T1,
@@ -82,7 +49,6 @@ impl StorageTier {
         ]
     }
 
-    /// Parse a tier from a string like `"T1"`, `"t2"`, `"T3"`, etc.
     pub fn parse(s: &str) -> BpResult<Self> {
         match s.to_uppercase().as_str() {
             "T1" => Ok(StorageTier::T1),
@@ -118,8 +84,6 @@ impl std::str::FromStr for StorageTier {
         StorageTier::parse(s)
     }
 }
-
-// ── Unit tests ────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {

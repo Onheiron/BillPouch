@@ -1,11 +1,4 @@
-## BillPouch — Smoke-test cluster
-## Usage:
-##   docker compose -f docker-compose.smoke.yml up --build -d
-##   ./docker/smoke-test.sh
-##   docker compose -f docker-compose.smoke.yml down
-
 services:
-  # ── Node 1: will become Pouch (storage) ────────────────────────────────────
   node-pouch:
     build: .
     container_name: bp-pouch
@@ -17,7 +10,6 @@ services:
     networks:
       - bp-lan
 
-  # ── Node 2: will become Bill (file I/O) ───────────────────────────────────
   node-bill:
     build: .
     container_name: bp-bill
@@ -29,7 +21,6 @@ services:
     networks:
       - bp-lan
 
-  # ── Node 3: will become Post (relay) ──────────────────────────────────────
   node-post:
     build: .
     container_name: bp-post

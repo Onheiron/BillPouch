@@ -1,27 +1,3 @@
-//! # bp — BillPouch CLI
-//!
-//! ```text
-//!  Usage:
-//!    bp login  [--alias <name>] [--passphrase <p>]  Create / display your identity
-//!    bp logout                      Remove your identity from this machine
-//!    bp export-identity --out <path>   Export identity to a portable file
-//!    bp import-identity <path> [--force]  Import identity from a portable file
-//!    bp hatch  <type> [--network <id>] [--tier T2]  Start a service (bill|pouch|post)
-//!    bp status                      Show daemon identity + active services
-//!    bp flock                       Show peers and network summary
-//!    bp farewell <service_id>       Stop a running service
-//!    bp farewell <service_id> --evict  Permanently evict a Pouch from the network
-//!    bp pause <service_id> --eta <m> Pause for maintenance (ETA in minutes)
-//!    bp resume <service_id>         Resume a paused service
-//!    bp invite create --network <id> --invite-password <pw>  Create invite token
-//!    bp invite join <blob> --invite-password <pw>            Redeem invite token
-//!    bp bootstrap list              Show configured WAN bootstrap nodes
-//!    bp bootstrap add <addr>        Add a bootstrap node
-//!    bp bootstrap remove <addr>     Remove a bootstrap node
-//!    bp leave <network> [--force]    Leave a network (--force auto-evicts active services)
-//!    bp relay connect <addr>        Dial a relay node for NAT traversal
-//! ```
-
 mod client;
 mod commands;
 
@@ -326,7 +302,6 @@ enum InviteAction {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Initialise structured logging (RUST_LOG env var or default to info).
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -337,13 +312,11 @@ async fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
 
-    // ── Daemon mode ───────────────────────────────────────────────────────
     if cli.daemon {
         bp_core::daemon::run_daemon(cli.passphrase).await?;
         return Ok(());
     }
 
-    // ── CLI commands ──────────────────────────────────────────────────────
     match cli.command {
         None => {
             println!("🦤 BillPouch (bp) — P2P social distributed filesystem");
@@ -489,8 +462,6 @@ async fn main() -> anyhow::Result<()> {
 mod tests {
     use clap::CommandFactory;
 
-    /// Catches clap definition errors (e.g. duplicate short flags) that
-    /// would otherwise only panic at runtime.
     #[test]
     fn cli_definition_is_valid() {
         super::Cli::command().debug_assert();
