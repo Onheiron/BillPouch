@@ -138,10 +138,18 @@ Il CHANGELOG è generato automaticamente da **git-cliff** (`cliff.toml`):
 
 ## Versioning
 
+La fonte di verità è **release-please**: ogni push su `main` aggiorna la PR di release;
+al merge crea il tag `billpouch-vX.Y.Z`, la GitHub Release con i binari e
+(tramite `docker.yml` richiamato come reusable workflow) l'immagine Docker.
+
 | File                              | Contenuto                              |
 |-----------------------------------|----------------------------------------|
-| `version.txt`                     | Versione corrente (`0.1.3`)            |
-| `.release-please-manifest.json`   | Manifest release-please (`"." : "0.1.3"`) |
-| `release-please-config.json`      | Configurazione release-please          |
-| `cliff.toml`                      | Configurazione git-cliff               |
-| `Cargo.toml` workspace            | `version = "0.1.0"` (allineato manualmente) |
+| `version.txt`                     | Versione corrente (aggiornata da release-please) |
+| `.release-please-manifest.json`   | Manifest release-please                |
+| `release-please-config.json`      | Configurazione release-please (aggiorna anche `Cargo.toml` via `extra-files`) |
+| `Cargo.toml` workspace            | `[workspace.package] version`, allineato automaticamente |
+
+> I tag `v0.3.2` … `v0.3.19` sono stati creati a mano solo per lanciare build Docker
+> e non corrispondono a release. Per un'immagine ad-hoc ora si usa
+> **Actions → Docker → Run workflow** (`workflow_dispatch`), che pubblica
+> `latest` + `sha-<commit>` (o un tag scelto) senza creare tag git.

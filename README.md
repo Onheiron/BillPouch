@@ -104,12 +104,15 @@ BillPouch/
     │       │   ├── manifest.rs         # FileManifest + NetworkMetaKey
     │       │   ├── meta.rs             # PouchMeta (capacity, available bytes)
     │       │   ├── encryption.rs       # ChunkCipher — CEK encrypt/decrypt
+    │       │   ├── file_registry.rs    # Local registry of uploaded files (bp ls)
     │       │   └── tier.rs             # StorageTier T1–T5
     │       ├── network/
     │       │   ├── behaviour.rs        # Combined libp2p NetworkBehaviour
     │       │   ├── mod.rs              # Swarm loop + NetworkCommand channel
     │       │   ├── state.rs            # Gossip-based NodeInfo store
-    │       │   ├── qos.rs              # Per-peer RTT + fault score tracking    │       │   ├── reputation.rs       # ReputationTier R0–R4    │       │   ├── quality_monitor.rs  # Ping + Proof-of-Storage loop
+    │       │   ├── qos.rs              # Per-peer RTT + fault score tracking
+    │       │   ├── reputation.rs       # ReputationTier R0–R4
+    │       │   ├── quality_monitor.rs  # Ping + Proof-of-Storage loop
     │       │   ├── fragment_gossip.rs  # RemoteFragmentIndex announcements
     │       │   ├── bootstrap.rs        # Persistent Kademlia peer cache
     │       │   └── kad_store.rs        # Kademlia record persistence
@@ -124,13 +127,18 @@ BillPouch/
     │           ├── auth.rs             # login / logout / export-identity / import-identity
     │           ├── hatch.rs            # hatch
     │           ├── flock.rs            # flock
+    │           ├── status.rs           # status
     │           ├── farewell.rs         # farewell / farewell --evict
     │           ├── pause.rs            # pause / resume
     │           ├── leave.rs            # leave
     │           ├── join.rs             # join (hidden — internal script use)
     │           ├── put.rs              # put (RLNC encode + distribute)
     │           ├── get.rs              # get (fetch + RLNC decode)
-    │           └── invite.rs           # invite create / join
+    │           ├── ls.rs               # ls (uploaded files)
+    │           ├── storage.rs          # storage (quota + usage stats)
+    │           ├── invite.rs           # invite create / join
+    │           ├── bootstrap.rs        # bootstrap list / add / remove
+    │           └── relay.rs            # relay connect
     └── bp-api/                         # REST API daemon (axum)
         └── src/
             └── main.rs                 # HTTP server + embedded dashboard
@@ -236,7 +244,11 @@ bp put photo.jpg --network my-network
 # → prints chunk_id: 7f3a1...
 
 # Retrieve a file
-bp get 7f3a1... --network my-network -o photo_recovered.jpg
+bp get 7f3a1... photo_recovered.jpg --network my-network
+
+# List the files you uploaded and check your storage quota
+bp ls
+bp storage
 ```
 
 Fragments are distributed automatically to remote Pouch nodes. Recovery works as long as any `k` of the `n` fragments are reachable.
@@ -245,7 +257,7 @@ Fragments are distributed automatically to remote Pouch nodes. Recovery works as
 
 ```bash
 # Receive a token from a friend, then:
-bp invite join <token> --password secret
+bp invite join <token> --invite-password secret
 ```
 
 ### 5. Inspect the flock
@@ -279,11 +291,11 @@ bp flock
 
 ```bash
 # Create an invite token (password-protected)
-bp invite create --network my-network --password secret
-# → prints a base64 token
+bp invite create --network my-network --invite-password secret
+# → prints a hex token (share it and the password out-of-band)
 
 # On the other machine:
-bp invite join <token> --password secret
+bp invite join <token> --invite-password secret
 ```
 
 ### 7. Move your identity to another machine
@@ -359,14 +371,14 @@ Every node periodically broadcasts a `NodeInfo` message on the gossipsub topic `
     "tier": "T1",
     "storage_bytes_bid": 10737418240,
     "storage_bytes_used": 2500000000,
-    "version": "0.3.0"
+    "version": "0.3.1"
   }
 }
 ```
 
 ---
 
-## Status — v0.3.0-dev
+## Status — v0.3.1
 
 | Feature | Status |
 |---|---|
@@ -390,7 +402,10 @@ Every node periodically broadcasts a `NodeInfo` message on the gossipsub topic `
 | `bp leave` with active-service precondition | ✅ Done |
 | `bp leave --force` (auto-evict and leave) | ✅ Done |
 | `bp status` (compact daemon identity + services view) | ✅ Done |
+| `bp ls` / `bp storage` (uploaded files, quota & usage) | ✅ Done |
 | REST API + web dashboard (axum) | ✅ Done |
+| Local mode (`bp hatch` without network) | 🔮 Planned |
+| Async `bp leave` / `farewell --evict` with file materialization | 🔮 Planned |
 | FUSE filesystem mount | 🔮 Future |
 | gRPC API | 🔮 Future |
 | Mobile / WASM client | 🔮 Future |

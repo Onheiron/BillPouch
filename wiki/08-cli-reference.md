@@ -117,7 +117,7 @@ bp status
    fingerprint  : a3f19c2b
    alias         : carlo
    peer_id       : 12D3KooWGjE4XmRWauN…
-   daemon version : 0.3.0-dev
+   daemon version : 0.3.1
 
 🔌 Services  (2)
 ─────────────────────────────────────────────────────
@@ -242,6 +242,112 @@ $ bp leave amici --force
 > **Nota:** `--force` non esegue materializzazione dei file prima dell'abbandono
 > (feature v0.4). Se hai file distribuiti sulla rete che non hai mai scaricato
 > localmente, assicurati di recuperarli con `bp get` prima di usare `--force`.
+
+---
+
+## `bp put`
+
+Cifra un file (CEK per-utente, ChaCha20-Poly1305), lo codifica con RLNC e distribuisce
+i frammenti ai Pouch della rete. `k` e `n` sono calcolati dal daemon in base alla QoS
+dei peer e alla probabilità di recupero richiesta.
+
+```bash
+bp put <file> [--network <id>] [--ph <prob>] [--q-target <q>] [--name <nome>]
+```
+
+| Opzione      | Default  | Descrizione                                                   |
+|--------------|----------|---------------------------------------------------------------|
+| `--network`  | `public` | Rete su cui distribuire i frammenti                           |
+| `--ph`       | `0.999`  | Probabilità target di poter recuperare il file in ogni momento |
+| `--q-target` | `1.0`    | Overhead di ridondanza sopra la soglia di recupero            |
+| `--name`     | nome file| Nome leggibile mostrato da `bp ls`                            |
+
+Stampa il `chunk_id` (prefisso BLAKE3) da usare con `bp get`.
+Funziona anche da nodi Bill/Post senza un Pouch locale: i frammenti vanno ai Pouch remoti.
+
+---
+
+## `bp get`
+
+Recupera i frammenti (locali e remoti), decodifica RLNC e decifra il file.
+
+```bash
+bp get <chunk_id> <output> [--network <id>]
+```
+
+---
+
+## `bp ls`
+
+Elenca i file caricati da questo nodo (registro locale popolato da `bp put`).
+
+```bash
+bp ls [--network <id>]     # default: tutte le reti
+```
+
+---
+
+## `bp storage`
+
+Mostra quota, uso e spazio disponibile per ogni Pouch locale, più i totali e le
+statistiche dei file caricati. Lo spazio disponibile effettivo tiene conto della
+reputazione e dell'overhead k/N della rete.
+
+```bash
+bp storage [--network <id>]   # default: tutte le reti
+```
+
+---
+
+## `bp invite`
+
+Le reti sono private: si entra solo con un invito.
+
+```bash
+# Crea un token firmato (Ed25519) e cifrato con password (Argon2id + ChaCha20-Poly1305)
+bp invite create --network <id> --invite-password <pwd> [--for-fingerprint <fp>] [--ttl <ore>]
+
+# Riscatta il token: decifra, verifica, salva la NetworkMetaKey ed entra nella rete
+bp invite join <blob> --invite-password <pwd>
+```
+
+Il token e la password vanno condivisi su canali separati. `--ttl` ha default 24 ore;
+senza `--for-fingerprint` l'invito è aperto a chiunque abbia token e password.
+
+---
+
+## `bp export-identity` / `bp import-identity`
+
+Sposta la propria identità su un'altra macchina.
+
+```bash
+bp export-identity --out identity.json
+bp import-identity identity.json [--force]   # --force sovrascrive un'identità esistente
+```
+
+---
+
+## `bp bootstrap`
+
+Gestisce i nodi bootstrap WAN (`bootstrap.json`), usati dove mDNS non arriva.
+Le modifiche hanno effetto al prossimo riavvio del daemon.
+
+```bash
+bp bootstrap list
+bp bootstrap add /ip4/203.0.113.1/tcp/4001/p2p/12D3KooW...
+bp bootstrap remove /ip4/203.0.113.1/tcp/4001/p2p/12D3KooW...
+```
+
+---
+
+## `bp relay`
+
+NAT traversal: si collega a un relay e ottiene una reservation circuit-relay v2,
+rendendo il nodo raggiungibile via indirizzi `/p2p-circuit`.
+
+```bash
+bp relay connect /ip4/1.2.3.4/tcp/4001/p2p/12D3KooW...
+```
 
 ---
 
