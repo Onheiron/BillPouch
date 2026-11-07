@@ -55,13 +55,17 @@ struct AppState {
 
 /// Send `req` to the daemon; `Ok(data)` on success, or a ready HTTP error
 /// (503 if the daemon is unreachable, 500 if it returned an error).
-async fn call_daemon(state: &AppState, req: ControlRequest) -> Result<serde_json::Value, Response> {
+async fn call_daemon(
+    state: &AppState,
+    req: ControlRequest,
+) -> Result<serde_json::Value, Box<Response>> {
     match client::send(&state.socket_path, &req).await {
-        Err(e) => Err(daemon_unavailable(e)),
+        Err(e) => Err(Box::new(daemon_unavailable(e))),
         Ok(ControlResponse::Ok { data }) => Ok(data.unwrap_or(serde_json::Value::Null)),
-        Ok(ControlResponse::Error { message }) => {
-            Err(api_error(StatusCode::INTERNAL_SERVER_ERROR, message))
-        }
+        Ok(ControlResponse::Error { message }) => Err(Box::new(api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            message,
+        ))),
     }
 }
 
@@ -69,7 +73,7 @@ async fn call_daemon(state: &AppState, req: ControlRequest) -> Result<serde_json
 async fn respond(state: &AppState, req: ControlRequest, status: StatusCode) -> Response {
     match call_daemon(state, req).await {
         Ok(data) => (status, Json(data)).into_response(),
-        Err(resp) => resp,
+        Err(resp) => *resp,
     }
 }
 
@@ -313,7 +317,7 @@ async fn get_file(
 
     let data = match call_daemon(&state, req).await {
         Ok(data) => data,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     // `data` is serialized by serde as a JSON array of u8 — return base64.
     match serde_json::from_value::<GetFileData>(data) {
