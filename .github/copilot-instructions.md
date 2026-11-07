@@ -34,6 +34,7 @@ crates/
       manifest.rs         # FileManifest + NetworkMetaKey (BLAKE3)
       meta.rs             # PouchMeta — capacity, available_bytes, has_capacity
       encryption.rs       # ChunkCipher — per-user CEK (ChaCha20-Poly1305)
+      file_registry.rs    # Local registry of uploaded files (bp ls)
       tier.rs             # StorageTier T1–T5 — fixed quota tiers
     network/
       behaviour.rs        # BillPouchBehaviour: gossipsub+kad+identify+mdns
@@ -55,7 +56,9 @@ crates/
       auth.rs             # login / logout / export-identity / import-identity
       hatch.rs            # hatch
       flock.rs            # flock
-      status.rs           # status
+      status.rs           # status (AnnounceNow refresh + reputation/QoS)
+      ls.rs               # ls
+      storage.rs          # storage (quota / usage stats)
       farewell.rs         # farewell / --evict
       pause.rs            # pause / resume
       leave.rs            # leave [--force]
@@ -105,6 +108,7 @@ Transport: Unix domain socket, JSON newline-delimited, UTF-8.
 pub enum ControlRequest {
     Ping,
     Status,
+    AnnounceNow,                                   // re-announce via gossip, wait 2 s
     Hatch           { service_type, network_id, metadata },
     Flock,
     Farewell        { service_id },
@@ -114,9 +118,11 @@ pub enum ControlRequest {
     Join            { network_id },
     Leave           { network_id, force: bool },
     ConnectRelay    { relay_addr },
-    PutFile         { chunk_data, ph, q_target, network_id },
+    PutFile         { chunk_data, ph, q_target, network_id, file_name },
     GetFile         { chunk_id, network_id },
     CreateInvite    { network_id, invitee_fingerprint, invite_password, ttl_hours },
+    StorageInfo     { network_id },                // "" = all networks
+    ListFiles       { network_id },                // "" = all networks
 }
 
 // Responses
@@ -159,12 +165,17 @@ To serialize tests that mutate `HOME`/`XDG_DATA_HOME`: use `static ENV_LOCK: Mut
 
 ---
 
-## Current status: v0.3.0
+## Current status: v0.3.1
 
 All core features implemented: `bp put` / `bp get` (RLNC encode/decode, CEK encryption,
 adaptive k/n, remote fragment distribution), invite system, multi-device identity export/import,
 StorageTier T1–T5, ReputationTier R0–R4, `bp status`, `bp pause/resume`, `bp farewell --evict`,
-`bp leave --force`, Proof-of-Storage, FragmentIndex gossip, REST API + web dashboard.
+`bp leave --force`, `bp ls`, `bp storage`, Proof-of-Storage, FragmentIndex gossip,
+REST API + web dashboard.
+
+Still open from the v0.3 design: local mode (`bp hatch` without network), async
+`bp leave` / `farewell --evict` with file materialization, per-tier N/k/q and
+reputation-based fragment placement.
 
 See `wiki/12-status-roadmap.md` for the full feature list.
 
@@ -203,7 +214,7 @@ Configure VS Code to load it via `.vscode/mcp.json` (not committed — create lo
 | `compose_up(compose_file)` | docker compose up --build |
 | `compose_down(compose_file)` | docker compose down |
 | `list_containers()` | list running bp- containers |
-| `git_commit_push(message, tag?)` | git add -A + commit + push (always pushes) |
+| `git_commit_push(message, tag?)` | git add -A + commit + push to `main` (always pushes; no version tags) |
 | `git_diff(staged?)` | current working tree diff |
 | `read_wiki(page?)` | read a page from wiki/ |
 | `write_spec(name, content)` | write a feature spec to specs/ |
@@ -213,6 +224,12 @@ Configure VS Code to load it via `.vscode/mcp.json` (not committed — create lo
 
 ## Environment rules
 
-- **No `cargo` locally**: This machine has no Rust/cargo installed. Never run `cargo build`, `cargo test`, `cargo fmt`, or `cargo clippy`. Push to git and let GitHub Actions CI handle compilation and tests.
-- **Always push after commit**: Use the `git_commit_push` MCP tool which does `add + commit + push` atomically. Never commit without immediately pushing afterwards.
-- **No local Docker builds**: Never run `docker build` locally to update the playground image. The correct flow is: push a `vX.Y.Z` tag via `git_commit_push` → CI workflow `docker.yml` builds and pushes `onheirongithub/billpouch:latest` to Docker Hub (~10 min) → then `docker compose -f docker-compose.playground.yml pull && docker compose -f docker-compose.playground.yml up -d`.
+- **Run the checks before pushing** when a Rust toolchain is available:
+  `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
+  `cargo test --workspace`. If no toolchain is available, push and rely on CI.
+- **Versions are owned by release-please.** Do not bump `Cargo.toml`, `version.txt`
+  or the manifest by hand, and do not push `vX.Y.Z` tags: merging the release PR
+  creates the `billpouch-vX.Y.Z` tag, the GitHub Release and the Docker image.
+- **Ad-hoc Docker image** (e.g. to refresh the playground): run the *Docker* workflow
+  manually (Actions → Docker → Run workflow). It pushes `onheirongithub/billpouch:latest`
+  plus `sha-<commit>`; then `docker compose -f docker-compose.playground.yml pull && docker compose -f docker-compose.playground.yml up -d`.

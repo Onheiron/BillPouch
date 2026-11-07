@@ -2,7 +2,7 @@
 
 ## Versione corrente
 
-**v0.3.0** — Marzo 2026 — All v0.3 features complete
+**v0.3.1** — ultima release (release-please, 25 Marzo 2026). Ultimo sviluppo: 15 Aprile 2026; ripresa: Novembre 2026.
 
 ---
 
@@ -46,6 +46,9 @@
 | **ReputationTier R0–R4**           | ✅ Done | `network/reputation.rs` — `ReputationRecord`, `ReputationStore`, 9 unit test |
 | **ServiceStatus::Paused**          | ✅ Done | `service.rs` — `Paused { eta_minutes, paused_at }`, `Stopping`, `Error(String)` |
 | **One-Pouch-per-network**          | ✅ Done | `control/server.rs` — rifiuta secondo `hatch pouch` su stesso network per stessa identità |
+| **FileRegistry**                   | ✅ Done | `storage/file_registry.rs` — registro locale dei file caricati (nome, size, chunk_id, rete) |
+| **Effective available bytes**      | ✅ Done | Spazio disponibile pesato per reputazione e overhead k/N dinamico |
+| **Gossip re-announce**             | ✅ Done | Burst a 10/20/30 s dopo l'avvio, poi ogni 30 s — evita l'eviction da `NetworkState` |
 
 ### CLI (`bp-cli`)
 
@@ -62,6 +65,9 @@
 | `bp --daemon`    | ✅ Done | Avvio daemon interno                                         |
 | `bp put`     | ✅ Done | RLNC encode + store locale + distribute a Pouch remoti; `--ph`/`--q-target` al posto di `--k`/`--n` |
 | `bp get`     | ✅ Done | Decode da frammenti locali + fetch remoti se necessario      |
+| `bp ls`      | ✅ Done | File caricati da questo nodo (`ListFiles`)                   |
+| `bp storage` | ✅ Done | Quota/uso/disponibile per Pouch + totali (`StorageInfo`)     |
+| `bp status`  | ✅ Done | Identità, servizi, reputazione/QoS; refresh gossip (`AnnounceNow`) prima del display |
 
 ### Testing & DevOps
 
@@ -93,7 +99,7 @@
 
 ---
 
-## Stato sessione di sviluppo (aggiornato 23 Marzo 2026)
+## Stato sessione di sviluppo (aggiornato 7 Novembre 2026)
 
 Ultimo commit verde atteso: branch `main` (post push).
 
@@ -164,7 +170,19 @@ Ultimo commit verde atteso: branch `main` (post push).
 | 62 | `b146ed9` | fix(server): Leave handler — `map(|s| (*s).clone())` per `&&ServiceInfo` da double-ref `reg.all().iter()` |
 | 63 | `a5cf17b` | fix: `force: false` a tutti i literal `ControlRequest::Leave` in integration_test, architecture_test, bp-api |
 | 64 | `d93a480` | style: rustfmt `leave.rs` e `status.rs` |
-| 65 | `(HEAD)` | chore: version bump `0.1.0` → `0.3.0`; `config.rs` module doc; README/CHANGELOG/cli-README v0.3; AGENTS.md+CLAUDE.md protocollo e comandi aggiornati |
+| 65 | `f71cec6` | chore: version bump `0.1.0` → `0.3.0`; `config.rs` module doc; README/CHANGELOG/cli-README v0.3; AGENTS.md+CLAUDE.md protocollo e comandi aggiornati |
+| 66 | `2ed47fa` | chore(main): **release billpouch 0.3.1** (PR #5) — ultima release ufficiale |
+| 67 | `e6f33e3` `5c88475` | ci: build Docker in `docker.yml` (su tag), `release.yml` disabilitato |
+| 68 | `14a9304` `582542f` | chore(playground): immagine da Docker Hub; volumi dati per nodo (T1 = 10 GiB) |
+| 69 | `d2771e8` | fix: Bill/Post possono fare put/get senza Pouch locale; porte fisse nel playground |
+| 70 | `9391404` | feat: **`bp storage`**, **`bp ls`**, `bp status` con reputazione/QoS/statistiche per Pouch; `FileRegistry` |
+| 71 | `0aa4b62` `6f5aeb0` | fix: re-announce NodeInfo periodico (burst 10/20/30 s, poi 30 s); `known_peers` = max(gossip, qos) |
+| 72 | `66bc506` … `561d724` | perf: cargo-chef + cache GHA nella build Docker; base `rust:bookworm` |
+| 73 | `e5c9bba` | feat: `bp status` aggiorna il gossip prima della visualizzazione (`AnnounceNow` + spinner) |
+| 74 | `0cbb3ce` `a47506b` | feat(storage): byte disponibili effettivi pesati per reputazione e k/N dinamico |
+| 75 | `d77e14d` `51c5be8` `c15cc02` | chore: esperimento "CI agent ecosystem" aggiunto e rimosso; pulizia file duplicati |
+| 76 | `d2503b9` `aa4e901` | feat(mcp): server MCP TypeScript (`mcp/`) per agenti AI (docker, bp, git, wiki, spec) |
+| 77 | — | chore: pulizia (Nov 2026) — `Cargo.lock` sincronizzato, versioni allineate a 0.3.1, release-please aggiorna `Cargo.toml`, Docker build via release-please / `workflow_dispatch`, docs aggiornate |
 
 ---
 
@@ -208,13 +226,18 @@ Un Pouch appartiene al suo tier **e a tutti i tier inferiori**. Un Pouch T3 part
 
 **Un solo Pouch per macchina per network.** Avere due Pouch sulla stessa macchina nello stesso network crea correlazione della QoS (se la macchina va offline, entrambi i Pouch spariscono insieme), il che vanifica il vantaggio dello storage distribuito. Il daemon deve rifiutare il secondo `hatch pouch --network X` sulla stessa identità se esiste già un Pouch attivo su X — con errore esplicito: `"a Pouch for network X already exists on this node; two correlated Pouches defeat distributed redundancy"`.
 
-#### `bp hatch` senza `--network` — modalità locale
+#### `bp hatch` senza `--network` — modalità locale — ⏳ Da fare
+
+> Oggi `--network` ha default `public`; la modalità locale non è implementata.
 
 Se `--network` non viene specificato, il servizio gira in **modalità locale**: nessun gossip, nessun peer, storage e accesso solo da parte dell'identità locale (comportamento analogo a GlusterFS). Utile per test, staging, o uso single-device.
 
 ### 🟢 Nuovi comandi
 
-#### `bp leave <network>` — procedura di abbandono asincrona — ✅ Done (v1)
+#### `bp leave <network>` — procedura di abbandono asincrona — 🟡 Parziale
+
+> Fatto: precondition (punto 1) e `--force` con eviction (punto 2) + unsubscribe (punto 4).
+> Da fare: recupero/materializzazione dei file posseduti (punto 3) e `bp leave-status` (punto 5).
 
 Abbandono di un network è una procedura multi-step **non interrompibile** una volta avviata:
 
@@ -237,7 +260,11 @@ Per spegnimento pianificato con garanzia di ritorno:
 3. Se non torna entro T → `fault_score++` automatico per ogni PoS challenge mancato
 4. Al ritorno → PoS challenge immediato; se passa → nessuna penalità reputazione
 
-#### `bp farewell <service_id> --evict` — rimozione permanente con eviction — ✅ Done (v1)
+#### `bp farewell <service_id> --evict` — rimozione permanente con eviction — 🟡 Parziale
+
+> Fatto: annuncio, purge storage, penalità reputazione, rimozione dal registry.
+> Da fare: ridistribuzione attiva dei frammenti (punto 2) e scelta dei file da materializzare (punto 3);
+> oggi ci si affida a PoS + rigenerazione preventiva sugli altri peer.
 
 Procedura asincrona per rimozione definitiva di un Pouch:
 
@@ -249,7 +276,11 @@ Procedura asincrona per rimozione definitiva di un Pouch:
 
 ### 🔵 Nuovo sottosistema: Network Tiering
 
-#### Storage tier — `storage/tier.rs` — ✅ Done
+#### Storage tier — `storage/tier.rs` — 🟡 Parziale
+
+> Fatto: tipi, quote, `for_file_size()`, `bp hatch --tier`, vincolo one-Pouch-per-network.
+> Da fare: calcolo N/k/q **per tier** in `PutFile` e filtro dei Pouch per tier nel placement
+> (`StorageTier::for_file_size` non è ancora usato dal daemon).
 
 I tier definiscono sia la **dimensione del Pouch** sia la **dimensione dei file** che possono essere distribuiti su quel tier. Un fragment di un file T2 (10–100 GB) non può fisicamente stare su un Pouch T1 (10 GB totali), quindi i calcoli N/k/q sono naturalmente separati per tier.
 
@@ -274,7 +305,10 @@ Error: a Pouch for network X already exists on this node.
        Use `bp farewell --evict <service_id>` to remove the existing one first.
 ```
 
-#### Reputation tier — `network/reputation.rs` — ✅ Done
+#### Reputation tier — `network/reputation.rs` — 🟡 Parziale
+
+> Fatto: tier R0–R4, `ReputationStore`, uso nel calcolo dello spazio disponibile.
+> Da fare: **regola di placement** per reputazione (`is_eligible_for_placement` esiste ma non è usata nella distribuzione dei frammenti).
 
 | Tier | Nome | Criteri di ingresso |
 |---|---|---|
@@ -302,6 +336,7 @@ Error: a Pouch for network X already exists on this node.
 |---|---|---|
 | FUSE mount | Alta | `bp mount <network> <mountpoint>` — filesystem nativo |
 | CEK persistence | ✅ Done | `cek_hints.json` — `load_cek_hints_at` / `persist_cek_hints_at`; daemon carica al boot |
+| Completare v0.3 (local mode, leave/evict asincroni, placement per tier/reputazione) | Alta | Vedi le sezioni 🟡/⏳ sopra |
 | Bootstrap pubblici | Alta | 3+ nodi pubblici always-on per cold-start del network |
 | gRPC API | Media | Alternativa programmatica alla socket Unix control |
 | Mobile client | Media | iOS/Android via UniFFI bindings a `bp-core` |
@@ -312,6 +347,8 @@ Error: a Pouch for network X already exists on this node.
 ---
 
 ## Changelog recente
+
+> Il changelog completo e aggiornato è in [`CHANGELOG.md`](../CHANGELOG.md), generato da release-please.
 
 ### v0.3.0 (Marzo 2026)
 - **refactor:** Rimosso intero storage marketplace — `StorageOffer`, `StorageAgreement`, `AgreementStore`, `ControlRequest::{ProposeStorage,AcceptStorage,ListAgreements,ListOffers}`, `NetworkCommand::AnnounceOffer`, `/marketplace/*` REST endpoints, CLI `bp offer/agree/agreements/offers`

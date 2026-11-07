@@ -59,7 +59,7 @@
   <div class="card" id="card-services"><h2>Services</h2><div class="empty">Loading…</div></div>
   <div class="card" id="card-peers"><h2>Peers</h2><div class="empty">Loading…</div></div>
 </main>
-<footer>Auto-refresh every 5 s &nbsp;·&nbsp; BillPouch v0.3.0-dev</footer>
+<footer>Auto-refresh every 5 s &nbsp;·&nbsp; BillPouch <span id="bp-version"></span></footer>
 
 <script>
 const base = window.location.origin;
@@ -103,6 +103,7 @@ async function refresh() {
       kv('Alias',       s.alias ?? '<em>none</em>') +
       kv('PeerId',      `<code style="font-size:11px">${(s.peer_id ?? '').slice(0,32)}…</code>`) +
       kv('Networks',    (s.networks ?? []).join(', ') || '<em>none</em>');
+    if (s.version) document.getElementById('bp-version').textContent = 'v' + s.version;
 
     const svcs = s.local_services ?? [];
     let svcHtml = '<h2>Services (' + svcs.length + ')</h2>';
