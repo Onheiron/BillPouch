@@ -54,18 +54,6 @@ pub enum BpError {
     #[error("Not authenticated — run `bp login` first")]
     NotAuthenticated,
 
-    /// `bp hatch` has not been run — no daemon PID file or process found.
-    #[error("Daemon not running — run `bp hatch <service_type>` first")]
-    DaemonNotRunning,
-
-    /// A service UUID was referenced but is not in the registry.
-    #[error("Service not found: {0}")]
-    ServiceNotFound(String),
-
-    /// A network ID was referenced that this daemon has not joined.
-    #[error("Unknown network: {0}")]
-    UnknownNetwork(String),
-
     /// An argument or parameter value is invalid (e.g. unknown tier name).
     #[error("Invalid input: {0}")]
     InvalidInput(String),

@@ -125,79 +125,14 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
     });
 
     // ── Periodic NodeInfo re-announce — keep gossip state fresh ──────────
-    // announce_self is called once on Hatch; this loop re-broadcasts every
-    // 30 s so that peers joining the mesh late still receive our NodeInfo,
-    // and evict_stale(120) never drops live peers from neighbours.
+    // Peers evict nodes silent for >120 s, and peers joining the mesh late
+    // only learn about us from a later announcement.  Re-announce at 10, 20
+    // and 30 s after start (mesh formation), then every 30 s.
     let reannounce_state = Arc::clone(&daemon_state);
     tokio::spawn(async move {
-        // First burst: re-announce at 10s, 20s, 30s after daemon start,
-        // then settle into 30s intervals. This covers gossipsub mesh
-        // formation delay in Docker playgrounds.
-        for delay in [10u64, 10, 10] {
+        for delay in [10, 10, 10].into_iter().chain(std::iter::repeat(30)) {
             tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
-            let services_snapshot: Vec<(String, crate::service::ServiceType, String)> = {
-                let svc = reannounce_state.services.read().unwrap();
-                svc.all()
-                    .iter()
-                    .map(|s| (s.id.clone(), s.service_type, s.network_id.clone()))
-                    .collect()
-            };
-            for (service_id, service_type, network_id) in services_snapshot {
-                let info = crate::network::state::NodeInfo {
-                    peer_id: reannounce_state.identity.peer_id.to_string(),
-                    user_fingerprint: reannounce_state.identity.fingerprint.clone(),
-                    user_alias: reannounce_state.identity.profile.alias.clone(),
-                    service_type,
-                    service_id,
-                    network_id: network_id.clone(),
-                    listen_addrs: vec![],
-                    announced_at: chrono::Utc::now().timestamp() as u64,
-                    metadata: std::collections::HashMap::new(),
-                };
-                if let Ok(payload) = serde_json::to_vec(&info) {
-                    let _ = reannounce_state
-                        .net_tx
-                        .send(crate::network::NetworkCommand::Announce {
-                            network_id,
-                            payload,
-                        })
-                        .await;
-                }
-            }
-        }
-        // Steady-state: re-announce every 30 s.
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
-        loop {
-            interval.tick().await;
-            let services_snapshot: Vec<(String, crate::service::ServiceType, String)> = {
-                let svc = reannounce_state.services.read().unwrap();
-                svc.all()
-                    .iter()
-                    .map(|s| (s.id.clone(), s.service_type, s.network_id.clone()))
-                    .collect()
-            };
-            for (service_id, service_type, network_id) in services_snapshot {
-                let info = crate::network::state::NodeInfo {
-                    peer_id: reannounce_state.identity.peer_id.to_string(),
-                    user_fingerprint: reannounce_state.identity.fingerprint.clone(),
-                    user_alias: reannounce_state.identity.profile.alias.clone(),
-                    service_type,
-                    service_id,
-                    network_id: network_id.clone(),
-                    listen_addrs: vec![],
-                    announced_at: chrono::Utc::now().timestamp() as u64,
-                    metadata: std::collections::HashMap::new(),
-                };
-                if let Ok(payload) = serde_json::to_vec(&info) {
-                    let _ = reannounce_state
-                        .net_tx
-                        .send(crate::network::NetworkCommand::Announce {
-                            network_id,
-                            payload,
-                        })
-                        .await;
-                }
-            }
+            crate::control::server::announce_all(&reannounce_state).await;
         }
     });
 

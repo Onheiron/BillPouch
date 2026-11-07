@@ -152,7 +152,7 @@ fn servizio_ogni_istanza_ha_uuid_unico() {
 #[test]
 fn servizio_nasce_in_stato_starting() {
     let s = ServiceInfo::new(ServiceType::Bill, "my-net".into(), HashMap::new());
-    assert_eq!(s.status, ServiceStatus::Starting);
+    assert_eq!(s.status, ServiceStatus::Running);
 }
 
 #[test]

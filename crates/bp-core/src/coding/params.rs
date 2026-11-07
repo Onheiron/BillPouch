@@ -57,9 +57,8 @@ use crate::error::{BpError, BpResult};
 
 /// Coding parameters computed for a specific network state and target `Ph`.
 ///
-/// Stored in the [`FileManifest`](crate::storage::network_key::FileManifest)
-/// at upload time and used by the daemon to determine how many fragments to
-/// generate and distribute per chunk.
+/// Used by `PutFile` to decide how many fragments to generate and
+/// distribute per chunk.
 #[derive(Debug, Clone)]
 pub struct NetworkCodingParams {
     /// Target recovery probability requested at computation time.
@@ -207,11 +206,8 @@ pub fn compute_network_storage_factor(stabilities: &[f64], ph: f64) -> f64 {
     k as f64 / n as f64
 }
 
-/// Recompute the **rolling effective recovery probability** `Pe` for a file
-/// that was uploaded with threshold `k`, given the current stability scores.
-///
-/// This is called periodically by the daemon to update `pe` in the
-/// [`FileManifest`](crate::storage::network_key::FileManifest).
+/// Effective recovery probability `Pe` for threshold `k` given the current
+/// stability scores (reported by `PutFile`).
 ///
 /// ```text
 /// Pe = P(X ≥ k)  ≈  1 − Φ((k − 0.5 − μ) / σ)

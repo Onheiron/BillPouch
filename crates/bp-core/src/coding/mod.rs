@@ -9,7 +9,8 @@
 //!
 //! ## Sub-modules
 //!
-//! - [`gf256`] — arithmetic in GF(2⁸) (add, mul, div, inv).
+//! - [`gf256`] — arithmetic in GF(2⁸) (add, mul, inv, mul_acc).
+//! - [`params`] — adaptive `k`/`n` from peer stability scores.
 //! - [`rlnc`]  — encode, recode and decode operations on byte chunks.
 
 pub mod gf256;

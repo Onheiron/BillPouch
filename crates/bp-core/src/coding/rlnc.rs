@@ -225,7 +225,7 @@ pub fn recode(fragments: &[EncodedFragment], count: usize) -> BpResult<Vec<Encod
 ///
 /// The returned bytes include any zero-padding added during encoding — the caller
 /// is responsible for stripping trailing padding to the original length (stored in
-/// the file manifest, not in the fragment itself).
+/// the caller, not in the fragment itself).
 ///
 /// # Errors
 /// - Fewer than `k` fragments provided.
