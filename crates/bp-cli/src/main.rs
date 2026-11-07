@@ -194,7 +194,7 @@ enum Cmd {
 
         /// Human-readable name for the file (shown by `bp ls`).
         /// Defaults to the file's original filename.
-        #[arg(long, short)]
+        #[arg(long)]
         name: Option<String>,
     },
 
@@ -486,4 +486,16 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::CommandFactory;
+
+    /// Catches clap definition errors (e.g. duplicate short flags) that
+    /// would otherwise only panic at runtime.
+    #[test]
+    fn cli_definition_is_valid() {
+        super::Cli::command().debug_assert();
+    }
 }
