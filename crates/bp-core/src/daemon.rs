@@ -60,7 +60,7 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
         ),
     });
 
-    let swarm = network::build_swarm(identity.keypair.clone())
+    let swarm = network::build_swarm(identity.device.clone())
         .map_err(|e| BpError::Network(e.to_string()))?;
 
     let listen_port: u16 = std::env::var("BP_LISTEN_PORT")

@@ -3,86 +3,8 @@ use bp_core::network::state::{NetworkState, NodeInfo};
 use bp_core::service::*;
 use std::collections::HashMap;
 
-#[test]
-fn identita_ed25519_keypair_genera_peer_id_deterministico() {
-    let keypair = libp2p::identity::Keypair::generate_ed25519();
-    let peer_id_1 = libp2p::PeerId::from_public_key(&keypair.public());
-    let peer_id_2 = libp2p::PeerId::from_public_key(&keypair.public());
-
-    assert_eq!(
-        peer_id_1, peer_id_2,
-        "Lo stesso keypair deve dare lo stesso PeerId"
-    );
-}
-
-#[test]
-fn identita_keypair_diversi_danno_peer_id_diversi() {
-    let kp1 = libp2p::identity::Keypair::generate_ed25519();
-    let kp2 = libp2p::identity::Keypair::generate_ed25519();
-    let pid1 = libp2p::PeerId::from_public_key(&kp1.public());
-    let pid2 = libp2p::PeerId::from_public_key(&kp2.public());
-
-    assert_ne!(pid1, pid2, "Keypair diversi devono produrre PeerId diversi");
-}
-
-#[test]
-fn identita_fingerprint_e_sha256_primi_8_byte_hex() {
-    let keypair = libp2p::identity::Keypair::generate_ed25519();
-    let fp = bp_core::identity::fingerprint(&keypair);
-
-    assert_eq!(
-        fp.len(),
-        16,
-        "Il fingerprint deve essere 16 caratteri hex (8 byte)"
-    );
-    assert!(
-        fp.chars().all(|c| c.is_ascii_hexdigit()),
-        "Deve essere hex valido"
-    );
-}
-
-#[test]
-fn identita_fingerprint_deterministico() {
-    let keypair = libp2p::identity::Keypair::generate_ed25519();
-    let fp1 = bp_core::identity::fingerprint(&keypair);
-    let fp2 = bp_core::identity::fingerprint(&keypair);
-
-    assert_eq!(fp1, fp2, "Fingerprint deve essere deterministico");
-}
-
-#[test]
-fn identita_keypair_persistenza_roundtrip() {
-    let keypair = libp2p::identity::Keypair::generate_ed25519();
-    let encoded = keypair
-        .to_protobuf_encoding()
-        .expect("Encoding deve funzionare");
-    let decoded = libp2p::identity::Keypair::from_protobuf_encoding(&encoded)
-        .expect("Decoding deve funzionare");
-
-    let pid_orig = libp2p::PeerId::from_public_key(&keypair.public());
-    let pid_reload = libp2p::PeerId::from_public_key(&decoded.public());
-
-    assert_eq!(
-        pid_orig, pid_reload,
-        "Keypair ricaricato deve produrre stesso PeerId"
-    );
-}
-
-#[test]
-fn identita_stessa_chiave_su_piu_macchine() {
-    let keypair = libp2p::identity::Keypair::generate_ed25519();
-    let bytes = keypair.to_protobuf_encoding().unwrap();
-
-    let macchina_1 = libp2p::identity::Keypair::from_protobuf_encoding(&bytes).unwrap();
-    let macchina_2 = libp2p::identity::Keypair::from_protobuf_encoding(&bytes).unwrap();
-
-    let fp1 = bp_core::identity::fingerprint(&macchina_1);
-    let fp2 = bp_core::identity::fingerprint(&macchina_2);
-
-    assert_eq!(
-        fp1, fp2,
-        "Stessa chiave su macchine diverse → stesso fingerprint utente"
-    );
+fn test_cert() -> bp_core::identity::DeviceCert {
+    bp_core::identity::Identity::in_memory(None).unwrap().cert
 }
 
 #[test]
@@ -212,6 +134,7 @@ fn make_node_info(
         peer_id: peer_id.into(),
         user_fingerprint: fingerprint.into(),
         user_alias: Some("test".into()),
+        device_cert: test_cert(),
         service_type: svc,
         service_id: uuid::Uuid::new_v4().to_string(),
         network_id: net.into(),
@@ -366,6 +289,7 @@ fn node_info_serializza_come_da_readme() {
         peer_id: "12D3KooWGjE...".into(),
         user_fingerprint: "a3f19c2b".into(),
         user_alias: Some("carlo".into()),
+        device_cert: test_cert(),
         service_type: ServiceType::Pouch,
         service_id: "550e8400-e29b-41d4-...".into(),
         network_id: "my-network".into(),
@@ -447,6 +371,7 @@ fn scenario_rete_amici_carlo_marco_lucia() {
         peer_id: "peer-carlo-nas".into(),
         user_fingerprint: "carlo___".into(),
         user_alias: Some("carlo".into()),
+        device_cert: test_cert(),
         service_type: ServiceType::Pouch,
         service_id: uuid::Uuid::new_v4().to_string(),
         network_id: "amici".into(),
@@ -462,6 +387,7 @@ fn scenario_rete_amici_carlo_marco_lucia() {
         peer_id: "peer-carlo-laptop".into(),
         user_fingerprint: "carlo___".into(),
         user_alias: Some("carlo".into()),
+        device_cert: test_cert(),
         service_type: ServiceType::Bill,
         service_id: uuid::Uuid::new_v4().to_string(),
         network_id: "amici".into(),
@@ -474,6 +400,7 @@ fn scenario_rete_amici_carlo_marco_lucia() {
         peer_id: "peer-marco-desktop".into(),
         user_fingerprint: "marco___".into(),
         user_alias: Some("marco".into()),
+        device_cert: test_cert(),
         service_type: ServiceType::Pouch,
         service_id: uuid::Uuid::new_v4().to_string(),
         network_id: "amici".into(),
@@ -489,6 +416,7 @@ fn scenario_rete_amici_carlo_marco_lucia() {
         peer_id: "peer-marco-vps".into(),
         user_fingerprint: "marco___".into(),
         user_alias: Some("marco".into()),
+        device_cert: test_cert(),
         service_type: ServiceType::Pouch,
         service_id: uuid::Uuid::new_v4().to_string(),
         network_id: "amici".into(),
@@ -507,6 +435,7 @@ fn scenario_rete_amici_carlo_marco_lucia() {
         peer_id: "peer-marco-vps-relay".into(),
         user_fingerprint: "marco___".into(),
         user_alias: Some("marco".into()),
+        device_cert: test_cert(),
         service_type: ServiceType::Post,
         service_id: uuid::Uuid::new_v4().to_string(),
         network_id: "amici".into(),
@@ -519,6 +448,7 @@ fn scenario_rete_amici_carlo_marco_lucia() {
         peer_id: "peer-lucia-laptop".into(),
         user_fingerprint: "lucia___".into(),
         user_alias: Some("lucia".into()),
+        device_cert: test_cert(),
         service_type: ServiceType::Bill,
         service_id: uuid::Uuid::new_v4().to_string(),
         network_id: "amici".into(),
@@ -624,199 +554,68 @@ fn with_temp_home<F: FnOnce() + std::panic::UnwindSafe>(f: F) {
 
 #[test]
 #[cfg(unix)]
-fn identity_exists_false_prima_del_login() {
+fn identity_create_load_remove_roundtrip() {
+    use bp_core::identity::Identity;
     with_temp_home(|| {
-        assert!(
-            !bp_core::identity::Identity::exists().unwrap(),
-            "exists() deve essere false prima di generate()"
+        assert!(!Identity::exists().unwrap());
+        assert!(matches!(
+            Identity::load(None).map(|_| ()).unwrap_err(),
+            bp_core::error::BpError::NotAuthenticated
+        ));
+
+        let created = Identity::create(None, Some("carlo".into()), None).unwrap();
+        assert!(Identity::exists().unwrap());
+        assert!(Identity::create(None, None, None).is_err());
+
+        let loaded = Identity::load(None).unwrap();
+        assert_eq!(loaded.fingerprint, created.fingerprint);
+        assert_eq!(loaded.peer_id, created.peer_id);
+        assert_eq!(loaded.profile.alias.as_deref(), Some("carlo"));
+
+        let key_mode = std::os::unix::fs::PermissionsExt::mode(
+            &std::fs::metadata(bp_core::config::user_key_path().unwrap())
+                .unwrap()
+                .permissions(),
         );
+        assert_eq!(key_mode & 0o777, 0o600);
+
+        Identity::remove().unwrap();
+        assert!(!Identity::exists().unwrap());
     });
 }
 
 #[test]
 #[cfg(unix)]
-fn identity_load_senza_file_ritorna_not_authenticated() {
+fn identity_generated_key_is_protected_by_passphrase() {
+    use bp_core::identity::Identity;
     with_temp_home(|| {
-        let err = bp_core::identity::Identity::load(None)
-            .map(|_| ())
-            .unwrap_err();
-        assert!(
-            matches!(err, bp_core::error::BpError::NotAuthenticated),
-            "load() senza file deve ritornare NotAuthenticated"
-        );
-    });
-}
-
-#[test]
-#[cfg(unix)]
-fn identity_generate_crea_keypair_e_profilo() {
-    with_temp_home(|| {
-        let identity = bp_core::identity::Identity::generate(Some("test-user".into()), None)
-            .expect("generate() deve riuscire");
-
+        let created = Identity::create(None, None, Some("s3cret")).unwrap();
+        let text = std::fs::read_to_string(bp_core::config::user_key_path().unwrap()).unwrap();
+        assert!(text.starts_with("-----BEGIN OPENSSH PRIVATE KEY-----"));
+        assert!(Identity::load(None).is_err());
+        assert!(Identity::load(Some("wrong")).is_err());
         assert_eq!(
-            identity.profile.alias,
-            Some("test-user".into()),
-            "Alias deve essere salvato nel profilo"
-        );
-        assert_eq!(
-            identity.fingerprint.len(),
-            16,
-            "Fingerprint deve essere 16 caratteri hex"
-        );
-        assert!(
-            identity.fingerprint.chars().all(|c| c.is_ascii_hexdigit()),
-            "Fingerprint deve essere hex valido"
-        );
-        assert!(
-            bp_core::identity::Identity::exists().unwrap(),
-            "exists() deve essere true dopo generate()"
+            Identity::load(Some("s3cret")).unwrap().fingerprint,
+            created.fingerprint
         );
     });
 }
 
 #[test]
 #[cfg(unix)]
-fn identity_generate_senza_alias() {
+fn identity_imported_ssh_key_gives_a_new_device_for_the_same_user() {
+    use bp_core::identity::Identity;
     with_temp_home(|| {
-        let identity = bp_core::identity::Identity::generate(None, None)
-            .expect("generate() senza alias deve riuscire");
-        assert_eq!(
-            identity.profile.alias, None,
-            "Alias deve essere None se non fornito"
-        );
-    });
-}
+        let first = Identity::create(None, None, None).unwrap();
+        let key = std::env::temp_dir().join(format!("bp_key_{}", uuid::Uuid::new_v4().simple()));
+        std::fs::copy(bp_core::config::user_key_path().unwrap(), &key).unwrap();
+        Identity::remove().unwrap();
 
-#[test]
-#[cfg(unix)]
-fn identity_load_restituisce_stessa_identita() {
-    with_temp_home(|| {
-        let original = bp_core::identity::Identity::generate(Some("carlo".into()), None).unwrap();
-        let loaded = bp_core::identity::Identity::load(None).unwrap();
-
-        assert_eq!(
-            loaded.fingerprint, original.fingerprint,
-            "Fingerprint deve essere identico dopo reload"
-        );
-        assert_eq!(
-            loaded.peer_id, original.peer_id,
-            "PeerId deve essere identico dopo reload"
-        );
-        assert_eq!(
-            loaded.profile.alias,
-            Some("carlo".into()),
-            "Alias deve sopravvivere al reload"
-        );
-    });
-}
-
-#[test]
-#[cfg(unix)]
-fn identity_remove_cancella_i_file() {
-    with_temp_home(|| {
-        bp_core::identity::Identity::generate(Some("to-delete".into()), None).unwrap();
-        assert!(bp_core::identity::Identity::exists().unwrap());
-
-        bp_core::identity::Identity::remove().unwrap();
-        assert!(
-            !bp_core::identity::Identity::exists().unwrap(),
-            "exists() deve essere false dopo remove()"
-        );
-
-        let err = bp_core::identity::Identity::load(None)
-            .map(|_| ())
-            .unwrap_err();
-        assert!(matches!(err, bp_core::error::BpError::NotAuthenticated));
-    });
-}
-
-#[test]
-#[cfg(unix)]
-fn identity_remove_idempotente_se_non_esiste() {
-    with_temp_home(|| {
-        bp_core::identity::Identity::remove().unwrap();
-    });
-}
-
-#[test]
-#[cfg(unix)]
-fn identity_passphrase_genera_file_cifrato() {
-    with_temp_home(|| {
-        let id =
-            bp_core::identity::Identity::generate(Some("sicuro".into()), Some("s3cr3t")).unwrap();
-        assert_eq!(id.profile.alias, Some("sicuro".into()));
-
-        let enc_path = bp_core::config::encrypted_identity_path().unwrap();
-        let plain_path = bp_core::config::identity_path().unwrap();
-        assert!(enc_path.exists(), "identity.key.enc deve esistere");
-        assert!(
-            !plain_path.exists(),
-            "identity.key NON deve esistere con passphrase"
-        );
-        assert!(bp_core::identity::Identity::exists().unwrap());
-    });
-}
-
-#[test]
-#[cfg(unix)]
-fn identity_passphrase_load_corretto() {
-    with_temp_home(|| {
-        let orig =
-            bp_core::identity::Identity::generate(None, Some("correcthorsebatterystaple")).unwrap();
-        let loaded = bp_core::identity::Identity::load(Some("correcthorsebatterystaple")).unwrap();
-        assert_eq!(
-            loaded.fingerprint, orig.fingerprint,
-            "Fingerprint deve sopravvivere al ciclo cifra/decifra"
-        );
-        assert_eq!(loaded.peer_id, orig.peer_id);
-    });
-}
-
-#[test]
-#[cfg(unix)]
-fn identity_passphrase_sbagliata_ritorna_errore() {
-    with_temp_home(|| {
-        bp_core::identity::Identity::generate(None, Some("right-pass")).unwrap();
-        let err = bp_core::identity::Identity::load(Some("wrong-pass"))
-            .map(|_| ())
-            .unwrap_err();
-        assert!(
-            matches!(err, bp_core::error::BpError::Identity(_)),
-            "Passphrase sbagliata deve ritornare BpError::Identity: {err:?}"
-        );
-    });
-}
-
-#[test]
-#[cfg(unix)]
-fn identity_passphrase_assente_su_file_cifrato_ritorna_errore() {
-    with_temp_home(|| {
-        bp_core::identity::Identity::generate(None, Some("mypass")).unwrap();
-        let err = bp_core::identity::Identity::load(None)
-            .map(|_| ())
-            .unwrap_err();
-        assert!(
-            matches!(err, bp_core::error::BpError::Identity(_)),
-            "Nessuna passphrase su file cifrato deve ritornare BpError::Identity: {err:?}"
-        );
-    });
-}
-
-#[test]
-#[cfg(unix)]
-fn identity_remove_rimuove_anche_file_cifrato() {
-    with_temp_home(|| {
-        bp_core::identity::Identity::generate(None, Some("pass123")).unwrap();
-        assert!(bp_core::identity::Identity::exists().unwrap());
-
-        bp_core::identity::Identity::remove().unwrap();
-        assert!(!bp_core::identity::Identity::exists().unwrap());
-        let enc_path = bp_core::config::encrypted_identity_path().unwrap();
-        assert!(
-            !enc_path.exists(),
-            "identity.key.enc deve essere rimosso da remove()"
-        );
+        let second = Identity::create(Some(&key), None, None).unwrap();
+        std::fs::remove_file(&key).ok();
+        assert_eq!(second.fingerprint, first.fingerprint);
+        assert_eq!(second.user_key, first.user_key);
+        assert_ne!(second.peer_id, first.peer_id);
     });
 }
 
@@ -887,19 +686,7 @@ fn daemon_is_running_false_con_pid_malformato() {
 
 #[cfg(unix)]
 fn make_in_memory_state() -> std::sync::Arc<bp_core::control::server::DaemonState> {
-    let keypair = libp2p::identity::Keypair::generate_ed25519();
-    let peer_id = libp2p::PeerId::from_public_key(&keypair.public());
-    let fp = bp_core::identity::fingerprint(&keypair);
-    let identity = bp_core::identity::Identity {
-        keypair,
-        peer_id,
-        fingerprint: fp.clone(),
-        profile: bp_core::identity::UserProfile {
-            fingerprint: fp,
-            alias: Some("test-server".into()),
-            created_at: chrono::Utc::now(),
-        },
-    };
+    let identity = bp_core::identity::Identity::in_memory(Some("test-server".into())).unwrap();
     let (net_tx, _net_rx) = tokio::sync::mpsc::channel(64);
     std::sync::Arc::new(bp_core::control::server::DaemonState {
         identity,
@@ -1221,104 +1008,6 @@ async fn dispatch_connect_relay_addr_valida() {
     }
 }
 
-#[test]
-#[cfg(unix)]
-fn identity_export_to_file_crea_json_valido() {
-    with_temp_home(|| {
-        let id = bp_core::identity::Identity::generate(Some("exportando".into()), None).unwrap();
-
-        let export_path = std::env::temp_dir().join(format!(
-            "bp_export_test_{}.json",
-            uuid::Uuid::new_v4().simple()
-        ));
-        bp_core::identity::Identity::export_to_file(&export_path).unwrap();
-
-        let contents = std::fs::read_to_string(&export_path).expect("file export deve esistere");
-        let v: serde_json::Value =
-            serde_json::from_str(&contents).expect("deve essere JSON valido");
-        assert_eq!(
-            v["profile"]["fingerprint"].as_str().unwrap(),
-            id.fingerprint,
-            "fingerprint nel file deve corrispondere"
-        );
-        assert_eq!(v["version"].as_u64().unwrap(), 1);
-        let _ = std::fs::remove_file(&export_path);
-    });
-}
-
-#[test]
-#[cfg(unix)]
-fn identity_import_from_file_roundtrip() {
-    with_temp_home(|| {
-        let id = bp_core::identity::Identity::generate(Some("originale".into()), None).unwrap();
-        let fp = id.fingerprint.clone();
-
-        let export_path = std::env::temp_dir().join(format!(
-            "bp_export_rt_{}.json",
-            uuid::Uuid::new_v4().simple()
-        ));
-        bp_core::identity::Identity::export_to_file(&export_path).unwrap();
-
-        bp_core::identity::Identity::remove().unwrap();
-        assert!(!bp_core::identity::Identity::exists().unwrap());
-
-        let profile = bp_core::identity::Identity::import_from_file(&export_path, false).unwrap();
-        assert_eq!(profile.fingerprint, fp, "fingerprint deve corrispondere");
-        assert_eq!(
-            profile.alias,
-            Some("originale".into()),
-            "alias deve corrispondere"
-        );
-
-        assert!(
-            bp_core::identity::Identity::exists().unwrap(),
-            "identità deve esistere dopo import"
-        );
-        let _ = std::fs::remove_file(&export_path);
-    });
-}
-
-#[test]
-#[cfg(unix)]
-fn identity_import_senza_force_fallisce_se_esiste() {
-    with_temp_home(|| {
-        bp_core::identity::Identity::generate(None, None).unwrap();
-        let export_path = std::env::temp_dir().join(format!(
-            "bp_export_noforce_{}.json",
-            uuid::Uuid::new_v4().simple()
-        ));
-        bp_core::identity::Identity::export_to_file(&export_path).unwrap();
-
-        let err = bp_core::identity::Identity::import_from_file(&export_path, false).unwrap_err();
-        assert!(
-            err.to_string().to_lowercase().contains("logout")
-                || err.to_string().to_lowercase().contains("already exists")
-                || err.to_string().to_lowercase().contains("esiste"),
-            "errore deve suggerire bp logout: {err}"
-        );
-        let _ = std::fs::remove_file(&export_path);
-    });
-}
-
-#[test]
-#[cfg(unix)]
-fn identity_import_con_force_sovrascrive() {
-    with_temp_home(|| {
-        let id = bp_core::identity::Identity::generate(Some("originale".into()), None).unwrap();
-        let fp = id.fingerprint.clone();
-        let export_path = std::env::temp_dir().join(format!(
-            "bp_export_force_{}.json",
-            uuid::Uuid::new_v4().simple()
-        ));
-        bp_core::identity::Identity::export_to_file(&export_path).unwrap();
-
-        let profile = bp_core::identity::Identity::import_from_file(&export_path, true).unwrap();
-        assert_eq!(profile.fingerprint, fp);
-        assert_eq!(profile.alias, Some("originale".into()));
-        let _ = std::fs::remove_file(&export_path);
-    });
-}
-
 #[tokio::test]
 async fn network_loop_accetta_e_processa_comandi() {
     use bp_core::network::{
@@ -1372,6 +1061,7 @@ async fn network_loop_accetta_e_processa_comandi() {
         peer_id: "12D3KooWTestPeerId".into(),
         user_fingerprint: "deadbeef".into(),
         user_alias: Some("tester".into()),
+        device_cert: test_cert(),
         service_type: bp_core::service::ServiceType::Post,
         service_id: uuid::Uuid::new_v4().to_string(),
         network_id: "test-net".into(),
@@ -1427,81 +1117,4 @@ async fn network_loop_accetta_e_processa_comandi() {
             eprintln!("network_loop timeout (CI senza netlink — accettabile)");
         }
     }
-}
-
-#[test]
-#[cfg(unix)]
-fn identity_export_con_passphrase_produce_variante_encrypted() {
-    with_temp_home(|| {
-        bp_core::identity::Identity::generate(None, Some("myPassphrase42")).unwrap();
-
-        let export_path = std::env::temp_dir().join(format!(
-            "bp_export_enc_{}.json",
-            uuid::Uuid::new_v4().simple()
-        ));
-        bp_core::identity::Identity::export_to_file(&export_path).unwrap();
-
-        let contents = std::fs::read_to_string(&export_path).unwrap();
-        let v: serde_json::Value = serde_json::from_str(&contents).unwrap();
-
-        assert!(
-            v["key"].get("ciphertext").is_some()
-                || v["key"]["format"].as_str() == Some("encrypted"),
-            "identità con passphrase deve esportare dati cifrati, trovato: {}",
-            v["key"]
-        );
-        assert!(
-            v["key"].get("key_hex").is_none(),
-            "export con passphrase NON deve contenere key_hex in chiaro"
-        );
-
-        let _ = std::fs::remove_file(&export_path);
-    });
-}
-
-#[test]
-#[cfg(unix)]
-fn identity_import_encrypted_roundtrip() {
-    with_temp_home(|| {
-        let orig =
-            bp_core::identity::Identity::generate(Some("encrypted-user".into()), Some("s3cret!"))
-                .unwrap();
-        let fp = orig.fingerprint.clone();
-
-        let export_path = std::env::temp_dir().join(format!(
-            "bp_export_enc_rt_{}.json",
-            uuid::Uuid::new_v4().simple()
-        ));
-        bp_core::identity::Identity::export_to_file(&export_path).unwrap();
-
-        bp_core::identity::Identity::remove().unwrap();
-        let profile = bp_core::identity::Identity::import_from_file(&export_path, false).unwrap();
-
-        assert_eq!(profile.fingerprint, fp);
-        assert_eq!(profile.alias, Some("encrypted-user".into()));
-
-        let loaded = bp_core::identity::Identity::load(Some("s3cret!")).unwrap();
-        assert_eq!(loaded.fingerprint, fp);
-
-        let _ = std::fs::remove_file(&export_path);
-    });
-}
-
-#[test]
-#[cfg(unix)]
-fn identity_export_senza_identita_ritorna_not_authenticated() {
-    with_temp_home(|| {
-        let export_path = std::env::temp_dir().join(format!(
-            "bp_export_noauth_{}.json",
-            uuid::Uuid::new_v4().simple()
-        ));
-
-        let err = bp_core::identity::Identity::export_to_file(&export_path).unwrap_err();
-        assert!(
-            matches!(err, bp_core::error::BpError::NotAuthenticated)
-                || err.to_string().to_lowercase().contains("login")
-                || err.to_string().to_lowercase().contains("authenticated"),
-            "export senza identità deve ritornare NotAuthenticated: {err}"
-        );
-    });
 }

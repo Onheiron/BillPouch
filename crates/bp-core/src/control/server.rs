@@ -1098,6 +1098,7 @@ async fn announce_service(state: &DaemonState, svc: &ServiceInfo) {
         listen_addrs: vec![],
         announced_at: chrono::Utc::now().timestamp() as u64,
         metadata: svc.metadata.clone(),
+        device_cert: state.identity.cert.clone(),
     };
     match serde_json::to_vec(&info) {
         Ok(payload) => {

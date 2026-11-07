@@ -10,26 +10,13 @@ use bp_core::control::protocol::{
     ControlRequest, ControlResponse, FlockData, GetFileData, HatchData, PutFileData, StatusData,
 };
 use bp_core::control::server::{run_control_server, DaemonState};
-use bp_core::identity::{fingerprint, Identity, UserProfile};
+use bp_core::identity::Identity;
 use bp_core::network::state::NetworkState;
 use bp_core::network::{NetworkCommand, QosRegistry, ReputationStore};
 use bp_core::service::ServiceRegistry;
 
 fn make_daemon_state() -> (Arc<DaemonState>, mpsc::Receiver<NetworkCommand>) {
-    let keypair = libp2p::identity::Keypair::generate_ed25519();
-    let peer_id = libp2p::PeerId::from_public_key(&keypair.public());
-    let fp = fingerprint(&keypair);
-
-    let identity = Identity {
-        keypair,
-        peer_id,
-        fingerprint: fp.clone(),
-        profile: UserProfile {
-            fingerprint: fp,
-            alias: Some("test-pelican".to_string()),
-            created_at: chrono::Utc::now(),
-        },
-    };
+    let identity = Identity::in_memory(Some("test-pelican".to_string())).unwrap();
 
     let (net_tx, net_rx) = mpsc::channel::<NetworkCommand>(64);
 
