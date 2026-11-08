@@ -5,9 +5,24 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "bp-api"
 path = "src/main.rs"
+required-features = ["server"]
+
+[features]
+default = ["server"]
+server = [
+    "dep:axum-server",
+    "dep:rcgen",
+    "dep:base64",
+    "dep:sha2",
+    "dep:clap",
+    "dep:tracing-subscriber",
+]
 
 [dependencies]
 bp-core    = { path = "../bp-core" }
@@ -17,13 +32,14 @@ serde_json = { workspace = true }
 anyhow     = { workspace = true }
 tracing    = { workspace = true }
 
-axum               = "0.8"
-axum-server        = { version = "0.9", features = ["tls-rustls"] }
-rcgen              = "0.13"
-base64             = "0.22"
-futures            = "0.3"
-hex                = "0.4"
-rand               = "0.8"
-sha2               = "0.10"
-clap               = { version = "4", features = ["derive"] }
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+axum    = "0.8"
+futures = "0.3"
+hex     = "0.4"
+rand    = "0.8"
+
+axum-server        = { version = "0.9", features = ["tls-rustls"], optional = true }
+rcgen              = { version = "0.13", optional = true }
+base64             = { version = "0.22", optional = true }
+sha2               = { version = "0.10", optional = true }
+clap               = { version = "4", features = ["derive"], optional = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
