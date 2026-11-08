@@ -14,7 +14,8 @@ port_of() {
 
 case "${1:-help}" in
     up)     mkdir -p playground/data
-            docker build -t billpouch:local . && $COMPOSE up -d
+            docker build -t billpouch:local .
+            $COMPOSE up -d
             echo "Started. Wait ~30 s for discovery, then: ./playground.sh enter" ;;
     down)   $COMPOSE down ;;
     reset)  $COMPOSE down

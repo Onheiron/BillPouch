@@ -23,7 +23,7 @@ for c in "${CONTAINERS[@]}"; do
     READY=false
     for i in $(seq 1 60); do
         RESP=$(docker exec "${c}" bash -c \
-            'echo "{\"cmd\":\"ping\"}" | socat -T2 - UNIX-CONNECT:$HOME/.local/share/billpouch/control.sock 2>/dev/null' \
+            'echo "{\"cmd\":\"ping\"}" | socat -T2 - UNIX-CONNECT:${XDG_RUNTIME_DIR}/billpouch/control.sock 2>/dev/null' \
         ) || true
         if echo "${RESP}" | grep -q "pong"; then
             pass "${c} daemon is responding"
@@ -126,7 +126,7 @@ check_service_visible "bp-post" "bill"
 header "7. Health check (ping/pong)"
 for c in "${CONTAINERS[@]}"; do
     PING_OUT=$(docker exec "${c}" bash -c \
-        'echo "{\"cmd\":\"ping\"}" | socat -T2 - UNIX-CONNECT:$HOME/.local/share/billpouch/control.sock 2>/dev/null' \
+        'echo "{\"cmd\":\"ping\"}" | socat -T2 - UNIX-CONNECT:${XDG_RUNTIME_DIR}/billpouch/control.sock 2>/dev/null' \
     ) || true
 
     if echo "${PING_OUT}" | grep -qi "pong"; then
@@ -347,7 +347,7 @@ ROTATED_AT=$(date +%s)
 info "Sleeping 40s for marco-bill to re-announce on the rotated topic..."
 sleep 40
 FLOCK_JSON=$(docker exec bp-pouch bash -c \
-    'echo "{\"cmd\":\"flock\"}" | socat -T2 - UNIX-CONNECT:$HOME/.local/share/billpouch/control.sock 2>/dev/null') || true
+    'echo "{\"cmd\":\"flock\"}" | socat -T2 - UNIX-CONNECT:${XDG_RUNTIME_DIR}/billpouch/control.sock 2>/dev/null') || true
 LATEST=$(echo "${FLOCK_JSON}" | grep -oP '"announced_at":\K[0-9]+' | sort -n | tail -1)
 if [ -n "${LATEST}" ] && [ "${LATEST}" -ge "${ROTATED_AT}" ]; then
     pass "carlo-pouch still hears marco-bill after the rotation"

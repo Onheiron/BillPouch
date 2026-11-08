@@ -18,7 +18,7 @@ fi
 bp --daemon &
 DAEMON_PID=$!
 for _ in $(seq 1 30); do
-    [ -S "${HOME}/.local/share/billpouch/control.sock" ] && break
+    [ -S "${XDG_RUNTIME_DIR}/billpouch/control.sock" ] && break
     sleep 0.2
 done
 

@@ -23,5 +23,6 @@ COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 ENV RUST_LOG=bp_core=debug,bp_cli=debug
+ENV XDG_RUNTIME_DIR=/run
 
 ENTRYPOINT ["/entrypoint.sh"]

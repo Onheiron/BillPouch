@@ -536,15 +536,20 @@ fn with_temp_home<F: FnOnce() + std::panic::UnwindSafe>(f: F) {
     let tmp = std::env::temp_dir().join(format!("bp_test_{}", uuid::Uuid::new_v4().simple()));
     std::fs::create_dir_all(&tmp).unwrap();
 
-    let old_home = std::env::var("HOME").ok();
+    let saved: Vec<_> = ["HOME", "XDG_RUNTIME_DIR"]
+        .into_iter()
+        .map(|var| (var, std::env::var_os(var)))
+        .collect();
     std::env::set_var("HOME", &tmp);
+    std::env::set_var("XDG_RUNTIME_DIR", tmp.join("run"));
 
     let result = std::panic::catch_unwind(f);
 
-    if let Some(home) = old_home {
-        std::env::set_var("HOME", home);
-    } else {
-        std::env::remove_var("HOME");
+    for (var, value) in saved {
+        match value {
+            Some(v) => std::env::set_var(var, v),
+            None => std::env::remove_var(var),
+        }
     }
     std::fs::remove_dir_all(&tmp).ok();
 
