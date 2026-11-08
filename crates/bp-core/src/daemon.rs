@@ -1,6 +1,6 @@
 use crate::{
     config,
-    control::server::{load_cek_hints, run_control_server, DaemonState},
+    control::server::{run_control_server, DaemonState},
     error::{BpError, BpResult},
     identity::Identity,
     network::{
@@ -8,7 +8,6 @@ use crate::{
         StorageManagerMap,
     },
     service::ServiceRegistry,
-    storage::FileRegistry,
 };
 use std::{
     collections::HashMap,
@@ -57,12 +56,7 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
         qos,
         outgoing_assignments: Arc::clone(&outgoing_assignments),
         remote_fragment_index: Arc::clone(&remote_fragment_index),
-        chunk_cek_hints: RwLock::new(load_cek_hints()),
-        file_registry: RwLock::new(
-            config::file_registry_path()
-                .map(|p| FileRegistry::load(&p))
-                .unwrap_or_default(),
-        ),
+        files: RwLock::new(crate::files::FileStore::load()),
     });
 
     let swarm = network::build_swarm(identity.device.clone())
@@ -83,6 +77,7 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
     let net_chains = Arc::clone(&chains);
     let net_identity = identity.clone();
     let net_observations = Arc::clone(&observations);
+    let (file_tx, mut file_rx) = mpsc::channel(256);
     tokio::spawn(async move {
         if let Err(e) = network::run_network_loop(
             swarm,
@@ -95,6 +90,7 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
             net_chains,
             net_identity,
             net_observations,
+            file_tx,
         )
         .await
         {
@@ -103,6 +99,13 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
     });
 
     crate::control::server::join_all(&daemon_state).await;
+
+    let file_state = Arc::clone(&daemon_state);
+    tokio::spawn(async move {
+        while let Some((network, gossip)) = file_rx.recv().await {
+            crate::control::files::on_gossip(&file_state, &network, gossip).await;
+        }
+    });
 
     let evict_state = Arc::clone(&network_state);
     tokio::spawn(async move {
@@ -120,6 +123,7 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
         for delay in [10, 10, 10].into_iter().chain(std::iter::repeat(30)) {
             tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
             crate::control::server::announce_all(&reannounce_state).await;
+            crate::control::files::sync_cycle(&reannounce_state).await;
         }
     });
 

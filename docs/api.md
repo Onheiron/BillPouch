@@ -24,12 +24,15 @@ Types: `bp_core::control::protocol`; client helper: `bp_core::control::client::s
 | `pause` | `service_id`, `eta_minutes` | Maintenance mode |
 | `resume` | `service_id` | Leaves maintenance mode |
 | `create_network` | `name` | Creates a network with you as creator |
-| `invite` | `network_id`, `member_key` (OpenSSH line) | Adds a member, returns the join token |
-| `join_network` | `token` | Joins with a token |
+| `invite` | `network_id`, `member_key` (OpenSSH line) | Adds a member once committed and returns the join token; with your own key, returns a token for another device of yours (`for_device: true`) |
+| `join_network` | `token` | Joins with a token and waits for the ledger to sync |
+| `members` | `network_id` | Members with tier, weight, devices, pending expulsions; expelled members |
+| `expel` | `network_id`, `member` (fingerprint) | Proposes or approves an expulsion |
 | `leave` | `network_id`, `force` | Leaves a network |
 | `put_file` | `chunk_data` (bytes), `network_id`, `ph`?, `q_target`?, `file_name`? | Stores a file, returns `chunk_id`, `k`, `n`, placement counts |
-| `get_file` | `chunk_id`, `network_id` | Returns the decrypted bytes |
-| `list_files` | `network_id` (`""` = all) | Files uploaded from this node |
+| `get_file` | `chunk_id`, `network_id` | Returns the decrypted bytes of a file in your index |
+| `share` | `network_id`, `chunk_id`, `member` (fingerprint) | Wraps the file key for a member and delivers it |
+| `list_files` | `network_id` (`""` = all) | Your index: your files and those shared with you (`owner`, `mine`, `shared_with`) |
 | `storage_info` | `network_id` (`""` = all) | Per-Pouch and aggregate storage |
 | `connect_relay` | `relay_addr` | Dials a relay and reserves a circuit |
 
@@ -56,6 +59,7 @@ Errors are `{"error": "…"}` with 503 (daemon unreachable), 422 (invalid base64
 | POST | `/networks/leave` | `{network_id, force?}` | `leave` |
 | POST | `/files` | `{chunk_data: base64, network_id, ph?, q_target?, file_name?}` → 201 | `put_file` |
 | GET | `/files/:chunk_id` | `?network=<id>` → `{chunk_id, data: base64, …}` | `get_file` |
+| POST | `/files/:chunk_id/shares` | `{network_id, member}` | `share` |
 | POST | `/relay/connect` | `{relay_addr}` | `connect_relay` |
 
 There is no authentication: keep it on `127.0.0.1`.

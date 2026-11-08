@@ -1,11 +1,9 @@
 pub mod encryption;
-pub mod file_registry;
 pub mod fragment;
 pub mod meta;
 pub mod tier;
 
 pub use encryption::ChunkCipher;
-pub use file_registry::{FileRegistry, StoredFileEntry};
 pub use fragment::{FragmentIndex, FragmentMeta};
 pub use meta::PouchMeta;
 pub use tier::StorageTier;

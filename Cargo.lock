@@ -404,7 +404,7 @@ dependencies = [
 
 [[package]]
 name = "bp-api"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "axum",
@@ -420,7 +420,7 @@ dependencies = [
 
 [[package]]
 name = "bp-cli"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "bp-core",
@@ -433,7 +433,7 @@ dependencies = [
 
 [[package]]
 name = "bp-core"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "argon2",

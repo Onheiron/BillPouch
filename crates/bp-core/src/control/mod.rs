@@ -1,4 +1,5 @@
 pub mod client;
+pub mod files;
 pub mod protocol;
 pub mod server;
 

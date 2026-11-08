@@ -84,8 +84,26 @@ pub type OutgoingAssignments = Arc<RwLock<HashMap<String, Vec<OutgoingFragment>>
 pub enum Gossip {
     Node(Box<NodeInfo>),
     Index(fragment_gossip::FragmentIndexAnnouncement),
-    Consensus { msg: crate::consensus::ConsensusMsg },
+    Consensus {
+        msg: crate::consensus::ConsensusMsg,
+    },
+    Head {
+        head: Box<crate::files::Head>,
+    },
+    HeadRequest {
+        owner: String,
+    },
+    Share {
+        to: String,
+        manifest: Box<crate::files::Manifest>,
+    },
+    ShareAck {
+        chunk_id: String,
+        member: String,
+    },
 }
+
+pub type FileGossip = mpsc::Sender<(String, Gossip)>;
 
 #[derive(Debug)]
 pub enum NetworkCommand {
@@ -165,6 +183,7 @@ pub async fn run_network_loop(
     chains: Chains,
     identity: crate::identity::Identity,
     observations: ObservationLog,
+    file_gossip: FileGossip,
 ) -> BpResult<()> {
     swarm
         .listen_on(listen_addr.clone())
@@ -223,7 +242,7 @@ pub async fn run_network_loop(
     loop {
         tokio::select! {
             event = swarm.select_next_some() => {
-                handle_swarm_event(event, &mut swarm, &state, &networks, &topics, &chains, &identity, &storage_managers, &mut pending_fetches, &mut pending_pings, &mut pending_pos, &mut pending_syncs, &remote_fragment_index, &mut local_kad_peers).await;
+                handle_swarm_event(event, &mut swarm, &state, &networks, &topics, &chains, &identity, &file_gossip, &storage_managers, &mut pending_fetches, &mut pending_pings, &mut pending_pos, &mut pending_syncs, &remote_fragment_index, &mut local_kad_peers).await;
             }
             cmd = cmd_rx.recv() => {
                 match cmd {
@@ -423,6 +442,7 @@ async fn handle_swarm_event(
     topics: &Topics,
     chains: &Chains,
     identity: &crate::identity::Identity,
+    file_gossip: &FileGossip,
     storage_managers: &StorageManagerMap,
     pending_fetches: &mut HashMap<
         request_response::OutboundRequestId,
@@ -463,6 +483,18 @@ async fn handle_swarm_event(
                 tracing::warn!(peer=%propagation_source, "Dropped undecryptable gossip");
                 return;
             };
+            if matches!(
+                gossip,
+                Gossip::Head { .. }
+                    | Gossip::HeadRequest { .. }
+                    | Gossip::Share { .. }
+                    | Gossip::ShareAck { .. }
+            ) {
+                if file_gossip.try_send((network_id.clone(), gossip)).is_err() {
+                    tracing::warn!("file gossip queue full, dropped a message");
+                }
+                return;
+            }
             let behind = handle_gossip(
                 gossip,
                 network_id,
@@ -575,10 +607,7 @@ async fn handle_swarm_event(
                     },
             },
         )) => {
-            let known = state
-                .read()
-                .map(|s| s.knows(&peer.to_string()))
-                .unwrap_or(false);
+            let known = member_device(chains, &peer);
             let response = if let FragmentRequest::Commits {
                 network,
                 from,
@@ -735,9 +764,7 @@ fn handle_gossip(
             None
         }
         Gossip::Index(ann) => {
-            let known = publisher
-                .zip(state.read().ok())
-                .is_some_and(|(p, s)| s.knows(&p.to_string()));
+            let known = publisher.is_some_and(|p| member_device(chains, p));
             if known && ann.network_id == network_id {
                 if let Ok(mut idx) = remote_fragment_index.write() {
                     idx.upsert(ann);
@@ -759,7 +786,22 @@ fn handle_gossip(
             }
             behind
         }
+        Gossip::Head { .. }
+        | Gossip::HeadRequest { .. }
+        | Gossip::Share { .. }
+        | Gossip::ShareAck { .. } => None,
     }
+}
+
+fn member_device(chains: &Chains, peer: &PeerId) -> bool {
+    let peer = peer.to_string();
+    chains.read().is_ok_and(|all| {
+        all.values().any(|c| {
+            c.ledger()
+                .device_owner(&peer)
+                .is_some_and(|user| c.is_member(user))
+        })
+    })
 }
 
 fn serve_commits(

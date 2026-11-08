@@ -52,8 +52,7 @@ fn make_daemon_state() -> (Arc<DaemonState>, mpsc::Receiver<NetworkCommand>) {
         qos: Arc::new(RwLock::new(QosRegistry::new())),
         outgoing_assignments: Arc::new(RwLock::new(std::collections::HashMap::new())),
         remote_fragment_index: Arc::new(RwLock::new(bp_core::network::RemoteFragmentIndex::new())),
-        chunk_cek_hints: RwLock::new(std::collections::HashMap::new()),
-        file_registry: RwLock::new(bp_core::storage::FileRegistry::default()),
+        files: RwLock::new(bp_core::files::FileStore::default()),
     });
 
     (state, net_rx)
@@ -413,7 +412,7 @@ async fn get_file_unknown_chunk_returns_error() {
 }
 
 #[tokio::test]
-async fn get_file_missing_cek_hint_returns_error() {
+async fn get_file_outside_your_index_returns_error() {
     let socket_path = temp_socket_path();
     let (state, mut _net_rx) = make_daemon_state();
 
@@ -452,7 +451,7 @@ async fn get_file_missing_cek_hint_returns_error() {
     let put_data: PutFileData =
         serde_json::from_value(unwrap_ok(put_resp)).expect("PutFile must succeed");
 
-    state.chunk_cek_hints.write().unwrap().clear();
+    state.files.write().unwrap().indexes.clear();
 
     let get_resp = send_request(
         &socket_path,
@@ -464,8 +463,8 @@ async fn get_file_missing_cek_hint_returns_error() {
     .await;
     let err_msg = unwrap_err(get_resp);
     assert!(
-        err_msg.to_lowercase().contains("cek") || err_msg.to_lowercase().contains("daemon"),
-        "error must mention CEK/daemon restart: {err_msg}"
+        err_msg.contains("not one of your files"),
+        "unexpected error: {err_msg}"
     );
 
     server_handle.abort();

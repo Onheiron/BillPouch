@@ -110,7 +110,7 @@ enum Cmd {
 
     #[command(
         about = "Let someone join a network: prints a token for them",
-        long_about = "Let someone join a network: prints a token for them.\n\nThey give you their SSH public key (the line `bp login` prints); you get a token to send back. The token is useless to anyone else: the network key inside is encrypted for their key only."
+        long_about = "Let someone join a network: prints a token for them.\n\nThey give you their SSH public key (the line `bp login` prints); you get a token to send back. The token is useless to anyone else: the network key inside is encrypted for their key only.\n\nWith your own public key it prints a token for another device of yours: log in there with the same SSH key and `bp join` it; your files follow."
     )]
     Invite {
         #[arg(help = "Network to invite them into")]
@@ -196,12 +196,28 @@ enum Cmd {
     },
 
     #[command(
-        about = "List files uploaded by this node",
-        long_about = "List files uploaded by this node.\n\nShows all files recorded in the local file registry (populated on `bp put`).  Use `--network` to filter to a specific network."
+        about = "List your files and the files shared with you",
+        long_about = "List your files and the files shared with you.\n\nThe list is your personal index: it is encrypted with your SSH key, stored in the network and synced to every device you log in with the same key.  Use `--network` to filter to a specific network."
     )]
     Ls {
         #[arg(help = "Filter to a specific network (default: show all networks)")]
         #[arg(long, short, default_value = "")]
+        network: String,
+    },
+
+    #[command(
+        about = "Share one of your files with another member",
+        long_about = "Share one of your files with another member.\n\nThe file key is encrypted for their SSH key and delivered to them; the file then shows up in their `bp ls`. Files you were shared can be shared on."
+    )]
+    Share {
+        #[arg(help = "The chunk_id of the file (see `bp ls`)")]
+        chunk_id: String,
+
+        #[arg(help = "Fingerprint of the member, as `bp members` shows it (SHA256:...)")]
+        member: String,
+
+        #[arg(help = "Network that stores the file")]
+        #[arg(long, short)]
         network: String,
     },
 
@@ -401,6 +417,14 @@ async fn main() -> anyhow::Result<()> {
 
         Some(Cmd::Ls { network }) => {
             commands::ls::ls(network).await?;
+        }
+
+        Some(Cmd::Share {
+            chunk_id,
+            member,
+            network,
+        }) => {
+            commands::ls::share(network, chunk_id, member).await?;
         }
 
         Some(Cmd::Storage { network }) => {

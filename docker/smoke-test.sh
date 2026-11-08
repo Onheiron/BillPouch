@@ -46,6 +46,12 @@ for c in "${CONTAINERS[@]}"; do
     fi
 done
 
+if timeout 90 bash -c "until docker exec bp-laptop test -f /root/.joined; do sleep 1; done"; then
+    pass "bp-laptop joined as a second device of carlo"
+else
+    fail "bp-laptop never joined as a second device of carlo"
+fi
+
 header "2. Waiting for mDNS discovery + gossipsub mesh formation"
 info "Sleeping 20s for peers to discover each other and form gossipsub mesh..."
 sleep 20
@@ -141,7 +147,70 @@ for c in "${CONTAINERS[@]}"; do
     fi
 done
 
-header "9. Expulsion and key rotation"
+header "9. Encrypted files and sharing"
+docker exec bp-pouch bash -c 'head -c 3000 /dev/urandom > /tmp/foto.bin'
+PUT_OUT=$(docker exec bp-pouch bp put /tmp/foto.bin --network smoketest 2>&1) || true
+CHUNK=$(echo "${PUT_OUT}" | grep -oP 'chunk_id\s*:\s*\K\S+' || true)
+if [ -n "${CHUNK}" ]; then
+    pass "carlo-pouch stored an encrypted file (${CHUNK:0:12}…)"
+else
+    fail "bp put failed: ${PUT_OUT}"
+fi
+
+BILL_FP=$(docker exec bp-bill bp status 2>/dev/null | grep -oP 'fingerprint\s*:\s*\K\S+' || true)
+GET_BEFORE=$(docker exec bp-bill bp get "${CHUNK}" /tmp/foto.bin --network smoketest 2>&1) || true
+if echo "${GET_BEFORE}" | grep -q "not one of your files"; then
+    pass "marco-bill cannot read the file before it is shared"
+else
+    fail "marco-bill read an unshared file: ${GET_BEFORE}"
+fi
+
+SHARE_OUT=$(docker exec bp-pouch bp share "${CHUNK}" "${BILL_FP}" --network smoketest 2>&1) || true
+if echo "${SHARE_OUT}" | grep -q "now shared"; then
+    pass "carlo-pouch shared the file with marco-bill"
+else
+    fail "bp share failed: ${SHARE_OUT}"
+fi
+
+info "Waiting up to 40s for the share to reach marco-bill..."
+for _ in $(seq 1 20); do
+    docker exec bp-bill bp ls --network smoketest 2>/dev/null | grep -q "foto.bin" && break
+    sleep 2
+done
+if docker exec bp-bill bp ls --network smoketest 2>&1 | grep -q "foto.bin"; then
+    pass "the shared file shows up in marco-bill's bp ls"
+else
+    fail "the shared file never showed up in marco-bill's bp ls"
+fi
+
+docker exec bp-bill bp get "${CHUNK}" /tmp/foto.bin --network smoketest >/dev/null 2>&1 || true
+SUM_A=$(docker exec bp-pouch sha256sum /tmp/foto.bin | cut -d' ' -f1)
+SUM_B=$(docker exec bp-bill sha256sum /tmp/foto.bin 2>/dev/null | cut -d' ' -f1 || true)
+if [ "${SUM_A}" = "${SUM_B}" ]; then
+    pass "marco-bill downloaded and decrypted the shared file byte for byte"
+else
+    fail "marco-bill's copy differs (${SUM_A} vs ${SUM_B})"
+fi
+
+info "Waiting up to 60s for carlo's file index to reach carlo-laptop..."
+for _ in $(seq 1 30); do
+    docker exec bp-laptop bp ls --network smoketest 2>/dev/null | grep -q "foto.bin" && break
+    sleep 2
+done
+if docker exec bp-laptop bp ls --network smoketest 2>&1 | grep -q "foto.bin"; then
+    pass "carlo-laptop sees carlo's file through the synced index"
+else
+    fail "carlo-laptop never saw carlo's file"
+fi
+docker exec bp-laptop bp get "${CHUNK}" /tmp/foto.bin --network smoketest >/dev/null 2>&1 || true
+SUM_C=$(docker exec bp-laptop sha256sum /tmp/foto.bin 2>/dev/null | cut -d' ' -f1 || true)
+if [ "${SUM_A}" = "${SUM_C}" ]; then
+    pass "carlo-laptop downloaded and decrypted carlo's file"
+else
+    fail "carlo-laptop's copy differs (${SUM_A} vs ${SUM_C})"
+fi
+
+header "10. Expulsion and key rotation"
 POST_FP=$(docker exec bp-post bp status 2>/dev/null | grep -oP 'fingerprint\s*:\s*\K\S+' || true)
 EXPEL_OUT=$(docker exec bp-pouch bp expel smoketest "${POST_FP}" 2>&1) || true
 echo "${EXPEL_OUT}"
@@ -163,14 +232,14 @@ else
 fi
 
 for c in bp-pouch bp-bill; do
-    if docker logs "${c}" 2>&1 | grep -q "Moved to the rotated gossip topic"; then
+    if grep -q "Moved to the rotated gossip topic" <<< "$(docker logs "${c}" 2>&1)"; then
         pass "${c} moved to the rotated gossip topic"
     else
         fail "${c} did not move to the rotated gossip topic"
     fi
 done
 
-if docker logs bp-post 2>&1 | grep -q "Moved to the rotated gossip topic"; then
+if grep -q "Moved to the rotated gossip topic" <<< "$(docker logs bp-post 2>&1)"; then
     fail "the expelled lucia-post got the rotated key"
 else
     pass "the expelled lucia-post did not get the rotated key"
@@ -188,7 +257,7 @@ else
     fail "carlo-pouch heard nothing after the rotation (latest announcement ${LATEST}, rotation ${ROTATED_AT})"
 fi
 
-header "10. Node logs (last 20 lines each)"
+header "11. Node logs (last 20 lines each)"
 for c in "${CONTAINERS[@]}"; do
     info "--- ${c} ---"
     docker logs "${c}" 2>&1 | tail -20

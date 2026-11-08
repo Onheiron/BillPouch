@@ -48,10 +48,6 @@ impl NetworkState {
         }
     }
 
-    pub fn knows(&self, peer_id: &str) -> bool {
-        self.nodes.contains_key(peer_id)
-    }
-
     pub fn remove(&mut self, peer_id: &str) {
         self.nodes.remove(peer_id);
     }

@@ -5,6 +5,7 @@ pub mod consensus;
 pub mod control;
 pub mod daemon;
 pub mod error;
+pub mod files;
 pub mod identity;
 pub mod ledger;
 pub mod membership;

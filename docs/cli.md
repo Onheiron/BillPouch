@@ -32,6 +32,7 @@ started automatically when missing.
 | `bp invite <network> "<ssh public key>"` | Submit the invitation to the network, wait until it is committed and print (on stdout) the token they join with. Requires the `invite` capability (R2+, or the creator while nobody is R2) |
 | `bp members <network>` | Members with tier, voting weight, devices and pending expulsions; expelled members |
 | `bp expel <network> <fingerprint>` | Propose an expulsion (R3+, or the creator while nobody is R3) or approve one (R1+). It passes with > 2/3 of the other members' weight and at least half of them; the network key is then rotated without the expelled member |
+| `bp invite <network> "<your own public key>"` | Token for another device of yours: log in there with the same SSH key and `bp join` it |
 | `bp join <token>` | Join with a token (it only works for the key it was made for) and wait until the ledger is synced from a member |
 | `bp leave <network_id>` | Leave a network; refuses while services are running on it and prints the commands to stop them |
 | `bp leave <network_id> --force` | Evict Pouches and stop other services on the network, then leave. Files are not fetched first: `bp get` anything you need before |
@@ -41,8 +42,9 @@ started automatically when missing.
 | Command | Description |
 |---------|-------------|
 | `bp put <file> --network <id> [--ph <p>] [--q-target <q>] [--name <name>]` | Encrypt, encode and distribute a file; prints its `chunk_id`. `--ph` = target recovery probability (default 0.999), `--q-target` = redundancy on top of `k` (default 1.0) |
-| `bp get <chunk_id> <output> --network <id>` | Fetch, decode and decrypt a file you stored |
-| `bp ls [--network <id>]` | Files uploaded from this node (all networks by default) |
+| `bp get <chunk_id> <output> --network <id>` | Fetch, decode and decrypt one of your files or one shared with you |
+| `bp ls [--network <id>]` | Your files and the ones shared with you, from your index (synced across your devices) |
+| `bp share <chunk_id> <fingerprint> --network <id>` | Share a file with a member: the file key is wrapped for their SSH key and delivered; it then shows up in their `bp ls` |
 | `bp storage [--network <id>]` | Quota, used and available space per Pouch, plus upload totals |
 
 ## Connectivity

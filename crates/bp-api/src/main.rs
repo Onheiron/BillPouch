@@ -249,6 +249,30 @@ async fn network_members(
 }
 
 #[derive(Deserialize)]
+struct ShareBody {
+    network_id: String,
+    member: String,
+}
+
+#[instrument(skip_all)]
+async fn share_file(
+    State(state): State<AppState>,
+    Path(chunk_id): Path<String>,
+    Json(body): Json<ShareBody>,
+) -> Response {
+    respond(
+        &state,
+        ControlRequest::Share {
+            network_id: body.network_id,
+            chunk_id,
+            member: body.member,
+        },
+        StatusCode::OK,
+    )
+    .await
+}
+
+#[derive(Deserialize)]
 struct ExpelBody {
     member: String,
 }
@@ -401,6 +425,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/networks/leave", post(network_leave))
         .route("/files", post(put_file))
         .route("/files/:chunk_id", get(get_file))
+        .route("/files/:chunk_id/shares", post(share_file))
         .route("/relay/connect", post(relay_connect))
         .with_state(state);
 

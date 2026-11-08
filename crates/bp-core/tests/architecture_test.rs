@@ -727,8 +727,7 @@ fn make_in_memory_state() -> std::sync::Arc<bp_core::control::server::DaemonStat
         remote_fragment_index: std::sync::Arc::new(std::sync::RwLock::new(
             bp_core::network::RemoteFragmentIndex::new(),
         )),
-        chunk_cek_hints: std::sync::RwLock::new(std::collections::HashMap::new()),
-        file_registry: std::sync::RwLock::new(bp_core::storage::FileRegistry::default()),
+        files: std::sync::RwLock::new(bp_core::files::FileStore::default()),
     })
 }
 
@@ -1046,6 +1045,7 @@ async fn network_loop_accetta_e_processa_comandi() {
         std::sync::Arc::new(std::sync::RwLock::new(HashMap::new())),
         bp_core::identity::Identity::in_memory(None).unwrap(),
         bp_core::chain::ObservationLog::default(),
+        tokio::sync::mpsc::channel(8).0,
     ));
 
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;

@@ -1,5 +1,5 @@
 use crate::client::ControlClient;
-use bp_core::control::protocol::{ControlRequest, ListFilesData};
+use bp_core::control::protocol::{ControlRequest, ListFilesData, ShareData};
 use chrono::{TimeZone, Utc};
 
 pub async fn ls(network_id: String) -> anyhow::Result<()> {
@@ -41,10 +41,10 @@ fn print_ls(d: &ListFilesData) {
     }
 
     println!(
-        "  {:<32}  {:>10}  {:<18}  Uploaded",
-        "Name", "Size", "chunk_id"
+        "  {:<32}  {:>10}  {:<18}  {:<16}  Uploaded",
+        "Name", "Size", "chunk_id", "Owner"
     );
-    println!("  {}", "─".repeat(78));
+    println!("  {}", "─".repeat(96));
 
     for f in &d.files {
         let ts = Utc
@@ -59,11 +59,20 @@ fn print_ls(d: &ListFilesData) {
             f.file_name.clone()
         };
 
+        let owner = if f.mine {
+            match f.shared_with {
+                0 => "you".to_string(),
+                n => format!("you, shared ×{n}"),
+            }
+        } else {
+            f.owner.chars().take(16).collect()
+        };
         println!(
-            "  {:<32}  {:>10}  {:<18}  {}",
+            "  {:<32}  {:>10}  {:<18}  {:<16}  {}",
             name,
             fmt_bytes(f.size_bytes),
             &f.chunk_id[..18.min(f.chunk_id.len())],
+            owner,
             ts
         );
     }
@@ -79,4 +88,22 @@ fn fmt_bytes(b: u64) -> String {
     } else {
         format!("{b} B")
     }
+}
+
+pub async fn share(network_id: String, chunk_id: String, member: String) -> anyhow::Result<()> {
+    let data = ControlClient::connect()
+        .await?
+        .request(ControlRequest::Share {
+            network_id,
+            chunk_id,
+            member,
+        })
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("empty response from daemon"))?;
+    let d: ShareData = serde_json::from_value(data)?;
+    println!(
+        "🔑 '{}' is now shared with {} on '{}'.",
+        d.file_name, d.member, d.network_id
+    );
+    Ok(())
 }
