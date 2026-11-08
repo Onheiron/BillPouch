@@ -50,7 +50,6 @@ fn make_daemon_state() -> (Arc<DaemonState>, mpsc::Receiver<NetworkCommand>) {
         net_tx,
         storage_managers: Arc::new(RwLock::new(std::collections::HashMap::new())),
         qos: Arc::new(RwLock::new(QosRegistry::new())),
-        outgoing_assignments: Arc::new(RwLock::new(std::collections::HashMap::new())),
         remote_fragment_index: Arc::new(RwLock::new(bp_core::network::RemoteFragmentIndex::new())),
         files: RwLock::new(bp_core::files::FileStore::default()),
     });

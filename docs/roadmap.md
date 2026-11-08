@@ -12,10 +12,10 @@ Alpha. Current version in the root `Cargo.toml`; history in the GitHub releases.
 - Tiers as nested layers: a chunk gets one fragment on every Pouch of the lowest layer with room, `k` from the exact recovery probability `P(Σ X_i ≥ k)`; fragments stored and served only with grants signed by the file's owner.
 - `bp rm` and `bp unshare` with owner-signed orders that Pouches enforce; old index versions are deleted.
 - Personal file index sealed with your SSH key, stored in the network and synced to all your devices; `bp share` with other members; extra devices with a self-invite.
-- Ping and Proof-of-Storage loops → QoS. Challenges ask for a random 4 KiB block with its Merkle path, checked against a root the challenger kept.
+- Proof-of-Storage done by the network: every node challenges random Pouches of other users on a random 4 KiB block of a chunk of a shared layer or of a filler blob, checked against a commitment signed by the device that produced the data; credit is the median of the challengers' reports.
 - Allowance: credit (bytes verified on your Pouches) and usage (bytes the others hold for you) are current values in the ledger; you store on the others only up to your credit.
 - Repair by the network: a Pouch that joins a layer catches up on every chunk of it through recoding chains across `k` Pouches.
-- Free Pouch space is filled at once with random blobs by the other Pouches and challenged like fragments; real fragments evict filler.
+- Free Pouch space is filled at once with random blobs by the other users' Pouches; real fragments evict filler.
 - Invite-only networks: network key wrapped per member, encrypted gossip, members-only fragment exchange.
 - Shared ledger per network, committed by weighted BFT consensus: members, devices, per-user reputation from PoS observations, epoch snapshots, capabilities, expulsion votes, network key rotation every epoch and after each expulsion.
 - `pause` / `resume`, `farewell --evict`, `ls`, `storage`, `status`; `leave` records the departure in the ledger, deletes your files and rotates the key without you.
@@ -25,10 +25,11 @@ Alpha. Current version in the root `Cargo.toml`; history in the GitHub releases.
 
 | Area | Limitation |
 |------|------------|
-| Repair | Recoded fragments are not challenged by the owner, who does not know their Merkle root; a lost Pouch only lowers every chunk's margin until a new one joins |
+| Repair | A lost Pouch lowers every chunk's margin until a new one joins its layer |
+| Credit | A Pouch's announced `stored_bytes` is trusted up to its challenge success rate: one that holds half and lies about the rest fails about half the filler challenges |
 | Available space | Comes out as 0 until enough reliable peers are known |
 
 ## Next
 
-1. Owner challenges for recoded fragments (today only the fragments the owner pushed are challenged).
+1. Upgrade libp2p (0.54 pulls `hickory-proto`, which has an open advisory).
 

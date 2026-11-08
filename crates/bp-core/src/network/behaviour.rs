@@ -18,18 +18,20 @@ pub enum FragmentRequest {
         data: Vec<u8>,
         grant: crate::files::Grant,
         layer: crate::storage::StorageTier,
+        commitment: crate::storage::commitment::Commitment,
     },
     Ping {
         nonce: u64,
     },
     ProofOfStorage {
         target: crate::storage::PosTarget,
-        index: usize,
+        seed: u64,
     },
     Fill {
         network: String,
         blob_id: String,
         data: Vec<u8>,
+        commitment: crate::storage::commitment::Commitment,
     },
     Commits {
         network: String,
@@ -51,6 +53,7 @@ pub enum FragmentRequest {
         owner: crate::storage::ChunkOwner,
         fragment_id: String,
         fragment: Vec<u8>,
+        commitment: crate::storage::commitment::Commitment,
     },
 }
 
@@ -69,6 +72,7 @@ pub enum FragmentResponse {
     },
     ProofOfStorageOk {
         proof: crate::storage::merkle::Proof,
+        commitment: Box<crate::storage::commitment::Commitment>,
     },
     Commits {
         commits: Vec<crate::consensus::Commit>,
@@ -223,10 +227,22 @@ mod tests {
 
     #[test]
     fn requests_larger_than_a_mebibyte_round_trip() {
+        let data = vec![7; 2 * 1024 * 1024];
+        let commitment = crate::storage::commitment::Commitment::sign(
+            &libp2p::identity::Keypair::generate_ed25519(),
+            "sponsor",
+            crate::storage::commitment::Held::Filler {
+                blob_id: "b".into(),
+            },
+            "pouch",
+            &data,
+        )
+        .unwrap();
         let request = FragmentRequest::Fill {
             network: "amici".into(),
             blob_id: "b".into(),
-            data: vec![7; 2 * 1024 * 1024],
+            data,
+            commitment,
         };
         let bytes = encode(&request).unwrap();
         assert!((bytes.len() as u64) < REQUEST_SIZE_MAXIMUM);

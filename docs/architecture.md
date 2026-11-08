@@ -37,7 +37,6 @@ Everything is under the XDG data dir (`~/.local/share/billpouch/` on Linux):
 | `profile.json` | Alias and creation time |
 | `control.sock`, `daemon.pid` | Daemon socket and PID |
 | `networks/<name>.json` | Genesis, your key entry and the committed ledger blocks of each network you belong to |
-| `placements.json`, `fillers.json` | Where your fragments and filler blobs went: what you challenge and repair |
 | `qos.json` | Per-peer QoS (RTT, challenge success rate), saved every 60 s |
 | `files.json` | Local copy of your file index per network, the index heads you have seen, shares not yet acknowledged |
 | `kad_peers.json` | Known peer addresses, saved every 600 s and redialled at start |
@@ -195,26 +194,33 @@ with the chunk's owner. The result is a fresh RLNC fragment; nobody sees more
 than its own fragment and one partial sum, so no fetch grant is needed, only
 that the requester and the destination are member devices.
 
-Where each of your fragments went is saved in `placements.json`, so your
-challenges survive a restart. Fragment index announcements list every holder,
-the owner's Pouch included, and `bp get` falls back to every known Pouch.
+Fragment index announcements list every holder, the owner's Pouch included,
+and `bp get` falls back to every known Pouch.
 
-**Proof-of-Storage** (`storage/merkle.rs`): data is split into 4 KiB blocks
-and committed with a BLAKE3 Merkle tree. Every 60 s the daemon picks, for each
-Pouch, one fragment it placed there and one filler blob it sent there, and asks
-for a random block with its Merkle path. The challenger keeps only the root
-(computed when it pushed the fragment); a reply within 10 s passes if the path
-leads to that root, so anyone holding the root can check it.
+**Commitments** (`storage/commitment.rs`): everything a Pouch holds comes with
+a commitment `(what, holder, Merkle root, blocks, size)` signed by the device
+that produced it: the owner for the fragments of `bp put`, the last hop of a
+recoding chain for a recoded fragment, the sponsor for a filler blob. The Pouch
+checks it against the data and stores it next to it.
+
+**Proof-of-Storage is done by the network.** Data is split into 4 KiB blocks
+committed with a BLAKE3 Merkle tree. Every 60 s every node with a Pouch picks
+up to 8 random Pouches of other users in its network and asks each for one
+random block, with its Merkle path and commitment, of either a chunk of a
+shared layer (taken from the challenger's own catalog: every Pouch of the
+layer should hold one fragment of it) or a random one of the filler blobs the
+Pouch announces. The reply passes within 10 s if the commitment names that
+Pouch, is signed by a member device (a filler's sponsor must be another user),
+covers what was asked and the path leads to its root at the index fixed by
+the challenger's seed. No one needs to have created the data to check it.
 
 **Filling** (`storage/filler.rs`): a Pouch announces its free space
-(`free_bytes`) and the other Pouches of the network fill it at once, each an
-equal share, in 1 MiB blobs of random data (at most 256 per sponsor per minute).
-A blob's 4 KiB blocks are generated from a secret seed only the sponsor knows,
-so the Pouch cannot compress them or rebuild them on demand; the sponsor keeps
-only the seed and the Merkle root and challenges the blobs like fragments. When
-a real fragment needs room the Pouch evicts filler blobs and gossips
-`FillerEvicted`; their sponsors stop challenging them and refill later. Your
-own available space counts filler as free.
+(`free_bytes`) and the Pouches of the other users fill it at once, each an
+equal share, in 1 MiB blobs of random data (at most 256 per sponsor per
+minute) generated from a seed that is thrown away, so the Pouch can neither
+compress nor rebuild them. Real fragments evict filler. A Pouch announces how
+much it stores (`stored_bytes`) and how many blobs (`fillers`); your own
+available space counts filler as free.
 
 **Reputation.** Every challenge result is counted per device and epoch. In
 the last 10 % of an epoch each member submits an `Observations` op for the
@@ -223,10 +229,11 @@ per epoch, scaled down proportionally beyond that).
 
 **Allowance.** Credit and usage are current values in the ledger, not daily
 ones. At most every 120 s each member submits a `Usage` op that replaces its
-previous one: for every device of another user, the **verified bytes** (bytes
-it placed there, fragments and filler, × that device's challenge success rate),
-and, for every other owner, the bytes its own Pouches hold for them. A user's
-**credit** is the sum of what the others verified on their devices; their
+previous one: for every device of another user it challenged, the **verified
+bytes** (what that Pouch announces it stores × its challenge success rate as
+seen by the challenger), and, for every other owner, the bytes its own Pouches
+hold for them. A user's **credit** is, summed over their devices, the median
+of what the challengers verified; their
 **usage** is the sum of what the others hold for them (`bp members`). You may
 store on other users' Pouches only up to your credit: `bp put` refuses a file
 that would exceed it and a Pouch refuses fragments from a user over it; your

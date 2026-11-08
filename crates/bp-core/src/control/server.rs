@@ -10,8 +10,8 @@ use crate::{
     identity::Identity,
     membership::Invite,
     network::{
-        fragment_gossip::RemoteFragmentIndex, state::NodeInfo, Gossip, NetworkCommand,
-        OutgoingAssignments, QosRegistry, ReputationTier, StorageManagerMap,
+        fragment_gossip::RemoteFragmentIndex, state::NodeInfo, Gossip, NetworkCommand, QosRegistry,
+        ReputationTier, StorageManagerMap,
     },
     service::{ServiceInfo, ServiceRegistry, ServiceStatus, ServiceType},
     storage::{StorageManager, StorageTier},
@@ -37,7 +37,6 @@ pub struct DaemonState {
     pub net_tx: mpsc::Sender<NetworkCommand>,
     pub storage_managers: StorageManagerMap,
     pub qos: Arc<RwLock<QosRegistry>>,
-    pub outgoing_assignments: OutgoingAssignments,
     pub remote_fragment_index: Arc<RwLock<RemoteFragmentIndex>>,
     pub files: RwLock<crate::files::FileStore>,
 }
@@ -843,6 +842,11 @@ fn pouch_metadata(
             serde_json::Value::from(sm.meta.available_bytes()),
         );
         metadata.insert("tier".into(), serde_json::json!(sm.meta.tier));
+        metadata.insert(
+            "stored_bytes".into(),
+            serde_json::Value::from(sm.meta.storage_bytes_used),
+        );
+        metadata.insert("fillers".into(), serde_json::Value::from(sm.filler_count()));
         metadata.insert("layer_free".into(), serde_json::json!(layer_free));
     }
     metadata

@@ -1,3 +1,4 @@
+pub mod commitment;
 pub mod encryption;
 pub mod filler;
 pub mod fragment;
@@ -14,6 +15,7 @@ use crate::{
     coding::rlnc::EncodedFragment,
     config,
     error::{BpError, BpResult},
+    storage::commitment::{Commitment, Held},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -36,13 +38,8 @@ pub struct CatalogEntry {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PosTarget {
-    Fragment {
-        chunk_id: String,
-        fragment_id: String,
-    },
-    Filler {
-        blob_id: String,
-    },
+    Fragment { chunk_id: String },
+    Filler { nth: u64 },
 }
 
 pub struct StorageManager {
@@ -87,6 +84,7 @@ impl StorageManager {
             .flatten()
             .flatten()
             .filter_map(|e| Some((e.file_name().into_string().ok()?, e.metadata().ok()?.len())))
+            .filter(|(name, _)| !name.ends_with(".commit"))
             .collect();
 
         let mut sm = Self {
@@ -229,56 +227,86 @@ impl StorageManager {
         self.fillers.values().sum()
     }
 
-    pub fn store_filler(&mut self, blob_id: &str, data: &[u8]) -> BpResult<()> {
+    pub fn filler_count(&self) -> u64 {
+        self.fillers.len() as u64
+    }
+
+    pub fn store_filler(
+        &mut self,
+        blob_id: &str,
+        data: &[u8],
+        commitment: &Commitment,
+    ) -> BpResult<()> {
         let size = data.len() as u64;
+        let named = matches!(&commitment.held, Held::Filler { blob_id: b } if b == blob_id);
+        if !named || !commitment.matches(data) || blob_id.contains(['/', '.']) {
+            return Err(BpError::Storage(
+                "filler does not match its commitment".into(),
+            ));
+        }
         if !self.meta.has_capacity(size) || self.fillers.contains_key(blob_id) {
             return Err(BpError::Storage("no room for filler".into()));
         }
         let dir = self.root.join("fillers");
         std::fs::create_dir_all(&dir).map_err(BpError::Io)?;
         std::fs::write(dir.join(blob_id), data).map_err(BpError::Io)?;
+        std::fs::write(
+            dir.join(format!("{blob_id}.commit")),
+            serde_json::to_vec(commitment)?,
+        )?;
         self.fillers.insert(blob_id.to_string(), size);
         self.meta.storage_bytes_used += size;
         self.save_meta()
     }
 
-    fn evict_fillers(&mut self, needed: u64) -> BpResult<Vec<String>> {
-        let mut evicted = Vec::new();
+    fn evict_fillers(&mut self, needed: u64) -> BpResult<()> {
+        let mut evicted = false;
         while !self.meta.has_capacity(needed) {
             let Some((blob_id, size)) = self.fillers.pop_first() else {
                 break;
             };
-            let _ = std::fs::remove_file(self.root.join("fillers").join(&blob_id));
+            let dir = self.root.join("fillers");
+            let _ = std::fs::remove_file(dir.join(&blob_id));
+            let _ = std::fs::remove_file(dir.join(format!("{blob_id}.commit")));
             self.meta.storage_bytes_used = self.meta.storage_bytes_used.saturating_sub(size);
-            evicted.push(blob_id);
+            evicted = true;
         }
-        if !evicted.is_empty() {
+        if evicted {
             self.save_meta()?;
         }
-        Ok(evicted)
+        Ok(())
     }
 
-    pub fn prove(&self, target: &PosTarget, index: usize) -> Option<merkle::Proof> {
-        let data = match target {
-            PosTarget::Fragment {
-                chunk_id,
-                fragment_id,
-            } => self.load_fragment(chunk_id, fragment_id).ok()?.to_bytes(),
-            PosTarget::Filler { blob_id } => {
-                if !self.fillers.contains_key(blob_id) {
-                    return None;
-                }
-                std::fs::read(self.root.join("fillers").join(blob_id)).ok()?
+    pub fn prove(&self, target: &PosTarget, seed: u64) -> Option<(merkle::Proof, Commitment)> {
+        let (data, commitment) = match target {
+            PosTarget::Fragment { chunk_id } => {
+                let meta = self.index.fragments_for_chunk(chunk_id).first()?;
+                let dir = self.root.join("fragments").join(chunk_id);
+                (
+                    std::fs::read(dir.join(format!("{}.frag", meta.fragment_id))).ok()?,
+                    std::fs::read(dir.join(format!("{}.commit", meta.fragment_id))).ok()?,
+                )
+            }
+            PosTarget::Filler { nth } => {
+                let blob_id = self.fillers.keys().nth(usize::try_from(*nth).ok()?)?;
+                let dir = self.root.join("fillers");
+                (
+                    std::fs::read(dir.join(blob_id)).ok()?,
+                    std::fs::read(dir.join(format!("{blob_id}.commit"))).ok()?,
+                )
             }
         };
-        merkle::prove(&data, index)
+        let commitment: Commitment = serde_json::from_slice(&commitment).ok()?;
+        let proof = merkle::prove(&data, commitment.index_for(seed))?;
+        Some((proof, commitment))
     }
 
     pub fn store_fragment(
         &mut self,
         fragment: &EncodedFragment,
         owner: &ChunkOwner,
-    ) -> BpResult<Vec<String>> {
+        commitment: &Commitment,
+    ) -> BpResult<()> {
         if self
             .owner_of(&fragment.chunk_id)
             .is_some_and(|known| known != *owner)
@@ -290,13 +318,20 @@ impl StorageManager {
         }
         let bytes = fragment.to_bytes();
         let size = bytes.len() as u64;
+        let named = matches!(&commitment.held, Held::Fragment { chunk_id, fragment_id }
+            if *chunk_id == fragment.chunk_id && *fragment_id == fragment.id);
+        if !named || !commitment.matches(&bytes) || fragment.id.contains(['/', '.']) {
+            return Err(BpError::Storage(
+                "fragment does not match its commitment".into(),
+            ));
+        }
         if self.layer_free(owner.layer) < size {
             return Err(BpError::Storage(format!(
                 "layer {:?} is full on this Pouch",
                 owner.layer
             )));
         }
-        let evicted = self.evict_fillers(size)?;
+        self.evict_fillers(size)?;
 
         if !self.meta.has_capacity(size) {
             return Err(BpError::Storage(format!(
@@ -311,6 +346,10 @@ impl StorageManager {
 
         let frag_path = chunk_dir.join(format!("{}.frag", fragment.id));
         std::fs::write(&frag_path, &bytes).map_err(BpError::Io)?;
+        std::fs::write(
+            chunk_dir.join(format!("{}.commit", fragment.id)),
+            serde_json::to_vec(commitment)?,
+        )?;
 
         self.meta.storage_bytes_used += size;
         *self.layer_used.entry(owner.layer).or_default() += size;
@@ -323,7 +362,7 @@ impl StorageManager {
             size_bytes: size,
         });
 
-        Ok(evicted)
+        Ok(())
     }
 
     pub fn load_fragment(&self, chunk_id: &str, fragment_id: &str) -> BpResult<EncodedFragment> {
@@ -423,6 +462,21 @@ mod tests {
 
     static STORAGE_TEST_LOCK: Mutex<()> = Mutex::new(());
 
+    fn commit(fragment: &EncodedFragment) -> Commitment {
+        let device = libp2p::identity::Keypair::generate_ed25519();
+        Commitment::sign(
+            &device,
+            "owner-device",
+            Held::Fragment {
+                chunk_id: fragment.chunk_id.clone(),
+                fragment_id: fragment.id.clone(),
+            },
+            "me",
+            &fragment.to_bytes(),
+        )
+        .unwrap()
+    }
+
     fn owner(key: &str) -> ChunkOwner {
         ChunkOwner {
             owner_key: key.into(),
@@ -473,7 +527,8 @@ mod tests {
             let mut sm = StorageManager::init("net".into(), "svc".into(), 1_000_000).unwrap();
             let frags = rlnc::encode(CHUNK, 4, 6).unwrap();
 
-            sm.store_fragment(&frags[0], &owner("carlo")).unwrap();
+            sm.store_fragment(&frags[0], &owner("carlo"), &commit(&frags[0]))
+                .unwrap();
 
             let loaded = sm.load_fragment(&frags[0].chunk_id, &frags[0].id).unwrap();
             assert_eq!(loaded.coding_vector, frags[0].coding_vector);
@@ -488,9 +543,13 @@ mod tests {
         with_temp_home_storage(|| {
             let mut sm = StorageManager::init("net".into(), "svc".into(), 1_000_000).unwrap();
             let frags = rlnc::encode(CHUNK, 2, 3).unwrap();
-            sm.store_fragment(&frags[0], &owner("carlo")).unwrap();
-            assert!(sm.store_fragment(&frags[1], &owner("mallory")).is_err());
-            sm.store_fragment(&frags[1], &owner("carlo")).unwrap();
+            sm.store_fragment(&frags[0], &owner("carlo"), &commit(&frags[0]))
+                .unwrap();
+            assert!(sm
+                .store_fragment(&frags[1], &owner("mallory"), &commit(&frags[1]))
+                .is_err());
+            sm.store_fragment(&frags[1], &owner("carlo"), &commit(&frags[1]))
+                .unwrap();
             assert_eq!(sm.owner_of(&frags[0].chunk_id), Some(owner("carlo")));
             assert_eq!(sm.index.fragment_count(), 2);
         });
@@ -502,8 +561,10 @@ mod tests {
         with_temp_home_storage(|| {
             let mut sm = StorageManager::init("net".into(), "svc".into(), 1_000_000).unwrap();
             let frags = rlnc::encode(CHUNK, 2, 2).unwrap();
-            sm.store_fragment(&frags[0], &owner("carlo")).unwrap();
-            sm.store_fragment(&frags[1], &owner("carlo")).unwrap();
+            sm.store_fragment(&frags[0], &owner("carlo"), &commit(&frags[0]))
+                .unwrap();
+            sm.store_fragment(&frags[1], &owner("carlo"), &commit(&frags[1]))
+                .unwrap();
             assert!(!sm.revoke("file", "mallory", "marco").unwrap());
             assert!(!sm.is_revoked("file", "marco"));
             assert!(sm.revoke("file", "carlo", "marco").unwrap());
@@ -526,29 +587,44 @@ mod tests {
             let size = frags[0].to_bytes().len() as u64;
             let mut sm = StorageManager::init("net".into(), "svc".into(), size + 10).unwrap();
             let filler = vec![7u8; size as usize];
-            sm.store_filler("blob", &filler).unwrap();
-            assert!(sm.store_filler("more", &filler).is_err());
-            let blob = PosTarget::Filler {
-                blob_id: "blob".into(),
-            };
-            let proof = sm.prove(&blob, 0).unwrap();
-            let blocks = merkle::block_count(filler.len());
-            assert!(merkle::verify(&merkle::root(&filler), blocks, &proof));
+            let blob = |id: &str| Held::Filler { blob_id: id.into() };
+            let device = libp2p::identity::Keypair::generate_ed25519();
+            let c = Commitment::sign(&device, "sponsor", blob("blob"), "me", &filler).unwrap();
+            assert!(sm.store_filler("other", &filler, &c).is_err());
+            assert!(sm.store_filler("blob", &filler[1..], &c).is_err());
+            sm.store_filler("blob", &filler, &c).unwrap();
+            let more = Commitment::sign(&device, "sponsor", blob("more"), "me", &filler).unwrap();
+            assert!(sm.store_filler("more", &filler, &more).is_err());
+            assert_eq!(sm.filler_count(), 1);
 
-            let evicted = sm.store_fragment(&frags[0], &owner("carlo")).unwrap();
-            assert_eq!(evicted, vec!["blob".to_string()]);
+            let (proof, stored) = sm.prove(&PosTarget::Filler { nth: 0 }, 5).unwrap();
+            assert_eq!(stored, c);
+            assert!(stored.proves(5, &proof));
+            assert!(sm.prove(&PosTarget::Filler { nth: 1 }, 5).is_none());
+
+            sm.store_fragment(&frags[0], &owner("carlo"), &commit(&frags[0]))
+                .unwrap();
             assert_eq!(sm.filler_bytes(), 0);
-            assert!(sm.prove(&blob, 0).is_none());
+            assert!(sm.prove(&PosTarget::Filler { nth: 0 }, 5).is_none());
             let fragment = PosTarget::Fragment {
                 chunk_id: frags[0].chunk_id.clone(),
-                fragment_id: frags[0].id.clone(),
             };
-            let proof = sm.prove(&fragment, 0).unwrap();
-            assert!(merkle::verify(
-                &merkle::root(&frags[0].to_bytes()),
-                1,
-                &proof
-            ));
+            let (proof, stored) = sm.prove(&fragment, 3).unwrap();
+            assert!(stored.matches(&frags[0].to_bytes()));
+            assert!(stored.proves(3, &proof));
+        });
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_fragment_must_match_its_commitment() {
+        with_temp_home_storage(|| {
+            let mut sm = StorageManager::init("net".into(), "svc".into(), 1_000_000).unwrap();
+            let frags = rlnc::encode(CHUNK, 2, 2).unwrap();
+            assert!(sm
+                .store_fragment(&frags[0], &owner("carlo"), &commit(&frags[1]))
+                .is_err());
+            assert_eq!(sm.index.fragment_count(), 0);
         });
     }
 
@@ -561,10 +637,13 @@ mod tests {
             let frags = rlnc::encode(CHUNK, 1, 2).unwrap();
             let mut upper = owner("carlo");
             upper.layer = StorageTier::T2;
-            assert!(sm.store_fragment(&frags[0], &upper).is_err());
+            assert!(sm
+                .store_fragment(&frags[0], &upper, &commit(&frags[0]))
+                .is_err());
             assert_eq!(sm.layer_free(StorageTier::T2), 0);
             let before = sm.layer_free(StorageTier::T1);
-            sm.store_fragment(&frags[0], &owner("carlo")).unwrap();
+            sm.store_fragment(&frags[0], &owner("carlo"), &commit(&frags[0]))
+                .unwrap();
             assert_eq!(
                 sm.layer_free(StorageTier::T1),
                 before - frags[0].to_bytes().len() as u64
@@ -578,7 +657,9 @@ mod tests {
         with_temp_home_storage(|| {
             let mut sm = StorageManager::init("net".into(), "svc".into(), 1).unwrap();
             let frags = rlnc::encode(CHUNK, 4, 4).unwrap();
-            assert!(sm.store_fragment(&frags[0], &owner("carlo")).is_err());
+            assert!(sm
+                .store_fragment(&frags[0], &owner("carlo"), &commit(&frags[0]))
+                .is_err());
         });
     }
 
@@ -593,8 +674,10 @@ mod tests {
             {
                 let mut sm =
                     StorageManager::init(network_id.into(), service_id.into(), 1_000_000).unwrap();
-                sm.store_fragment(&frags[0], &owner("carlo")).unwrap();
-                sm.store_fragment(&frags[1], &owner("carlo")).unwrap();
+                sm.store_fragment(&frags[0], &owner("carlo"), &commit(&frags[0]))
+                    .unwrap();
+                sm.store_fragment(&frags[1], &owner("carlo"), &commit(&frags[1]))
+                    .unwrap();
             }
 
             let sm2 = StorageManager::load(network_id, service_id).unwrap();
