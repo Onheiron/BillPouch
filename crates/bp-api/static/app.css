@@ -70,6 +70,7 @@ body {
   gap: 12px;
   z-index: 30;
 }
+[hidden] { display: none !important; }
 .menu h4 { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
 .menu .option { display: grid; gap: 8px; padding: 12px; border-radius: 11px; background: var(--sky-mist); border: 1px solid var(--line); }
 .menu .option strong { color: var(--sky-ink); }
