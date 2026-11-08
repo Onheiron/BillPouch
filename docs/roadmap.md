@@ -1,6 +1,6 @@
 # Status and roadmap
 
-Alpha. Current version in `version.txt`; history in [CHANGELOG.md](../CHANGELOG.md).
+Alpha. Current version in the root `Cargo.toml`; history in the GitHub releases.
 
 ## Works today
 
