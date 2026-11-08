@@ -373,17 +373,8 @@ async fn main() -> anyhow::Result<()> {
         }) => {
             let svc_type: bp_core::service::ServiceType = service_type.parse()?;
             let mut metadata: HashMap<String, serde_json::Value> = HashMap::new();
-            if svc_type == bp_core::service::ServiceType::Pouch && tier.is_none() {
-                anyhow::bail!("a pouch needs a storage tier: --tier T1|T2|T3|T4|T5");
-            }
-            if let Some(tier_str) = tier {
-                let storage_tier = bp_core::storage::StorageTier::parse(&tier_str)
-                    .map_err(|e| anyhow::anyhow!("{}", e))?;
-                metadata.insert("tier".into(), serde_json::Value::from(tier_str));
-                metadata.insert(
-                    "storage_bytes".into(),
-                    serde_json::Value::from(storage_tier.quota_bytes()),
-                );
+            if let Some(tier) = tier {
+                metadata.insert("tier".into(), serde_json::Value::from(tier));
             }
             commands::hatch::hatch(svc_type, network, metadata).await?;
         }

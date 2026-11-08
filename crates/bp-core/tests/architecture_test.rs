@@ -743,22 +743,36 @@ async fn dispatch_status_restituisce_peer_id_e_fingerprint() {
 #[cfg(unix)]
 async fn dispatch_hatch_nuovo_servizio() {
     let (sp, _s) = start_test_server().await;
-    let resp = send_cmd(
-        &sp,
-        &ControlRequest::Hatch {
-            service_type: ServiceType::Pouch,
+    let hatch =
+        |service_type, metadata: HashMap<String, serde_json::Value>| ControlRequest::Hatch {
+            service_type,
             network_id: "amici".into(),
-            metadata: HashMap::new(),
-        },
-    )
-    .await;
-    match resp {
+            metadata,
+        };
+    assert!(matches!(
+        send_cmd(&sp, &hatch(ServiceType::Pouch, HashMap::new())).await,
+        ControlResponse::Error { .. }
+    ));
+    let tier = HashMap::from([("tier".to_string(), serde_json::json!("T1"))]);
+    match send_cmd(&sp, &hatch(ServiceType::Pouch, tier.clone())).await {
         ControlResponse::Ok { data: Some(v) } => {
             assert!(v["service_id"].is_string());
             assert_eq!(v["network_id"], "amici");
         }
         _ => panic!("Expected Ok"),
     }
+    assert!(matches!(
+        send_cmd(&sp, &hatch(ServiceType::Pouch, tier)).await,
+        ControlResponse::Error { .. }
+    ));
+    assert!(matches!(
+        send_cmd(&sp, &hatch(ServiceType::Bill, HashMap::new())).await,
+        ControlResponse::Ok { .. }
+    ));
+    assert!(matches!(
+        send_cmd(&sp, &hatch(ServiceType::Bill, HashMap::new())).await,
+        ControlResponse::Error { .. }
+    ));
 }
 
 #[tokio::test]

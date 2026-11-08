@@ -396,6 +396,75 @@ async function remove(id, network, name) {
   }
 }
 
+const TIERS = [
+  ["T1", "10 GiB"],
+  ["T2", "100 GiB"],
+  ["T3", "500 GiB"],
+  ["T4", "1 TiB"],
+  ["T5", "5 TiB"],
+];
+
+function renderMenu() {
+  const menu = $("service-menu");
+  if (!state.data) return;
+  const network = uploadNetwork();
+  if (!network) {
+    menu.innerHTML = `<h4>Services</h4><p class="sub">Pick a network at the top first.</p>`;
+    return;
+  }
+  const running = (kind) => state.data.status.local_services.some((s) => s.service_type === kind && s.network_id === network);
+  const pouch = running("pouch")
+    ? `<div class="option"><strong>Pouch</strong><span class="running">Running on this node</span></div>`
+    : `<div class="option"><strong>Pouch</strong><p>Offer disk space to the network. It is filled and challenged before it counts as credit.</p>
+        <div class="row"><select id="tier">${TIERS.map(([t, size]) => `<option value="${t}">${t} · ${size}</option>`).join("")}</select>
+        <button class="button accent small" data-hatch="pouch">Start</button></div></div>`;
+  const bill = running("bill")
+    ? `<div class="option"><strong>Bill</strong><span class="running">Running on this node</span></div>`
+    : `<div class="option"><strong>Bill</strong><p>Your access point to the network's files.</p>
+        <div class="row"><button class="button accent small" data-hatch="bill">Start</button></div></div>`;
+  menu.innerHTML = `<h4>Services on ${esc(network)}</h4>${pouch}${bill}`;
+}
+
+async function hatch(kind) {
+  const network = uploadNetwork();
+  const metadata = kind === "pouch" ? { tier: $("tier").value } : {};
+  try {
+    await api("/services", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ service_type: kind, network_id: network, metadata }),
+    });
+    toast(`${kind === "pouch" ? "Pouch" : "Bill"} started on ${network}`, "ok");
+    toggleMenu(false);
+    refresh();
+  } catch (e) {
+    toast(`Cannot start the ${kind}: ${e.message}`, "error");
+  }
+}
+
+function toggleMenu(open) {
+  const menu = $("service-menu");
+  menu.hidden = !open;
+  $("service-button").setAttribute("aria-expanded", String(open));
+  if (open) renderMenu();
+}
+
+$("service-button").addEventListener("click", (e) => {
+  e.stopPropagation();
+  toggleMenu($("service-menu").hidden);
+});
+
+$("service-menu").addEventListener("click", (e) => {
+  e.stopPropagation();
+  const b = e.target.closest("button[data-hatch]");
+  if (b) {
+    b.disabled = true;
+    hatch(b.dataset.hatch).finally(() => (b.disabled = false));
+  }
+});
+
+document.addEventListener("click", () => toggleMenu(false));
+
 $("network").addEventListener("change", (e) => {
   state.network = e.target.value;
   localStorage.setItem(NETWORK_KEY, state.network);
