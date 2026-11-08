@@ -170,12 +170,6 @@ enum Cmd {
         ph: f64,
 
         #[arg(
-            help = "Redundancy overhead fraction on top of the recovery threshold (default: 1.0 = one extra \"copy-equivalent\" of fragments)"
-        )]
-        #[arg(long, default_value_t = 1.0)]
-        q_target: f64,
-
-        #[arg(
             help = "Human-readable name for the file (shown by `bp ls`). Defaults to the file's original filename"
         )]
         #[arg(long)]
@@ -430,10 +424,9 @@ async fn main() -> anyhow::Result<()> {
             file,
             network,
             ph,
-            q_target,
             name,
         }) => {
-            commands::put::put(file, network, ph, q_target, name).await?;
+            commands::put::put(file, network, ph, name).await?;
         }
 
         Some(Cmd::Get {

@@ -9,7 +9,7 @@ Alpha. Current version in the root `Cargo.toml`; history in the GitHub releases.
 - Discovery (mDNS, Kademlia, bootstrap list, saved peers), gossip, NAT relay client.
 - `bp put` / `bp get`: files streamed in 4 MiB chunks, random per-file key wrapped per authorized user, RLNC coding with adaptive k/n,
   distribution to remote Pouches, targeted fetch via the gossiped fragment index.
-- Rendezvous placement, one fragment per Pouch when possible and at most ⌊k/4⌋ otherwise, with the exact recovery probability `P(Σ m_i X_i ≥ k)`; fragments stored and served only with grants signed by the file's owner.
+- Tiers as nested layers: a chunk gets one fragment on every Pouch of the lowest layer with room, `k` from the exact recovery probability `P(Σ X_i ≥ k)`; fragments stored and served only with grants signed by the file's owner.
 - `bp rm` and `bp unshare` with owner-signed orders that Pouches enforce; old index versions are deleted.
 - Personal file index sealed with your SSH key, stored in the network and synced to all your devices; `bp share` with other members; extra devices with a self-invite.
 - Ping and Proof-of-Storage loops → QoS, fault score, rerouting of fragments
@@ -26,7 +26,6 @@ Alpha. Current version in the root `Cargo.toml`; history in the GitHub releases.
 | Area | Limitation |
 |------|------------|
 | Allowance | Usage and credit lag one epoch, and a user who joined today is not limited until tomorrow |
-| Placement | Rendezvous order and stability only: storage tiers and reputation do not change where fragments go |
 | Repair | Only the owner repairs its chunks: a chunk whose owner stays offline is not repaired |
 | Available space | Comes out as 0 until enough reliable peers are known |
 | `bp-api` | A single bearer token and no TLS: keep it on localhost or behind a TLS proxy |

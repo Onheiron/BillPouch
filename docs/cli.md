@@ -41,7 +41,7 @@ started automatically when missing.
 
 | Command | Description |
 |---------|-------------|
-| `bp put <file> --network <id> [--ph <p>] [--q-target <q>] [--name <name>]` | Stream a file in 4 MiB chunks: encrypt, encode and distribute; prints its `file_id`. `--ph` = target recovery probability (default 0.999), `--q-target` = redundancy on top of `k` (default 1.0) |
+| `bp put <file> --network <id> [--ph <p>] [--name <name>]` | Stream a file in 4 MiB chunks: encrypt, encode and give one fragment to every Pouch of the lowest layer with room; prints its `file_id`. `--ph` = target recovery probability (default 0.999) |
 | `bp get <file_id> <output> --network <id>` | Fetch, decode and decrypt one of your files or one shared with you, chunk by chunk |
 | `bp rm <file_id> --network <id>` | Delete one of your files (every Pouch drops its fragments), or remove a shared file from your list |
 | `bp ls [--network <id>]` | Your files and the ones shared with you, from your index (synced across your devices) |

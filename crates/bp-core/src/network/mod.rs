@@ -76,6 +76,7 @@ pub struct OutgoingFragment {
     pub chunk_id: String,
     pub fragment_id: String,
     pub grant: crate::files::Grant,
+    pub layer: crate::storage::StorageTier,
     pub root: [u8; 32],
     pub blocks: usize,
     pub size: u64,
@@ -159,6 +160,7 @@ pub enum NetworkCommand {
         fragment_id: String,
         data: Vec<u8>,
         grant: crate::files::Grant,
+        layer: crate::storage::StorageTier,
     },
     FetchChunkFragments {
         peer_id: PeerId,
@@ -327,6 +329,7 @@ pub async fn run_network_loop(
                         fragment_id,
                         data,
                         grant,
+                        layer,
                     }) => {
                         let root = crate::storage::merkle::root(&data);
                         let blocks = crate::storage::merkle::block_count(data.len());
@@ -336,6 +339,7 @@ pub async fn run_network_loop(
                             fragment_id: fragment_id.clone(),
                             data,
                             grant: grant.clone(),
+                            layer,
                         };
                         let _ = swarm
                             .behaviour_mut()
@@ -349,6 +353,7 @@ pub async fn run_network_loop(
                                     chunk_id: chunk_id.clone(),
                                     fragment_id: fragment_id.clone(),
                                     grant,
+                                    layer,
                                     root,
                                     blocks,
                                     size,
@@ -969,6 +974,7 @@ fn serve_fragment_request(
             fragment_id,
             data,
             grant,
+            layer,
         } => {
             use crate::coding::rlnc::EncodedFragment;
             match EncodedFragment::from_bytes(fragment_id.clone(), chunk_id.clone(), data) {
@@ -981,6 +987,7 @@ fn serve_fragment_request(
                     let owner = crate::storage::ChunkOwner {
                         owner_key: grant.owner_key.clone(),
                         file_id: grant.file_id.clone(),
+                        layer: *layer,
                     };
                     let stored = managers.values().find_map(|sm_arc| {
                         let mut sm = sm_arc.write().unwrap();

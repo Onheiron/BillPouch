@@ -59,7 +59,6 @@ pub enum ControlRequest {
     PutFile {
         path: std::path::PathBuf,
         ph: Option<f64>,
-        q_target: Option<f64>,
         network_id: String,
         file_name: Option<String>,
     },

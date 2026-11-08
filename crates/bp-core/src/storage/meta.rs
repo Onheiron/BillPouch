@@ -6,6 +6,7 @@ use std::path::Path;
 pub struct PouchMeta {
     pub network_id: String,
     pub service_id: String,
+    pub tier: super::StorageTier,
     pub storage_bytes_bid: u64,
     pub storage_bytes_used: u64,
     pub joined_at: u64,
@@ -16,6 +17,7 @@ impl PouchMeta {
         Self {
             network_id,
             service_id,
+            tier: super::StorageTier::fitting(storage_bytes_bid),
             storage_bytes_bid,
             storage_bytes_used: 0,
             joined_at: chrono::Utc::now().timestamp() as u64,

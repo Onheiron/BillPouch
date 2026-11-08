@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 pub struct ChunkOwner {
     pub owner_key: String,
     pub file_id: String,
+    pub layer: StorageTier,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,6 +43,7 @@ pub struct StorageManager {
     pub meta: PouchMeta,
     pub index: FragmentIndex,
     fillers: BTreeMap<String, u64>,
+    layer_used: BTreeMap<StorageTier, u64>,
 }
 
 impl StorageManager {
@@ -58,6 +60,7 @@ impl StorageManager {
             meta,
             index: FragmentIndex::new(),
             fillers: BTreeMap::new(),
+            layer_used: BTreeMap::new(),
         })
     }
 
@@ -79,12 +82,26 @@ impl StorageManager {
             .filter_map(|e| Some((e.file_name().into_string().ok()?, e.metadata().ok()?.len())))
             .collect();
 
-        Ok(Self {
+        let mut sm = Self {
             root,
             meta,
             index,
             fillers,
-        })
+            layer_used: BTreeMap::new(),
+        };
+        let chunks: Vec<String> = sm.index.chunk_ids().map(str::to_string).collect();
+        for chunk in chunks {
+            if let Some(owner) = sm.owner_of(&chunk) {
+                let bytes: u64 = sm
+                    .index
+                    .fragments_for_chunk(&chunk)
+                    .iter()
+                    .map(|f| f.size_bytes)
+                    .sum();
+                *sm.layer_used.entry(owner.layer).or_default() += bytes;
+            }
+        }
+        Ok(sm)
     }
 
     pub fn owner_of(&self, chunk_id: &str) -> Option<ChunkOwner> {
@@ -151,7 +168,12 @@ impl StorageManager {
     pub fn delete_file(&mut self, file_id: &str, owner_key: &str) -> BpResult<u64> {
         let mut freed = 0;
         for chunk in self.chunks_of(file_id, owner_key) {
-            freed += self.index.remove_chunk(&chunk);
+            let layer = self.owner_of(&chunk).map(|o| o.layer);
+            let chunk_freed = self.index.remove_chunk(&chunk);
+            if let Some(used) = layer.and_then(|l| self.layer_used.get_mut(&l)) {
+                *used = used.saturating_sub(chunk_freed);
+            }
+            freed += chunk_freed;
             let _ = std::fs::remove_dir_all(self.root.join("fragments").join(&chunk));
         }
         if freed > 0 {
@@ -159,6 +181,14 @@ impl StorageManager {
             self.save_meta()?;
         }
         Ok(freed)
+    }
+
+    pub fn layer_free(&self, layer: StorageTier) -> u64 {
+        if layer > self.meta.tier {
+            return 0;
+        }
+        let used = self.layer_used.get(&layer).copied().unwrap_or(0);
+        layer.slice_bytes().saturating_sub(used)
     }
 
     pub fn filler_bytes(&self) -> u64 {
@@ -226,6 +256,12 @@ impl StorageManager {
         }
         let bytes = fragment.to_bytes();
         let size = bytes.len() as u64;
+        if self.layer_free(owner.layer) < size {
+            return Err(BpError::Storage(format!(
+                "layer {:?} is full on this Pouch",
+                owner.layer
+            )));
+        }
         let evicted = self.evict_fillers(size)?;
 
         if !self.meta.has_capacity(size) {
@@ -243,6 +279,7 @@ impl StorageManager {
         std::fs::write(&frag_path, &bytes).map_err(BpError::Io)?;
 
         self.meta.storage_bytes_used += size;
+        *self.layer_used.entry(owner.layer).or_default() += size;
         self.save_meta()?;
 
         self.index.insert(FragmentMeta {
@@ -356,6 +393,7 @@ mod tests {
         ChunkOwner {
             owner_key: key.into(),
             file_id: "file".into(),
+            layer: StorageTier::T1,
         }
     }
 
@@ -477,6 +515,26 @@ mod tests {
                 1,
                 &proof
             ));
+        });
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_pouch_only_takes_fragments_of_its_layers_within_each_slice() {
+        with_temp_home_storage(|| {
+            let mut sm = StorageManager::init("net".into(), "svc".into(), 1_000_000).unwrap();
+            assert_eq!(sm.meta.tier, StorageTier::T1);
+            let frags = rlnc::encode(CHUNK, 1, 2).unwrap();
+            let mut upper = owner("carlo");
+            upper.layer = StorageTier::T2;
+            assert!(sm.store_fragment(&frags[0], &upper).is_err());
+            assert_eq!(sm.layer_free(StorageTier::T2), 0);
+            let before = sm.layer_free(StorageTier::T1);
+            sm.store_fragment(&frags[0], &owner("carlo")).unwrap();
+            assert_eq!(
+                sm.layer_free(StorageTier::T1),
+                before - frags[0].to_bytes().len() as u64
+            );
         });
     }
 
