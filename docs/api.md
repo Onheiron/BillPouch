@@ -41,8 +41,12 @@ Types: `bp_core::control::protocol`; client helper: `bp_core::control::client::s
 ## REST API (`bp-api`)
 
 `bp-api [--host 127.0.0.1] [--port 3000]` forwards HTTP calls to a running
-daemon's socket. `GET /` serves a dashboard that polls `/status` and `/peers`.
-Errors are `{"error": "…"}` with 503 (daemon unreachable), 422 (invalid base64) or 500 (daemon error).
+daemon's socket. Every route but `GET /` needs `Authorization: Bearer <token>`;
+the token is created on first start in `api_token` (mode 0600, next to the
+daemon's files) and the start-up log prints `http://<addr>/#token=<token>`.
+`GET /` serves a dashboard that reads the token from that link and polls
+`/status` and `/peers`.
+Errors are `{"error": "…"}` with 401 (missing or wrong token), 503 (daemon unreachable), 422 (invalid base64) or 500 (daemon error).
 
 | Method | Path | Body / query | Control command |
 |--------|------|--------------|-----------------|
@@ -66,4 +70,4 @@ Errors are `{"error": "…"}` with 503 (daemon unreachable), 422 (invalid base64
 | DELETE | `/files/:file_id/shares/:member` | `?network=<id>` | `unshare` |
 | POST | `/relay/connect` | `{relay_addr}` | `connect_relay` |
 
-There is no authentication: keep it on `127.0.0.1`.
+The token is the only protection and travels in clear: keep it on `127.0.0.1` or behind TLS.
