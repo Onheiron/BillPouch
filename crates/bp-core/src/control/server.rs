@@ -506,6 +506,7 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 .collect();
             ControlResponse::ok(MembersData {
                 network_id: network_id.clone(),
+                me: state.identity.fingerprint.clone(),
                 height: ledger.height,
                 epoch: ledger.snapshot.epoch,
                 total_weight: ledger.snapshot.total_weight(),
