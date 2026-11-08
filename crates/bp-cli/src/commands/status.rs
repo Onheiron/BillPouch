@@ -92,24 +92,8 @@ fn print_status(s: &StatusData) {
     println!("   tier   : {}", s.reputation_tier);
     println!();
 
-    if !s.pouch_stats.is_empty() {
-        println!("💾 Storage (Pouches)");
-        println!("─────────────────────────────────────────────────────");
-        for ps in &s.pouch_stats {
-            let tier_label = ps.storage_tier.as_deref().unwrap_or("(no tier)");
-            println!(
-                "   [{}]  net: {}  tier: {}",
-                &ps.service_id[..8],
-                ps.network_id,
-                tier_label,
-            );
-            println!(
-                "      bid: {}   used: {}   avail (eff.): {}",
-                fmt_bytes(ps.storage_bid_bytes),
-                fmt_bytes(ps.storage_used_bytes),
-                fmt_bytes(ps.available_bytes),
-            );
-        }
+    for ps in &s.pouch_stats {
+        super::storage::print_pouch(ps);
         println!();
     }
 
@@ -129,17 +113,5 @@ fn print_status(s: &StatusData) {
         for (tier, count) in tiers {
             println!("   {tier:>4} : {count} peer(s)");
         }
-    }
-}
-
-fn fmt_bytes(b: u64) -> String {
-    if b >= 1_073_741_824 {
-        format!("{:.1} GiB", b as f64 / 1_073_741_824.0)
-    } else if b >= 1_048_576 {
-        format!("{:.1} MiB", b as f64 / 1_048_576.0)
-    } else if b >= 1024 {
-        format!("{:.1} KiB", b as f64 / 1024.0)
-    } else {
-        format!("{b} B")
     }
 }

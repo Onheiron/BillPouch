@@ -1,3 +1,4 @@
+use super::storage::fmt_bytes;
 use crate::client::ControlClient;
 use bp_core::control::protocol::{ControlRequest, ListFilesData, ShareData};
 use chrono::{TimeZone, Utc};
@@ -75,18 +76,6 @@ fn print_ls(d: &ListFilesData) {
             owner,
             ts
         );
-    }
-}
-
-fn fmt_bytes(b: u64) -> String {
-    if b >= 1_073_741_824 {
-        format!("{:.1} GiB", b as f64 / 1_073_741_824.0)
-    } else if b >= 1_048_576 {
-        format!("{:.1} MiB", b as f64 / 1_048_576.0)
-    } else if b >= 1024 {
-        format!("{:.1} KiB", b as f64 / 1024.0)
-    } else {
-        format!("{b} B")
     }
 }
 

@@ -209,10 +209,18 @@ pub struct ExpelData {
 pub struct PouchStat {
     pub service_id: String,
     pub network_id: String,
-    pub storage_tier: Option<String>,
-    pub storage_bid_bytes: u64,
-    pub storage_used_bytes: u64,
-    pub available_bytes: u64,
+    pub tier: String,
+    pub quota_bytes: u64,
+    pub fragment_bytes: u64,
+    pub filler_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreditStat {
+    pub network_id: String,
+    pub offered_bytes: u64,
+    pub credit_bytes: u64,
+    pub used_bytes: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -225,11 +233,9 @@ pub struct NetworkQosSummary {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorageInfoData {
     pub pouches: Vec<PouchStat>,
-    pub total_bid_bytes: u64,
-    pub total_used_bytes: u64,
-    pub total_available_bytes: u64,
-    pub total_files_uploaded: usize,
-    pub total_uploaded_bytes: u64,
+    pub credits: Vec<CreditStat>,
+    pub files_uploaded: usize,
+    pub uploaded_bytes: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

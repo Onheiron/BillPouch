@@ -170,10 +170,9 @@ redundancy therefore come in steps, one per layer; files fill T1 first.
 | T4 | Rock | 1 TiB |
 | T5 | Monolith | 5 TiB |
 
-The *available* space reported by `bp status` / `bp storage` is the free quota
-times the k/N rate the network can currently sustain, one fragment per Pouch
-(largest `k` with `P(ΣX_i ≥ k) ≥ Ph`), for this node's reputation target (`Ph` = 0.70 for R1 … 0.999 for R4; 0 for R0). With few or
-unknown peers it can be 0.
+`bp storage` draws each Pouch as a bar of others' fragments, filler and free
+space (setup = the filled share), and each network's credit as a bar of what
+you have used and what you can still store out of what you offer.
 
 ## Quality, Proof-of-Storage, reputation
 
@@ -219,8 +218,7 @@ the challenger's seed. No one needs to have created the data to check it.
 equal share, in 1 MiB blobs of random data (at most 256 per sponsor per
 minute) generated from a seed that is thrown away, so the Pouch can neither
 compress nor rebuild them. Real fragments evict filler. A Pouch announces how
-much it stores (`stored_bytes`) and how many blobs (`fillers`); your own
-available space counts filler as free.
+much it stores (`stored_bytes`) and how many blobs (`fillers`).
 
 **Reputation.** Every challenge result is counted per device and epoch. In
 the last 10 % of an epoch each member submits an `Observations` op for the
