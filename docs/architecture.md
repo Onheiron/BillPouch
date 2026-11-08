@@ -28,14 +28,17 @@ All shared state lives in `DaemonState` (`control/server.rs`).
 
 ## Files
 
-Everything is under the XDG data dir (`~/.local/share/billpouch/` on Linux):
+The control socket `control.sock` is in the runtime dir (`$XDG_RUNTIME_DIR/billpouch/`,
+or the data dir when there is none). Everything else is under the XDG data dir
+(`~/.local/share/billpouch/` on Linux):
 
 | File | Contents |
 |------|----------|
 | `user_ed25519` | Your user key (OpenSSH format, optionally passphrase-encrypted) |
 | `device.key`, `device_cert.json` | This device's libp2p key and the certificate your user key signed for it |
 | `profile.json` | Alias and creation time |
-| `control.sock`, `daemon.log` | Daemon socket, and the log of a daemon the CLI started |
+| `services.json` | The services this node runs, reopened when the daemon starts |
+| `daemon.log` | The log of a daemon the CLI started |
 | `networks/<name>.json` | Genesis, your key entry and the committed ledger blocks of each network you belong to |
 | `qos.json` | Per-peer QoS (RTT, challenge success rate), saved every 60 s |
 | `files.json` | Local copy of your file index per network, the index heads you have seen, shares not yet acknowledged |

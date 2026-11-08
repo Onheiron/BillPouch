@@ -2,10 +2,21 @@ use crate::error::{BpError, BpResult};
 use directories::ProjectDirs;
 use std::path::PathBuf;
 
-pub fn base_dir() -> BpResult<PathBuf> {
+fn project_dirs() -> BpResult<ProjectDirs> {
     ProjectDirs::from("io", "billpouch", "billpouch")
-        .map(|pd| pd.data_local_dir().to_path_buf())
         .ok_or_else(|| BpError::Config("Cannot determine home directory".into()))
+}
+
+pub fn base_dir() -> BpResult<PathBuf> {
+    Ok(project_dirs()?.data_local_dir().to_path_buf())
+}
+
+pub fn runtime_dir() -> BpResult<PathBuf> {
+    let dirs = project_dirs()?;
+    Ok(dirs
+        .runtime_dir()
+        .unwrap_or_else(|| dirs.data_local_dir())
+        .to_path_buf())
 }
 
 pub fn user_key_path() -> BpResult<PathBuf> {
@@ -29,7 +40,7 @@ pub fn log_path() -> BpResult<PathBuf> {
 }
 
 pub fn socket_path() -> BpResult<PathBuf> {
-    Ok(base_dir()?.join("control.sock"))
+    Ok(runtime_dir()?.join("control.sock"))
 }
 
 pub fn kad_peers_path() -> BpResult<PathBuf> {
@@ -57,5 +68,6 @@ pub fn files_path() -> BpResult<PathBuf> {
 }
 
 pub fn ensure_dirs() -> BpResult<()> {
-    std::fs::create_dir_all(base_dir()?).map_err(BpError::Io)
+    std::fs::create_dir_all(base_dir()?).map_err(BpError::Io)?;
+    std::fs::create_dir_all(runtime_dir()?).map_err(BpError::Io)
 }
