@@ -6,25 +6,31 @@ use crate::{
         },
         server::DaemonState,
     },
-    files::{seal_file, Grant, Head, Index, Manifest, PendingShare},
+    files::{
+        new_file_id, Action, Grant, Head, Index, Manifest, Order, PendingShare, CHUNK_BYTES,
+        ORDER_RESENDS,
+    },
+    membership::new_key,
     network::{
         fragment_gossip::{FragmentIndexAnnouncement, FragmentPointer},
         FragmentResponse, Gossip, NetworkCommand,
     },
     service::ServiceType,
+    storage::ChunkCipher,
 };
 use libp2p::PeerId;
 use std::collections::HashSet;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const DEFAULT_PH: f64 = 0.999;
 const FETCH_TIMEOUT_SECS: u64 = 10;
 const UNOBSERVED_STABILITY: f64 = 0.8;
 
-pub struct StoredBlob {
-    pub chunk_id: String,
+#[derive(Default)]
+pub struct Stored {
+    pub chunks: Vec<String>,
     pub k: usize,
     pub n: usize,
-    pub q: f64,
     pub pe: f64,
     pub stored: usize,
     pub distributed: usize,
@@ -40,13 +46,25 @@ pub fn rank(chunk_id: &str, peers: &mut [String]) {
     });
 }
 
-pub async fn store_blob(
+async fn publish(state: &DaemonState, network_id: &str, message: Gossip) {
+    let _ = state
+        .net_tx
+        .send(NetworkCommand::Publish {
+            network_id: network_id.to_string(),
+            message,
+        })
+        .await;
+}
+
+async fn store_chunk(
     state: &DaemonState,
     network_id: &str,
     data: &[u8],
+    grant: &Grant,
     ph: f64,
     q_target: f64,
-) -> Result<StoredBlob, String> {
+    total: &mut Stored,
+) -> Result<String, String> {
     let local = state
         .storage_managers
         .read()
@@ -86,23 +104,21 @@ pub async fn store_blob(
     };
     let plan = coding_params::plan(&stabilities, ph, q_target).map_err(|e| e.to_string())?;
     let fragments = rlnc::encode(data, plan.k, plan.n).map_err(|e| format!("Encode error: {e}"))?;
-    let grant = Grant::sign(&state.identity, &chunk_id, &state.identity.fingerprint)
-        .map_err(|e| e.to_string())?;
+    let owner = crate::storage::ChunkOwner {
+        owner_key: grant.owner_key.clone(),
+        file_id: grant.file_id.clone(),
+    };
 
-    let mut stored = 0;
     let mut pointers = Vec::new();
     let mut fragments = fragments.iter();
     for (node, &count) in nodes.iter().zip(&plan.per_node) {
         for fragment in fragments.by_ref().take(count) {
             if *node == me {
                 let Some(sm) = &local else { continue };
-                let result = sm
-                    .write()
-                    .unwrap()
-                    .store_fragment(fragment, &state.identity.user_key);
+                let result = sm.write().unwrap().store_fragment(fragment, &owner);
                 match result {
                     Ok(evicted) => {
-                        stored += 1;
+                        total.stored += 1;
                         if !evicted.is_empty() {
                             publish(state, network_id, Gossip::FillerEvicted { blobs: evicted })
                                 .await;
@@ -133,7 +149,7 @@ pub async fn store_blob(
             }
         }
     }
-    let distributed = pointers.len();
+    total.distributed += pointers.len();
     if !pointers.is_empty() {
         let ann = FragmentIndexAnnouncement {
             network_id: network_id.to_string(),
@@ -148,25 +164,22 @@ pub async fn store_blob(
             .upsert(ann.clone());
         publish(state, network_id, Gossip::Index(ann)).await;
     }
-    tracing::info!(chunk_id=%chunk_id, k = plan.k, n = plan.n, pe = plan.pe, stored, distributed, "blob stored");
-    Ok(StoredBlob {
-        chunk_id,
-        k: plan.k,
-        n: plan.n,
-        q: plan.q(),
-        pe: plan.pe,
-        stored,
-        distributed,
-        peers: nodes.len(),
-    })
+    if total.chunks.is_empty() || plan.pe < total.pe {
+        total.k = plan.k;
+        total.n = plan.n;
+        total.pe = plan.pe;
+    }
+    total.peers = total.peers.max(nodes.len());
+    total.chunks.push(chunk_id.clone());
+    Ok(chunk_id)
 }
 
-pub async fn fetch_blob(
+pub async fn fetch_chunk(
     state: &DaemonState,
     network_id: &str,
     chunk_id: &str,
     grant: &Grant,
-) -> Result<(Vec<u8>, usize, usize), String> {
+) -> Result<(Vec<u8>, usize), String> {
     let mut fragments: Vec<EncodedFragment> = Vec::new();
     for sm in state.storage_managers.read().unwrap().values() {
         let sm = sm.read().unwrap();
@@ -256,55 +269,101 @@ pub async fn fetch_blob(
             "Chunk '{chunk_id}' not found locally or on remote peers"
         ));
     }
-    let used = fragments.len();
-    rlnc::decode(&fragments)
-        .map(|data| (data, used, remote_count))
-        .map_err(|e| format!("Decode failed: {e}"))
+    let data = rlnc::decode(&fragments).map_err(|e| format!("Decode failed: {e}"))?;
+    if rlnc::chunk_hash(&data) != chunk_id {
+        return Err(format!("chunk '{chunk_id}' decoded to different data"));
+    }
+    Ok((data, remote_count))
 }
 
-async fn publish(state: &DaemonState, network_id: &str, message: Gossip) {
-    let _ = state
-        .net_tx
-        .send(NetworkCommand::Publish {
-            network_id: network_id.to_string(),
-            message,
-        })
-        .await;
+async fn read_up_to(file: &mut tokio::fs::File, limit: usize) -> std::io::Result<Vec<u8>> {
+    let mut buf = vec![0u8; limit];
+    let mut filled = 0;
+    while filled < limit {
+        let n = file.read(&mut buf[filled..]).await?;
+        if n == 0 {
+            break;
+        }
+        filled += n;
+    }
+    buf.truncate(filled);
+    Ok(buf)
 }
 
 pub async fn put_file(
     state: &DaemonState,
-    data: Vec<u8>,
+    path: std::path::PathBuf,
     ph: Option<f64>,
     q_target: Option<f64>,
     network_id: String,
     file_name: Option<String>,
 ) -> ControlResponse {
     let ph = ph.unwrap_or(DEFAULT_PH);
-    let sealed = match seal_file(&data) {
-        Ok(s) => s,
-        Err(e) => return ControlResponse::err(format!("Encryption error: {e}")),
+    let q_target = q_target.unwrap_or(1.0);
+    let mut file = match tokio::fs::File::open(&path).await {
+        Ok(f) => f,
+        Err(e) => return ControlResponse::err(format!("cannot read {}: {e}", path.display())),
     };
-    let blob = match store_blob(
-        state,
-        &network_id,
-        &sealed.ciphertext,
-        ph,
-        q_target.unwrap_or(1.0),
-    )
-    .await
-    {
-        Ok(b) => b,
-        Err(e) => return ControlResponse::err(e),
+    let key = new_key();
+    let cipher = ChunkCipher::from_raw_key(key);
+    let file_id = new_file_id();
+    let grant = match Grant::sign(&state.identity, &file_id, &state.identity.fingerprint) {
+        Ok(g) => g,
+        Err(e) => return ControlResponse::err(e.to_string()),
     };
-    let name = file_name.unwrap_or_else(|| blob.chunk_id[..12].to_string());
+    let mut total = Stored::default();
+    let mut size = 0u64;
+    loop {
+        let plain = match read_up_to(&mut file, CHUNK_BYTES).await {
+            Ok(p) => p,
+            Err(e) => return ControlResponse::err(format!("cannot read {}: {e}", path.display())),
+        };
+        if plain.is_empty() && size > 0 {
+            break;
+        }
+        if plain.is_empty() {
+            return ControlResponse::err(format!("{} is empty", path.display()));
+        }
+        size += plain.len() as u64;
+        let last = plain.len() < CHUNK_BYTES;
+        let sealed = match cipher.encrypt(&plain) {
+            Ok(c) => c,
+            Err(e) => return ControlResponse::err(format!("Encryption error: {e}")),
+        };
+        if let Err(e) = store_chunk(
+            state,
+            &network_id,
+            &sealed,
+            &grant,
+            ph,
+            q_target,
+            &mut total,
+        )
+        .await
+        {
+            if !total.chunks.is_empty() {
+                send_order(state, &network_id, &file_id, Action::Delete).await;
+            }
+            return ControlResponse::err(e);
+        }
+        if last {
+            break;
+        }
+    }
+    let name = file_name.unwrap_or_else(|| {
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(&file_id)
+            .to_string()
+    });
     let manifest = match Manifest::new(
         &state.identity,
         &network_id,
         &name,
-        data.len() as u64,
-        &blob.chunk_id,
-        &sealed.key,
+        size,
+        &file_id,
+        total.chunks.clone(),
+        &key,
     ) {
         Ok(m) => m,
         Err(e) => return ControlResponse::err(e.to_string()),
@@ -313,87 +372,126 @@ pub async fn put_file(
     publish_index(state, &network_id).await;
     ControlResponse::ok(PutFileData {
         message: format!(
-            "Stored {}/{} locally, pushed {} to {} remote pouch(es) — chunk_id: {}",
-            blob.stored, blob.n, blob.distributed, blob.peers, blob.chunk_id
+            "Stored {} chunk(s) of '{name}': {} fragment(s) on this node, {} pushed to {} Pouch(es) — file_id: {file_id}",
+            total.chunks.len(),
+            total.stored,
+            total.distributed,
+            total.peers
         ),
-        chunk_id: blob.chunk_id,
-        k: blob.k,
-        n: blob.n,
-        q: blob.q,
+        file_id,
+        chunks: total.chunks.len(),
+        size_bytes: size,
+        k: total.k,
+        n: total.n,
         ph,
-        pe: blob.pe,
-        fragments_stored: blob.stored,
-        fragments_distributed: blob.distributed,
+        pe: total.pe,
+        fragments_stored: total.stored,
+        fragments_distributed: total.distributed,
     })
 }
 
-fn manifest_of(state: &DaemonState, network_id: &str, chunk_id: &str) -> Option<Manifest> {
+fn manifest_of(state: &DaemonState, network_id: &str, file_id: &str) -> Option<Manifest> {
     state
         .files
         .read()
         .unwrap()
         .index(network_id)?
         .files
-        .get(chunk_id)
+        .get(file_id)
         .cloned()
+}
+
+fn not_yours(file_id: &str, network_id: &str) -> ControlResponse {
+    ControlResponse::err(format!(
+        "'{file_id}' is not one of your files on '{network_id}' (see bp ls)"
+    ))
 }
 
 pub async fn get_file(
     state: &DaemonState,
-    chunk_id: String,
+    file_id: String,
     network_id: String,
+    output: std::path::PathBuf,
 ) -> ControlResponse {
-    let Some(manifest) = manifest_of(state, &network_id, &chunk_id) else {
-        return ControlResponse::err(format!(
-            "'{chunk_id}' is not one of your files on '{network_id}' (see bp ls)"
-        ));
+    let Some(manifest) = manifest_of(state, &network_id, &file_id) else {
+        return not_yours(&file_id, &network_id);
     };
-    let grant = match manifest.grant_for(&state.identity.fingerprint) {
-        Ok(g) => g.clone(),
+    let (grant, key) = match manifest
+        .grant_for(&state.identity.fingerprint)
+        .and_then(|g| Ok((g.clone(), manifest.file_key(&state.identity)?)))
+    {
+        Ok(r) => r,
         Err(e) => return ControlResponse::err(e.to_string()),
     };
-    let (ciphertext, fragments_used, fragments_remote) =
-        match fetch_blob(state, &network_id, &chunk_id, &grant).await {
-            Ok(r) => r,
-            Err(e) => return ControlResponse::err(e),
+    let cipher = ChunkCipher::from_raw_key(key);
+    let partial = output.with_extension("bp-partial");
+    let mut out = match tokio::fs::File::create(&partial).await {
+        Ok(f) => f,
+        Err(e) => return ControlResponse::err(format!("cannot write {}: {e}", partial.display())),
+    };
+    let mut fragments_remote = 0;
+    for chunk_id in &manifest.chunks {
+        let result = fetch_chunk(state, &network_id, chunk_id, &grant)
+            .await
+            .and_then(|(sealed, remote)| {
+                fragments_remote += remote;
+                cipher
+                    .decrypt(&sealed)
+                    .map_err(|e| format!("Decryption failed: {e}"))
+            });
+        let plain = match result {
+            Ok(p) => p,
+            Err(e) => {
+                let _ = tokio::fs::remove_file(&partial).await;
+                return ControlResponse::err(e);
+            }
         };
-    match manifest.open(&state.identity, &ciphertext) {
-        Ok(data) => ControlResponse::ok(GetFileData {
-            chunk_id,
-            data,
-            fragments_used,
-            fragments_remote,
-        }),
-        Err(e) => ControlResponse::err(format!("Decryption failed: {e}")),
+        if let Err(e) = out.write_all(&plain).await {
+            return ControlResponse::err(format!("cannot write {}: {e}", partial.display()));
+        }
     }
+    if let Err(e) = out
+        .flush()
+        .await
+        .and(tokio::fs::rename(&partial, &output).await)
+    {
+        return ControlResponse::err(format!("cannot write {}: {e}", output.display()));
+    }
+    ControlResponse::ok(GetFileData {
+        file_id,
+        file_name: manifest.file_name,
+        size_bytes: manifest.size_bytes,
+        chunks: manifest.chunks.len(),
+        fragments_remote,
+        output: output.display().to_string(),
+    })
+}
+
+fn member_key(state: &DaemonState, network_id: &str, member: &str) -> Option<String> {
+    let chains = state.chains.read().unwrap();
+    let ledger = chains.get(network_id)?.ledger();
+    ledger
+        .is_member(member)
+        .then(|| ledger.members[member].key.clone())
 }
 
 pub async fn share_file(
     state: &DaemonState,
     network_id: String,
-    chunk_id: String,
+    file_id: String,
     member: String,
 ) -> ControlResponse {
-    let member_key = {
-        let chains = state.chains.read().unwrap();
-        let ledger = chains.get(&network_id).map(|c| c.ledger());
-        match ledger.and_then(|l| l.is_member(&member).then(|| l.members[&member].key.clone())) {
-            Some(key) => key,
-            None => {
-                return ControlResponse::err(format!("{member} is not a member of '{network_id}'"))
-            }
-        }
+    let Some(member_key) = member_key(state, &network_id, &member) else {
+        return ControlResponse::err(format!("{member} is not a member of '{network_id}'"));
     };
-    let Some(mut manifest) = manifest_of(state, &network_id, &chunk_id) else {
-        return ControlResponse::err(format!(
-            "'{chunk_id}' is not one of your files on '{network_id}' (see bp ls)"
-        ));
+    let Some(mut manifest) = manifest_of(state, &network_id, &file_id) else {
+        return not_yours(&file_id, &network_id);
     };
     if let Err(e) = manifest.share_with(&state.identity, &member_key) {
         return ControlResponse::err(e.to_string());
     }
     let file_name = manifest.file_name.clone();
-    add_to_index(state, &network_id, manifest.clone());
+    replace_in_index(state, &network_id, manifest.clone());
     {
         let mut files = state.files.write().unwrap();
         files.outbox.push(PendingShare {
@@ -415,10 +513,121 @@ pub async fn share_file(
     publish_index(state, &network_id).await;
     ControlResponse::ok(ShareData {
         network_id,
-        chunk_id,
+        file_id,
         file_name,
         member,
     })
+}
+
+pub async fn unshare_file(
+    state: &DaemonState,
+    network_id: String,
+    file_id: String,
+    member: String,
+) -> ControlResponse {
+    let Some(mut manifest) = manifest_of(state, &network_id, &file_id) else {
+        return not_yours(&file_id, &network_id);
+    };
+    if let Err(e) = manifest.revoke(&state.identity, &member) {
+        return ControlResponse::err(e.to_string());
+    }
+    let file_name = manifest.file_name.clone();
+    replace_in_index(state, &network_id, manifest);
+    {
+        let mut files = state.files.write().unwrap();
+        files
+            .outbox
+            .retain(|s| !(s.manifest.file_id == file_id && s.to == member));
+        files.save();
+    }
+    send_order(
+        state,
+        &network_id,
+        &file_id,
+        Action::Revoke {
+            member: member.clone(),
+        },
+    )
+    .await;
+    publish_index(state, &network_id).await;
+    ControlResponse::ok(ShareData {
+        network_id,
+        file_id,
+        file_name,
+        member,
+    })
+}
+
+pub async fn delete_file(
+    state: &DaemonState,
+    network_id: String,
+    file_id: String,
+) -> ControlResponse {
+    let Some(manifest) = manifest_of(state, &network_id, &file_id) else {
+        return not_yours(&file_id, &network_id);
+    };
+    let mine = manifest.owner == state.identity.fingerprint;
+    {
+        let mut files = state.files.write().unwrap();
+        if let Some(index) = files.indexes.get_mut(&network_id) {
+            index.remove(&file_id);
+        }
+        files.outbox.retain(|s| s.manifest.file_id != file_id);
+        files.save();
+    }
+    if mine {
+        send_order(state, &network_id, &file_id, Action::Delete).await;
+    }
+    publish_index(state, &network_id).await;
+    ControlResponse::ok(serde_json::json!({
+        "network_id": network_id,
+        "file_id": file_id,
+        "file_name": manifest.file_name,
+        "removed_from_network": mine,
+    }))
+}
+
+async fn send_order(state: &DaemonState, network_id: &str, file_id: &str, action: Action) {
+    let order = match Order::sign(&state.identity, file_id, action) {
+        Ok(o) => o,
+        Err(e) => return tracing::warn!("cannot sign order: {e}"),
+    };
+    apply_order(state, &order);
+    state
+        .files
+        .write()
+        .unwrap()
+        .queue_order(network_id, order.clone());
+    publish(
+        state,
+        network_id,
+        Gossip::Order {
+            order: Box::new(order),
+        },
+    )
+    .await;
+}
+
+fn apply_order(state: &DaemonState, order: &Order) {
+    let Some(owner) = order.owner() else {
+        return;
+    };
+    for sm in state.storage_managers.read().unwrap().values() {
+        let mut sm = sm.write().unwrap();
+        let result = match &order.action {
+            Action::Delete => sm
+                .delete_file(&order.file_id, &order.owner_key)
+                .map(|freed| freed > 0),
+            Action::Revoke { member } => sm.revoke(&order.file_id, &order.owner_key, member),
+        };
+        match result {
+            Ok(true) => {
+                tracing::info!(file = %order.file_id, owner = %owner, action = ?order.action, "owner order applied")
+            }
+            Ok(false) => {}
+            Err(e) => tracing::warn!("cannot apply order: {e}"),
+        }
+    }
 }
 
 pub fn list_files(state: &DaemonState, network_id: &str) -> ListFilesData {
@@ -431,12 +640,13 @@ pub fn list_files(state: &DaemonState, network_id: &str) -> ListFilesData {
         .map(|m| FileEntry {
             file_name: m.file_name.clone(),
             size_bytes: m.size_bytes,
-            chunk_id: m.chunk_id.clone(),
+            file_id: m.file_id.clone(),
+            chunks: m.chunks.len(),
             network_id: m.network.clone(),
             uploaded_at: m.uploaded_at,
             owner: m.owner.clone(),
             mine: m.owner == state.identity.fingerprint,
-            shared_with: m.wraps.len() - 1,
+            shared_with: m.wraps.len().saturating_sub(1),
         })
         .collect();
     ListFilesData {
@@ -458,23 +668,47 @@ fn add_to_index(state: &DaemonState, network_id: &str, manifest: Manifest) -> bo
     changed
 }
 
+fn replace_in_index(state: &DaemonState, network_id: &str, manifest: Manifest) {
+    let mut files = state.files.write().unwrap();
+    files
+        .indexes
+        .entry(network_id.to_string())
+        .or_default()
+        .files
+        .insert(manifest.file_id.clone(), manifest);
+    files.save();
+}
+
 pub async fn publish_index(state: &DaemonState, network_id: &str) {
-    let (index, version) = {
+    let (index, previous) = {
         let files = state.files.read().unwrap();
         let index = files.index(network_id).cloned().unwrap_or_default();
-        let version = index.version + 1;
-        (index, version)
+        let previous = files
+            .head(network_id, &state.identity.fingerprint)
+            .map(|h| h.file_id.clone());
+        (index, previous)
     };
-    let sealed = Index { version, ..index }.seal(&state.identity);
-    let blob = match sealed {
+    let version = index.version + 1;
+    let blob = match (Index { version, ..index }).seal(&state.identity) {
         Ok(b) => b,
         Err(e) => return tracing::warn!("cannot seal the file index: {e}"),
     };
-    let stored = match store_blob(state, network_id, &blob, DEFAULT_PH, 1.0).await {
-        Ok(s) => s,
-        Err(e) => return tracing::warn!(network = %network_id, "cannot store the file index: {e}"),
+    let file_id = new_file_id();
+    let grant = match Grant::sign(&state.identity, &file_id, &state.identity.fingerprint) {
+        Ok(g) => g,
+        Err(e) => return tracing::warn!("cannot sign the index grant: {e}"),
     };
-    let head = match Head::sign(&state.identity, network_id, version, &stored.chunk_id) {
+    let mut total = Stored::default();
+    for piece in blob.chunks(CHUNK_BYTES) {
+        if let Err(e) = store_chunk(
+            state, network_id, piece, &grant, DEFAULT_PH, 1.0, &mut total,
+        )
+        .await
+        {
+            return tracing::warn!(network = %network_id, "cannot store the file index: {e}");
+        }
+    }
+    let head = match Head::sign(&state.identity, network_id, version, &file_id, total.chunks) {
         Ok(h) => h,
         Err(e) => return tracing::warn!("cannot sign the index head: {e}"),
     };
@@ -496,17 +730,25 @@ pub async fn publish_index(state: &DaemonState, network_id: &str) {
         },
     )
     .await;
+    if let Some(previous) = previous {
+        send_order(state, network_id, &previous, Action::Delete).await;
+    }
 }
 
 async fn pull_own_index(state: &DaemonState, network_id: &str, head: &Head) {
-    let grant = match Grant::sign(&state.identity, &head.chunk_id, &state.identity.fingerprint) {
+    let grant = match Grant::sign(&state.identity, &head.file_id, &state.identity.fingerprint) {
         Ok(g) => g,
         Err(e) => return tracing::warn!("cannot sign a grant for own index: {e}"),
     };
-    let blob = match fetch_blob(state, network_id, &head.chunk_id, &grant).await {
-        Ok((blob, _, _)) => blob,
-        Err(e) => return tracing::debug!(network = %network_id, "own index not reachable yet: {e}"),
-    };
+    let mut blob = Vec::new();
+    for chunk_id in &head.chunks {
+        match fetch_chunk(state, network_id, chunk_id, &grant).await {
+            Ok((piece, _)) => blob.extend_from_slice(&piece),
+            Err(e) => {
+                return tracing::debug!(network = %network_id, "own index not reachable yet: {e}")
+            }
+        }
+    }
     let remote = match Index::open(&state.identity, &blob) {
         Ok(i) => i,
         Err(e) => return tracing::warn!("cannot open own index: {e}"),
@@ -572,7 +814,7 @@ pub async fn on_gossip(state: &DaemonState, network_id: &str, gossip: Gossip) {
             {
                 return;
             }
-            let chunk_id = manifest.chunk_id.clone();
+            let file_id = manifest.file_id.clone();
             tracing::info!(file = %manifest.file_name, from = %manifest.owner, "file shared with you");
             if add_to_index(state, network_id, *manifest) {
                 publish_index(state, network_id).await;
@@ -581,20 +823,42 @@ pub async fn on_gossip(state: &DaemonState, network_id: &str, gossip: Gossip) {
                 state,
                 network_id,
                 Gossip::ShareAck {
-                    chunk_id,
+                    file_id,
                     member: me,
                 },
             )
             .await;
         }
-        Gossip::ShareAck { chunk_id, member } => {
+        Gossip::ShareAck { file_id, member } => {
             let mut files = state.files.write().unwrap();
             let before = files.outbox.len();
             files.outbox.retain(|s| {
-                !(s.network == network_id && s.to == member && s.manifest.chunk_id == chunk_id)
+                !(s.network == network_id && s.to == member && s.manifest.file_id == file_id)
             });
             if files.outbox.len() != before {
                 files.save();
+            }
+        }
+        Gossip::Order { order } => {
+            apply_order(state, &order);
+            let revoked_for_me =
+                matches!(&order.action, Action::Revoke { member } if *member == me);
+            if matches!(order.action, Action::Delete) || revoked_for_me {
+                let removed = {
+                    let mut files = state.files.write().unwrap();
+                    let removed = files.indexes.get_mut(network_id).is_some_and(|index| {
+                        index
+                            .files
+                            .get(&order.file_id)
+                            .is_some_and(|m| Some(m.owner.as_str()) == order.owner().as_deref())
+                            && index.remove(&order.file_id).is_some()
+                    });
+                    files.save();
+                    removed
+                };
+                if removed {
+                    publish_index(state, network_id).await;
+                }
             }
         }
         _ => {}
@@ -625,22 +889,40 @@ pub async fn sync_cycle(state: &DaemonState) {
             None => Gossip::HeadRequest { owner: me.clone() },
         };
         publish(state, &network_id, message).await;
-        let pending: Vec<PendingShare> = state
-            .files
-            .read()
-            .unwrap()
-            .outbox
-            .iter()
-            .filter(|s| s.network == network_id)
-            .cloned()
-            .collect();
-        for share in pending {
+        let (shares, orders) = {
+            let mut files = state.files.write().unwrap();
+            let shares: Vec<PendingShare> = files
+                .outbox
+                .iter()
+                .filter(|s| s.network == network_id)
+                .cloned()
+                .collect();
+            let mut orders = Vec::new();
+            for pending in files.orders.iter_mut().filter(|o| o.network == network_id) {
+                pending.sends += 1;
+                orders.push(pending.order.clone());
+            }
+            files.orders.retain(|o| o.sends < ORDER_RESENDS);
+            files.save();
+            (shares, orders)
+        };
+        for share in shares {
             publish(
                 state,
                 &network_id,
                 Gossip::Share {
                     to: share.to,
                     manifest: Box::new(share.manifest),
+                },
+            )
+            .await;
+        }
+        for order in orders {
+            publish(
+                state,
+                &network_id,
+                Gossip::Order {
+                    order: Box::new(order),
                 },
             )
             .await;

@@ -411,6 +411,8 @@ dependencies = [
  "base64",
  "bp-core",
  "clap",
+ "hex",
+ "rand 0.8.5",
  "serde",
  "serde_json",
  "tokio",

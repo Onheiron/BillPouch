@@ -257,14 +257,14 @@ struct ShareBody {
 #[instrument(skip_all)]
 async fn share_file(
     State(state): State<AppState>,
-    Path(chunk_id): Path<String>,
+    Path(file_id): Path<String>,
     Json(body): Json<ShareBody>,
 ) -> Response {
     respond(
         &state,
         ControlRequest::Share {
             network_id: body.network_id,
-            chunk_id,
+            file_id,
             member: body.member,
         },
         StatusCode::OK,
@@ -309,66 +309,123 @@ async fn network_leave(State(state): State<AppState>, Json(body): Json<NetworkBo
 
 #[derive(Deserialize)]
 struct PutFileBody {
-    chunk_data: String,
+    data: String,
     network_id: String,
     ph: Option<f64>,
     q_target: Option<f64>,
     file_name: Option<String>,
 }
 
+fn scratch_file() -> std::io::Result<PathBuf> {
+    let dir = config::base_dir()
+        .map_err(|e| std::io::Error::other(e.to_string()))?
+        .join("api");
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir.join(hex::encode(rand::random::<[u8; 8]>())))
+}
+
 #[instrument(skip_all)]
 async fn put_file(State(state): State<AppState>, Json(body): Json<PutFileBody>) -> Response {
-    let raw = match B64.decode(&body.chunk_data) {
+    let raw = match B64.decode(&body.data) {
         Ok(b) => b,
         Err(e) => {
             return api_error(
                 StatusCode::UNPROCESSABLE_ENTITY,
-                format!("chunk_data is not valid base64: {e}"),
+                format!("data is not valid base64: {e}"),
             )
         }
     };
-
+    let path = match scratch_file() {
+        Ok(p) => p,
+        Err(e) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+    if let Err(e) = tokio::fs::write(&path, &raw).await {
+        return api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+    }
     let req = ControlRequest::PutFile {
-        chunk_data: raw,
+        path: path.clone(),
         network_id: body.network_id,
         ph: body.ph,
         q_target: body.q_target,
         file_name: body.file_name,
     };
-
-    respond(&state, req, StatusCode::CREATED).await
+    let response = respond(&state, req, StatusCode::CREATED).await;
+    let _ = tokio::fs::remove_file(&path).await;
+    response
 }
 
 #[derive(Deserialize)]
-struct GetFileQuery {
+struct FileQuery {
     network: String,
 }
 
 #[instrument(skip_all)]
 async fn get_file(
     State(state): State<AppState>,
-    Path(chunk_id): Path<String>,
-    Query(query): Query<GetFileQuery>,
+    Path(file_id): Path<String>,
+    Query(query): Query<FileQuery>,
 ) -> Response {
-    let req = ControlRequest::GetFile {
-        chunk_id: chunk_id.clone(),
-        network_id: query.network,
+    let output = match scratch_file() {
+        Ok(p) => p,
+        Err(e) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     };
-
+    let req = ControlRequest::GetFile {
+        file_id,
+        network_id: query.network,
+        output: output.clone(),
+    };
     let data = match call_daemon(&state, req).await {
         Ok(data) => data,
         Err(resp) => return *resp,
     };
-    match serde_json::from_value::<GetFileData>(data) {
-        Ok(d) => Json(serde_json::json!({
-            "chunk_id": d.chunk_id,
-            "data": B64.encode(&d.data),
-            "fragments_used": d.fragments_used,
-            "fragments_remote": d.fragments_remote,
+    let bytes = tokio::fs::read(&output).await;
+    let _ = tokio::fs::remove_file(&output).await;
+    match (serde_json::from_value::<GetFileData>(data), bytes) {
+        (Ok(d), Ok(bytes)) => Json(serde_json::json!({
+            "file_id": d.file_id,
+            "file_name": d.file_name,
+            "size_bytes": d.size_bytes,
+            "data": B64.encode(&bytes),
         }))
         .into_response(),
-        Err(e) => api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        (Err(e), _) => api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        (_, Err(e)) => api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
+}
+
+#[instrument(skip_all)]
+async fn delete_file(
+    State(state): State<AppState>,
+    Path(file_id): Path<String>,
+    Query(query): Query<FileQuery>,
+) -> Response {
+    respond(
+        &state,
+        ControlRequest::DeleteFile {
+            file_id,
+            network_id: query.network,
+        },
+        StatusCode::OK,
+    )
+    .await
+}
+
+#[instrument(skip_all)]
+async fn unshare_file(
+    State(state): State<AppState>,
+    Path((file_id, member)): Path<(String, String)>,
+    Query(query): Query<FileQuery>,
+) -> Response {
+    respond(
+        &state,
+        ControlRequest::Unshare {
+            network_id: query.network,
+            file_id,
+            member,
+        },
+        StatusCode::OK,
+    )
+    .await
 }
 
 #[derive(Deserialize)]
@@ -424,8 +481,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/networks/:network_id/expulsions", post(network_expel))
         .route("/networks/leave", post(network_leave))
         .route("/files", post(put_file))
-        .route("/files/:chunk_id", get(get_file))
-        .route("/files/:chunk_id/shares", post(share_file))
+        .route("/files/:file_id", get(get_file).delete(delete_file))
+        .route("/files/:file_id/shares", post(share_file))
+        .route("/files/:file_id/shares/:member", delete(unshare_file))
         .route("/relay/connect", post(relay_connect))
         .with_state(state);
 

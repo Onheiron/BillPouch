@@ -42,7 +42,7 @@ fn print_ls(d: &ListFilesData) {
 
     println!(
         "  {:<32}  {:>10}  {:<18}  {:<16}  Uploaded",
-        "Name", "Size", "chunk_id", "Owner"
+        "Name", "Size", "file_id", "Owner"
     );
     println!("  {}", "─".repeat(96));
 
@@ -71,7 +71,7 @@ fn print_ls(d: &ListFilesData) {
             "  {:<32}  {:>10}  {:<18}  {:<16}  {}",
             name,
             fmt_bytes(f.size_bytes),
-            &f.chunk_id[..18.min(f.chunk_id.len())],
+            f.file_id,
             owner,
             ts
         );
@@ -90,12 +90,12 @@ fn fmt_bytes(b: u64) -> String {
     }
 }
 
-pub async fn share(network_id: String, chunk_id: String, member: String) -> anyhow::Result<()> {
+pub async fn share(network_id: String, file_id: String, member: String) -> anyhow::Result<()> {
     let data = ControlClient::connect()
         .await?
         .request(ControlRequest::Share {
             network_id,
-            chunk_id,
+            file_id,
             member,
         })
         .await?
@@ -105,5 +105,41 @@ pub async fn share(network_id: String, chunk_id: String, member: String) -> anyh
         "🔑 '{}' is now shared with {} on '{}'.",
         d.file_name, d.member, d.network_id
     );
+    Ok(())
+}
+
+pub async fn unshare(network_id: String, file_id: String, member: String) -> anyhow::Result<()> {
+    let data = ControlClient::connect()
+        .await?
+        .request(ControlRequest::Unshare {
+            network_id,
+            file_id,
+            member,
+        })
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("empty response from daemon"))?;
+    let d: ShareData = serde_json::from_value(data)?;
+    println!(
+        "🔒 {} can no longer fetch '{}' on '{}'.",
+        d.member, d.file_name, d.network_id
+    );
+    Ok(())
+}
+
+pub async fn rm(network_id: String, file_id: String) -> anyhow::Result<()> {
+    let data = ControlClient::connect()
+        .await?
+        .request(ControlRequest::DeleteFile {
+            file_id,
+            network_id,
+        })
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("empty response from daemon"))?;
+    let name = data["file_name"].as_str().unwrap_or("?");
+    if data["removed_from_network"].as_bool().unwrap_or(false) {
+        println!("🗑  '{name}' deleted: the Pouches drop its fragments.");
+    } else {
+        println!("🗑  '{name}' removed from your files (it stays with its owner).");
+    }
     Ok(())
 }

@@ -29,9 +29,11 @@ Types: `bp_core::control::protocol`; client helper: `bp_core::control::client::s
 | `members` | `network_id` | Members with tier, weight, devices, pending expulsions; expelled members |
 | `expel` | `network_id`, `member` (fingerprint) | Proposes or approves an expulsion |
 | `leave` | `network_id`, `force` | Leaves a network |
-| `put_file` | `chunk_data` (bytes), `network_id`, `ph`?, `q_target`?, `file_name`? | Stores a file, returns `chunk_id`, `k`, `n`, placement counts |
-| `get_file` | `chunk_id`, `network_id` | Returns the decrypted bytes of a file in your index |
-| `share` | `network_id`, `chunk_id`, `member` (fingerprint) | Wraps the file key for a member and delivers it |
+| `put_file` | `path` (on the daemon's machine), `network_id`, `ph`?, `q_target`?, `file_name`? | Streams a file in, returns `file_id`, `chunks`, `k`, `n`, placement counts |
+| `get_file` | `file_id`, `network_id`, `output` (path) | Writes the decrypted file to `output` |
+| `delete_file` | `file_id`, `network_id` | Deletes one of your files, or drops a shared one from your index |
+| `share` | `network_id`, `file_id`, `member` (fingerprint) | Wraps the file key for a member and delivers it |
+| `unshare` | `network_id`, `file_id`, `member` | Revokes a member's access |
 | `list_files` | `network_id` (`""` = all) | Your index: your files and those shared with you (`owner`, `mine`, `shared_with`) |
 | `storage_info` | `network_id` (`""` = all) | Per-Pouch and aggregate storage |
 | `connect_relay` | `relay_addr` | Dials a relay and reserves a circuit |
@@ -57,9 +59,11 @@ Errors are `{"error": "…"}` with 503 (daemon unreachable), 422 (invalid base64
 | GET | `/networks/:id/members` | — | `members` |
 | POST | `/networks/:id/expulsions` | `{member}` (fingerprint) | `expel` |
 | POST | `/networks/leave` | `{network_id, force?}` | `leave` |
-| POST | `/files` | `{chunk_data: base64, network_id, ph?, q_target?, file_name?}` → 201 | `put_file` |
-| GET | `/files/:chunk_id` | `?network=<id>` → `{chunk_id, data: base64, …}` | `get_file` |
-| POST | `/files/:chunk_id/shares` | `{network_id, member}` | `share` |
+| POST | `/files` | `{data: base64, network_id, ph?, q_target?, file_name?}` → 201 | `put_file` (through a temporary file) |
+| GET | `/files/:file_id` | `?network=<id>` → `{file_id, file_name, size_bytes, data: base64}` | `get_file` |
+| DELETE | `/files/:file_id` | `?network=<id>` | `delete_file` |
+| POST | `/files/:file_id/shares` | `{network_id, member}` | `share` |
+| DELETE | `/files/:file_id/shares/:member` | `?network=<id>` | `unshare` |
 | POST | `/relay/connect` | `{relay_addr}` | `connect_relay` |
 
 There is no authentication: keep it on `127.0.0.1`.

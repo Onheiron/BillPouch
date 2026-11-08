@@ -1,4 +1,8 @@
-use bp_core::{control::protocol::ControlRequest, daemon, identity::Identity};
+use bp_core::{
+    control::protocol::{ControlRequest, PutFileData},
+    daemon,
+    identity::Identity,
+};
 use std::path::PathBuf;
 
 use crate::client::ControlClient;
@@ -13,54 +17,31 @@ pub async fn put(
     if !Identity::exists()? {
         anyhow::bail!("Not logged in. Run `bp login` first.");
     }
-
     if !daemon::is_running() {
         anyhow::bail!("Daemon is not running. Start a Pouch first with: bp hatch pouch");
     }
-
-    let chunk_data = tokio::fs::read(&path)
-        .await
+    let path = std::fs::canonicalize(&path)
         .map_err(|e| anyhow::anyhow!("Cannot read {:?}: {}", path, e))?;
-
-    if chunk_data.is_empty() {
-        anyhow::bail!("File is empty: {:?}", path);
-    }
-
-    let file_bytes = chunk_data.len();
-
-    let file_name = name.or_else(|| {
-        path.file_name()
-            .and_then(|n| n.to_str())
-            .map(|n| n.to_string())
-    });
-
-    let mut client = ControlClient::connect().await?;
-    let data = client
+    let data = ControlClient::connect()
+        .await?
         .request(ControlRequest::PutFile {
-            chunk_data,
+            path,
             ph: Some(ph),
             q_target: Some(q_target),
             network_id: network.clone(),
-            file_name,
+            file_name: name,
         })
-        .await?;
-
-    if let Some(v) = data {
-        let d: bp_core::control::protocol::PutFileData = serde_json::from_value(v)?;
-        println!(
-            "✓ Stored {} bytes from {:?}",
-            file_bytes,
-            path.file_name().unwrap_or_default()
-        );
-        println!("   chunk_id     : {}", d.chunk_id);
-        println!("   k / n        : {} / {}  (q = {:.2})", d.k, d.n, d.q);
-        println!("   Ph target    : {:.4}   Pe effective: {:.4}", d.ph, d.pe);
-        println!(
-            "   fragments    : {}/{} stored locally, {} distributed",
-            d.fragments_stored, d.n, d.fragments_distributed
-        );
-        println!("   network      : {}", network);
-    }
-
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("empty response from daemon"))?;
+    let d: PutFileData = serde_json::from_value(data)?;
+    println!("✓ Stored {} bytes in {} chunk(s)", d.size_bytes, d.chunks);
+    println!("   file_id      : {}", d.file_id);
+    println!("   k / n        : {} / {}  (worst chunk)", d.k, d.n);
+    println!("   Ph target    : {:.4}   Pe effective: {:.4}", d.ph, d.pe);
+    println!(
+        "   fragments    : {} on this node, {} pushed to other Pouches",
+        d.fragments_stored, d.fragments_distributed
+    );
+    println!("   network      : {}", network);
     Ok(())
 }

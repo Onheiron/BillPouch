@@ -148,11 +148,11 @@ for c in "${CONTAINERS[@]}"; do
 done
 
 header "9. Encrypted files and sharing"
-docker exec bp-pouch bash -c 'head -c 3000 /dev/urandom > /tmp/foto.bin'
+docker exec bp-pouch bash -c 'head -c 9437184 /dev/urandom > /tmp/foto.bin'
 PUT_OUT=$(docker exec bp-pouch bp put /tmp/foto.bin --network smoketest 2>&1) || true
-CHUNK=$(echo "${PUT_OUT}" | grep -oP 'chunk_id\s*:\s*\K\S+' || true)
-if [ -n "${CHUNK}" ]; then
-    pass "carlo-pouch stored an encrypted file (${CHUNK:0:12}…)"
+CHUNK=$(echo "${PUT_OUT}" | grep -oP 'file_id\s*:\s*\K\S+' || true)
+if [ -n "${CHUNK}" ] && echo "${PUT_OUT}" | grep -q "in 3 chunk(s)"; then
+    pass "carlo-pouch stored a 9 MiB encrypted file in 3 chunks (${CHUNK})"
 else
     fail "bp put failed: ${PUT_OUT}"
 fi
@@ -230,6 +230,29 @@ if [ "${FILLERS}" -gt 0 ]; then
     pass "carlo-laptop's Pouch holds ${FILLERS} filler blob(s)"
 else
     fail "carlo-laptop's Pouch holds no filler"
+fi
+
+UNSHARE_OUT=$(docker exec bp-pouch bp unshare "${CHUNK}" "${BILL_FP}" --network smoketest 2>&1) || true
+if echo "${UNSHARE_OUT}" | grep -q "can no longer fetch"; then
+    pass "carlo-pouch revoked marco-bill's access"
+else
+    fail "bp unshare failed: ${UNSHARE_OUT}"
+fi
+sleep 5
+REVOKED=$(docker exec bp-bill bp get "${CHUNK}" /tmp/again.bin --network smoketest 2>&1) || true
+if echo "${REVOKED}" | grep -q "not one of your files"; then
+    pass "after the revocation marco-bill can no longer get the file"
+else
+    fail "marco-bill still reads a revoked file: ${REVOKED}"
+fi
+
+docker exec bp-pouch bash -c 'echo temporaneo > /tmp/tmp.txt'
+TMP_ID=$(docker exec bp-pouch bp put /tmp/tmp.txt --network smoketest 2>&1 | grep -oP 'file_id\s*:\s*\K\S+' || true)
+RM_OUT=$(docker exec bp-pouch bp rm "${TMP_ID}" --network smoketest 2>&1) || true
+if echo "${RM_OUT}" | grep -q "deleted" && ! docker exec bp-pouch bp ls --network smoketest 2>&1 | grep -q "tmp.txt"; then
+    pass "carlo-pouch deleted a file"
+else
+    fail "bp rm failed: ${RM_OUT}"
 fi
 
 header "10. Expulsion and key rotation"

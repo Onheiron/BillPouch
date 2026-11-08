@@ -58,6 +58,12 @@ fn make_daemon_state() -> (Arc<DaemonState>, mpsc::Receiver<NetworkCommand>) {
     (state, net_rx)
 }
 
+fn temp_file(bytes: &[u8]) -> PathBuf {
+    let path = std::env::temp_dir().join(format!("bp_file_{}", uuid::Uuid::new_v4()));
+    std::fs::write(&path, bytes).unwrap();
+    path
+}
+
 fn temp_socket_path() -> PathBuf {
     let id = uuid::Uuid::new_v4();
     PathBuf::from(format!("/tmp/bp-test-{}.sock", id))
@@ -273,18 +279,21 @@ async fn put_file_get_file_roundtrip() {
             network_id: "test-net".to_string(),
             metadata: {
                 let mut m = HashMap::new();
-                m.insert("storage_bytes".to_string(), serde_json::json!(1_048_576u64));
+                m.insert("storage_bytes".to_string(), serde_json::json!(64u64 << 20));
                 m
             },
         },
     )
     .await;
 
-    let original: Vec<u8> = b"BillPouch put/get roundtrip test payload".to_vec();
+    let original: Vec<u8> = (0..9 * 1024 * 1024 + 123)
+        .map(|i: usize| (i.wrapping_mul(2_654_435_761) >> 13) as u8)
+        .collect();
+    let source = temp_file(&original);
     let put_resp = send_request(
         &socket_path,
         &ControlRequest::PutFile {
-            chunk_data: original.clone(),
+            path: source.clone(),
             ph: Some(0.99),
             q_target: Some(1.0),
             network_id: "test-net".to_string(),
@@ -295,35 +304,70 @@ async fn put_file_get_file_roundtrip() {
 
     let put_data: PutFileData =
         serde_json::from_value(unwrap_ok(put_resp)).expect("PutFile should succeed");
+    assert_eq!(put_data.chunks, 3, "9 MiB must take three 4 MiB chunks");
+    assert_eq!(put_data.size_bytes, original.len() as u64);
+    assert!(put_data.fragments_stored >= put_data.k);
 
-    assert!(!put_data.chunk_id.is_empty(), "chunk_id must not be empty");
-    assert!(put_data.k >= 1, "k must be at least 1");
-    assert!(
-        put_data.fragments_stored >= put_data.k,
-        "must store at least k fragments"
-    );
-
+    let output = source.with_extension("out");
     let get_resp = send_request(
         &socket_path,
         &ControlRequest::GetFile {
-            chunk_id: put_data.chunk_id.clone(),
+            file_id: put_data.file_id.clone(),
             network_id: "test-net".to_string(),
+            output: output.clone(),
         },
     )
     .await;
-
     let get_data: GetFileData =
         serde_json::from_value(unwrap_ok(get_resp)).expect("GetFile should succeed");
-
-    assert_eq!(
-        get_data.data, original,
+    assert_eq!(get_data.chunks, 3);
+    assert_eq!(get_data.fragments_remote, 0, "no remote peers in this test");
+    assert!(
+        std::fs::read(&output).unwrap() == original,
         "decoded data must match original bytes"
     );
-    assert!(
-        get_data.fragments_used >= put_data.k,
-        "should have used at least k fragments"
+
+    let used_before: u64 = state
+        .storage_managers
+        .read()
+        .unwrap()
+        .values()
+        .map(|sm| sm.read().unwrap().meta.storage_bytes_used)
+        .sum();
+    assert!(used_before > original.len() as u64);
+    unwrap_ok(
+        send_request(
+            &socket_path,
+            &ControlRequest::DeleteFile {
+                file_id: put_data.file_id.clone(),
+                network_id: "test-net".to_string(),
+            },
+        )
+        .await,
     );
-    assert_eq!(get_data.fragments_remote, 0, "no remote peers in this test");
+    let used_after: u64 = state
+        .storage_managers
+        .read()
+        .unwrap()
+        .values()
+        .map(|sm| sm.read().unwrap().meta.storage_bytes_used)
+        .sum();
+    assert!(
+        used_after < 64 * 1024,
+        "only the new index version may remain, found {used_after} bytes"
+    );
+    let gone = send_request(
+        &socket_path,
+        &ControlRequest::GetFile {
+            file_id: put_data.file_id.clone(),
+            network_id: "test-net".to_string(),
+            output: output.clone(),
+        },
+    )
+    .await;
+    assert!(unwrap_err(gone).contains("not one of your files"));
+    let _ = std::fs::remove_file(&source);
+    let _ = std::fs::remove_file(&output);
 
     server_handle.abort();
     let _ = std::fs::remove_file(&socket_path);
@@ -344,7 +388,7 @@ async fn put_file_without_pouch_returns_error() {
     let resp = send_request(
         &socket_path,
         &ControlRequest::PutFile {
-            chunk_data: b"test".to_vec(),
+            path: temp_file(b"test"),
             ph: None,
             q_target: None,
             network_id: "test-net".to_string(),
@@ -385,7 +429,7 @@ async fn get_file_unknown_chunk_returns_error() {
             network_id: "test-net".to_string(),
             metadata: {
                 let mut m = HashMap::new();
-                m.insert("storage_bytes".to_string(), serde_json::json!(1_048_576u64));
+                m.insert("storage_bytes".to_string(), serde_json::json!(64u64 << 20));
                 m
             },
         },
@@ -395,8 +439,9 @@ async fn get_file_unknown_chunk_returns_error() {
     let resp = send_request(
         &socket_path,
         &ControlRequest::GetFile {
-            chunk_id: "deadbeef12345678".to_string(),
+            file_id: "deadbeef12345678".to_string(),
             network_id: "test-net".to_string(),
+            output: std::env::temp_dir().join("bp-never-written"),
         },
     )
     .await;
@@ -430,7 +475,7 @@ async fn get_file_outside_your_index_returns_error() {
             network_id: "test-net".to_string(),
             metadata: {
                 let mut m = HashMap::new();
-                m.insert("storage_bytes".to_string(), serde_json::json!(1_048_576u64));
+                m.insert("storage_bytes".to_string(), serde_json::json!(64u64 << 20));
                 m
             },
         },
@@ -440,7 +485,7 @@ async fn get_file_outside_your_index_returns_error() {
     let put_resp = send_request(
         &socket_path,
         &ControlRequest::PutFile {
-            chunk_data: b"CEK hint test payload".to_vec(),
+            path: temp_file(b"index test payload"),
             ph: Some(0.99),
             q_target: Some(1.0),
             network_id: "test-net".to_string(),
@@ -456,8 +501,9 @@ async fn get_file_outside_your_index_returns_error() {
     let get_resp = send_request(
         &socket_path,
         &ControlRequest::GetFile {
-            chunk_id: put_data.chunk_id.clone(),
+            file_id: put_data.file_id.clone(),
             network_id: "test-net".to_string(),
+            output: std::env::temp_dir().join("bp-never-written"),
         },
     )
     .await;
@@ -490,7 +536,7 @@ async fn pause_resume_roundtrip() {
             network_id: "test-net".to_string(),
             metadata: {
                 let mut m = HashMap::new();
-                m.insert("storage_bytes".to_string(), serde_json::json!(1_048_576u64));
+                m.insert("storage_bytes".to_string(), serde_json::json!(64u64 << 20));
                 m
             },
         },
@@ -581,7 +627,7 @@ async fn farewell_evict_removes_service() {
             network_id: "evict-net".to_string(),
             metadata: {
                 let mut m = HashMap::new();
-                m.insert("storage_bytes".to_string(), serde_json::json!(1_048_576u64));
+                m.insert("storage_bytes".to_string(), serde_json::json!(64u64 << 20));
                 m
             },
         },
@@ -634,7 +680,7 @@ async fn leave_blocked_by_active_service() {
             network_id: "block-net".to_string(),
             metadata: {
                 let mut m = HashMap::new();
-                m.insert("storage_bytes".to_string(), serde_json::json!(1_048_576u64));
+                m.insert("storage_bytes".to_string(), serde_json::json!(64u64 << 20));
                 m
             },
         },
@@ -690,7 +736,7 @@ async fn hatch_second_pouch_same_network_rejected() {
         network_id: "dup-net".to_string(),
         metadata: {
             let mut m = HashMap::new();
-            m.insert("storage_bytes".to_string(), serde_json::json!(1_048_576u64));
+            m.insert("storage_bytes".to_string(), serde_json::json!(64u64 << 20));
             m
         },
     };

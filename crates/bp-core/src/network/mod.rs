@@ -101,11 +101,14 @@ pub enum Gossip {
         manifest: Box<crate::files::Manifest>,
     },
     ShareAck {
-        chunk_id: String,
+        file_id: String,
         member: String,
     },
     FillerEvicted {
         blobs: Vec<String>,
+    },
+    Order {
+        order: Box<crate::files::Order>,
     },
 }
 
@@ -519,6 +522,7 @@ async fn handle_swarm_event(
                     | Gossip::HeadRequest { .. }
                     | Gossip::Share { .. }
                     | Gossip::ShareAck { .. }
+                    | Gossip::Order { .. }
             ) {
                 if file_gossip.try_send((network_id.clone(), gossip)).is_err() {
                     tracing::warn!("file gossip queue full, dropped a message");
@@ -832,7 +836,8 @@ fn handle_gossip(
         Gossip::Head { .. }
         | Gossip::HeadRequest { .. }
         | Gossip::Share { .. }
-        | Gossip::ShareAck { .. } => None,
+        | Gossip::ShareAck { .. }
+        | Gossip::Order { .. } => None,
     }
 }
 
@@ -887,9 +892,10 @@ fn serve_fragment_request(
             let mut fragments = Vec::new();
             for sm_arc in managers.values() {
                 let sm = sm_arc.read().unwrap();
-                let allowed = sm
-                    .owner_of(chunk_id)
-                    .is_some_and(|owner| grant.allows(chunk_id, &owner, requester));
+                let allowed = sm.owner_of(chunk_id).is_some_and(|o| {
+                    grant.allows(&o.file_id, &o.owner_key, requester)
+                        && !sm.is_revoked(&o.file_id, requester)
+                });
                 if !allowed {
                     continue;
                 }
@@ -914,15 +920,19 @@ fn serve_fragment_request(
         } => {
             use crate::coding::rlnc::EncodedFragment;
             match EncodedFragment::from_bytes(fragment_id.clone(), chunk_id.clone(), data) {
-                _ if !grant.is_owner_claim(chunk_id) || grant.grantee != requester => {
+                _ if !grant.is_owner_claim() || grant.grantee != requester => {
                     FragmentResponse::StoreFailed {
                         reason: "a fragment can only be stored by a device of its owner".into(),
                     }
                 }
                 Ok(fragment) => {
+                    let owner = crate::storage::ChunkOwner {
+                        owner_key: grant.owner_key.clone(),
+                        file_id: grant.file_id.clone(),
+                    };
                     let stored = managers.values().find_map(|sm_arc| {
                         let mut sm = sm_arc.write().unwrap();
-                        match sm.store_fragment(&fragment, &grant.owner_key) {
+                        match sm.store_fragment(&fragment, &owner) {
                             Ok(evicted) => Some((sm.meta.network_id.clone(), evicted)),
                             Err(e) => {
                                 tracing::debug!("Store attempt failed: {e}");
