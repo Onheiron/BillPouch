@@ -1,19 +1,9 @@
-use bp_core::{
-    control::protocol::{ControlRequest, GetFileData},
-    daemon,
-    identity::Identity,
-};
+use bp_core::control::protocol::{ControlRequest, GetFileData};
 use std::path::PathBuf;
 
 use crate::client::ControlClient;
 
 pub async fn get(file_id: String, network: String, output: PathBuf) -> anyhow::Result<()> {
-    if !Identity::exists()? {
-        anyhow::bail!("Not logged in. Run `bp login` first.");
-    }
-    if !daemon::is_running() {
-        anyhow::bail!("Daemon is not running. Start a Pouch first with: bp hatch pouch");
-    }
     let output = std::path::absolute(&output)?;
     let data = ControlClient::connect()
         .await?

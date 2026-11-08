@@ -337,6 +337,8 @@ async fn main() -> anyhow::Result<()> {
     let mut cli = Cli::parse();
     cli.passphrase = cli.passphrase.filter(|p| !p.is_empty());
 
+    client::set_passphrase(cli.passphrase.clone());
+
     if cli.daemon {
         bp_core::daemon::run_daemon(cli.passphrase).await?;
         return Ok(());
@@ -375,7 +377,7 @@ async fn main() -> anyhow::Result<()> {
                     serde_json::Value::from(storage_tier.quota_bytes()),
                 );
             }
-            commands::hatch::hatch(svc_type, network, metadata, cli.passphrase.clone()).await?;
+            commands::hatch::hatch(svc_type, network, metadata).await?;
         }
 
         Some(Cmd::Flock) => {
@@ -405,14 +407,14 @@ async fn main() -> anyhow::Result<()> {
         Some(Cmd::Network {
             action: NetworkAction::Create { name },
         }) => {
-            commands::network::create(name, cli.passphrase.clone()).await?;
+            commands::network::create(name).await?;
         }
 
         Some(Cmd::Invite {
             network_id,
             member_key,
         }) => {
-            commands::network::invite(network_id, member_key, cli.passphrase.clone()).await?;
+            commands::network::invite(network_id, member_key).await?;
         }
 
         Some(Cmd::Dashboard { port }) => {
@@ -420,15 +422,15 @@ async fn main() -> anyhow::Result<()> {
         }
 
         Some(Cmd::Join { token }) => {
-            commands::network::join(token, cli.passphrase.clone()).await?;
+            commands::network::join(token).await?;
         }
 
         Some(Cmd::Members { network_id }) => {
-            commands::network::members(network_id, cli.passphrase.clone()).await?;
+            commands::network::members(network_id).await?;
         }
 
         Some(Cmd::Expel { network_id, member }) => {
-            commands::network::expel(network_id, member, cli.passphrase.clone()).await?;
+            commands::network::expel(network_id, member).await?;
         }
 
         Some(Cmd::Leave { network_id, force }) => {

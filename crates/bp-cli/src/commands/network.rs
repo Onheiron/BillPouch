@@ -1,11 +1,10 @@
-use crate::{client::ControlClient, commands::hatch::ensure_daemon};
+use crate::client::ControlClient;
 use bp_core::{
     chain::ExpelOutcome,
     control::protocol::{ControlRequest, ExpelData, InviteData, MembersData},
 };
 
-pub async fn create(name: String, passphrase: Option<String>) -> anyhow::Result<()> {
-    ensure_daemon(passphrase).await?;
+pub async fn create(name: String) -> anyhow::Result<()> {
     ControlClient::connect()
         .await?
         .request(ControlRequest::CreateNetwork { name: name.clone() })
@@ -15,12 +14,7 @@ pub async fn create(name: String, passphrase: Option<String>) -> anyhow::Result<
     Ok(())
 }
 
-pub async fn invite(
-    network_id: String,
-    member_key: String,
-    passphrase: Option<String>,
-) -> anyhow::Result<()> {
-    ensure_daemon(passphrase).await?;
+pub async fn invite(network_id: String, member_key: String) -> anyhow::Result<()> {
     let data = ControlClient::connect()
         .await?
         .request(ControlRequest::Invite {
@@ -46,8 +40,7 @@ pub async fn invite(
     Ok(())
 }
 
-pub async fn join(token: String, passphrase: Option<String>) -> anyhow::Result<()> {
-    ensure_daemon(passphrase).await?;
+pub async fn join(token: String) -> anyhow::Result<()> {
     let data = ControlClient::connect()
         .await?
         .request(ControlRequest::JoinNetwork { token })
@@ -61,8 +54,7 @@ pub async fn join(token: String, passphrase: Option<String>) -> anyhow::Result<(
     Ok(())
 }
 
-pub async fn members(network_id: String, passphrase: Option<String>) -> anyhow::Result<()> {
-    ensure_daemon(passphrase).await?;
+pub async fn members(network_id: String) -> anyhow::Result<()> {
     let data = ControlClient::connect()
         .await?
         .request(ControlRequest::Members { network_id })
@@ -96,12 +88,7 @@ pub async fn members(network_id: String, passphrase: Option<String>) -> anyhow::
     Ok(())
 }
 
-pub async fn expel(
-    network_id: String,
-    member: String,
-    passphrase: Option<String>,
-) -> anyhow::Result<()> {
-    ensure_daemon(passphrase).await?;
+pub async fn expel(network_id: String, member: String) -> anyhow::Result<()> {
     let data = ControlClient::connect()
         .await?
         .request(ControlRequest::Expel { network_id, member })

@@ -632,55 +632,20 @@ fn identity_config_ensure_dirs_crea_directory() {
 
 #[test]
 #[cfg(unix)]
-fn daemon_is_running_false_senza_pid_file() {
+fn daemon_is_running_solo_se_il_socket_risponde() {
     with_temp_home(|| {
         bp_core::config::ensure_dirs().unwrap();
+        assert!(!bp_core::daemon::is_running(), "nessun socket");
+
+        let socket = bp_core::config::socket_path().unwrap();
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        assert!(bp_core::daemon::is_running(), "socket in ascolto");
+
+        drop(listener);
+        assert!(socket.exists());
         assert!(
             !bp_core::daemon::is_running(),
-            "is_running() deve essere false se non c'è PID file"
-        );
-    });
-}
-
-#[test]
-#[cfg(unix)]
-fn daemon_is_running_false_con_pid_inesistente() {
-    with_temp_home(|| {
-        bp_core::config::ensure_dirs().unwrap();
-        let pid_path = bp_core::config::pid_path().unwrap();
-        std::fs::write(&pid_path, "99999999").unwrap();
-        assert!(
-            !bp_core::daemon::is_running(),
-            "is_running() deve essere false con PID inesistente"
-        );
-    });
-}
-
-#[test]
-#[cfg(target_os = "linux")]
-fn daemon_is_running_true_con_pid_corrente() {
-    with_temp_home(|| {
-        bp_core::config::ensure_dirs().unwrap();
-        let pid_path = bp_core::config::pid_path().unwrap();
-        let current_pid = std::process::id();
-        std::fs::write(&pid_path, current_pid.to_string()).unwrap();
-        assert!(
-            bp_core::daemon::is_running(),
-            "is_running() deve essere true con il PID del processo corrente"
-        );
-    });
-}
-
-#[test]
-#[cfg(unix)]
-fn daemon_is_running_false_con_pid_malformato() {
-    with_temp_home(|| {
-        bp_core::config::ensure_dirs().unwrap();
-        let pid_path = bp_core::config::pid_path().unwrap();
-        std::fs::write(&pid_path, "non-un-numero").unwrap();
-        assert!(
-            !bp_core::daemon::is_running(),
-            "is_running() deve essere false con PID file malformato"
+            "socket rimasto da un daemon morto"
         );
     });
 }

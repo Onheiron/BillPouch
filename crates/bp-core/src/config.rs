@@ -24,8 +24,8 @@ pub fn profile_path() -> BpResult<PathBuf> {
     Ok(base_dir()?.join("profile.json"))
 }
 
-pub fn pid_path() -> BpResult<PathBuf> {
-    Ok(base_dir()?.join("daemon.pid"))
+pub fn log_path() -> BpResult<PathBuf> {
+    Ok(base_dir()?.join("daemon.log"))
 }
 
 pub fn socket_path() -> BpResult<PathBuf> {
