@@ -3,7 +3,10 @@ use crate::{
     consensus::{epoch_of, Commit, ConsensusMsg, Engine},
     error::{BpError, BpResult},
     identity::{DeviceCert, Identity},
-    ledger::{Ledger, Observation, Op, SignedOp, EPOCH_SECS, MAX_CHALLENGES_PER_DEVICE_PER_EPOCH},
+    ledger::{
+        Ledger, Observation, Op, SignedOp, EPOCH_SECS, MAX_CHALLENGES_PER_DEVICE_PER_EPOCH,
+        USAGE_INTERVAL_SECS,
+    },
     membership::{
         genesis, invite_entry, key_commitment, new_key, open_key, wrap_for, Entry, Invite,
     },
@@ -26,24 +29,23 @@ pub struct Tally {
     pub epoch: u64,
     pub sent: u32,
     pub passed: u32,
-    pub bytes: u64,
+    pub verified_bytes: u64,
 }
 
 pub type ObservationLog = Arc<RwLock<HashMap<String, Tally>>>;
 
-pub fn observe(log: &ObservationLog, device: &str, passed: bool, bytes: u64, now_ms: u64) {
+pub fn observe(log: &ObservationLog, device: &str, passed: bool, verified_bytes: u64, now_ms: u64) {
     let epoch = epoch_of(now_ms);
     if let Ok(mut log) = log.write() {
         let tally = log.entry(device.to_string()).or_default();
         if tally.epoch != epoch {
-            *tally = Tally {
-                epoch,
-                ..Tally::default()
-            };
+            tally.epoch = epoch;
+            tally.sent = 0;
+            tally.passed = 0;
         }
         tally.sent += 1;
         tally.passed += u32::from(passed);
-        tally.bytes = tally.bytes.max(bytes);
+        tally.verified_bytes = verified_bytes;
     }
 }
 
@@ -75,6 +77,8 @@ pub struct Chain {
     device_submitted_ms: u64,
     rotation_submitted_ms: u64,
     reported_epoch: Option<u64>,
+    reported_usage: Option<(BTreeMap<String, u64>, BTreeMap<String, u64>)>,
+    usage_submitted_ms: u64,
     sync_requested_ms: u64,
     persistent: bool,
 }
@@ -116,6 +120,8 @@ impl Chain {
             device_submitted_ms: 0,
             rotation_submitted_ms: 0,
             reported_epoch: None,
+            reported_usage: None,
+            usage_submitted_ms: 0,
             sync_requested_ms: 0,
             persistent: false,
         })
@@ -228,7 +234,8 @@ impl Chain {
 
     pub fn tick(&mut self, log: &ObservationLog, held: &BTreeMap<String, u64>, now_ms: u64) {
         self.register_device(now_ms);
-        self.report(log, held, now_ms);
+        self.report(log, now_ms);
+        self.report_usage(log, held, now_ms);
         self.rotate(now_ms);
         self.engine.tick(now_ms);
         self.record();
@@ -322,7 +329,44 @@ impl Chain {
         self.submit(Op::RegisterDevice { cert }, now_ms, "register this device");
     }
 
-    fn report(&mut self, log: &ObservationLog, held: &BTreeMap<String, u64>, now_ms: u64) {
+    fn report_usage(&mut self, log: &ObservationLog, held: &BTreeMap<String, u64>, now_ms: u64) {
+        let ledger = &self.engine.ledger;
+        let me = &self.me.fingerprint;
+        if !ledger.is_member(me) || now_ms < self.usage_submitted_ms + USAGE_INTERVAL_SECS * 1000 {
+            return;
+        }
+        let verified: BTreeMap<String, u64> = log
+            .read()
+            .map(|log| {
+                log.iter()
+                    .filter(|(device, t)| {
+                        t.verified_bytes > 0
+                            && ledger
+                                .device_owner(device)
+                                .is_some_and(|owner| owner != me && ledger.is_member(owner))
+                    })
+                    .map(|(device, t)| (device.clone(), t.verified_bytes))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let held: BTreeMap<String, u64> = held
+            .iter()
+            .filter(|(owner, &bytes)| bytes > 0 && *owner != me && ledger.is_member(owner))
+            .map(|(owner, &bytes)| (owner.clone(), bytes))
+            .collect();
+        let current = (verified, held);
+        let unchanged = self.reported_usage.as_ref() == Some(&current)
+            || (self.reported_usage.is_none() && current.0.is_empty() && current.1.is_empty());
+        if unchanged {
+            return;
+        }
+        self.usage_submitted_ms = now_ms;
+        self.reported_usage = Some(current.clone());
+        let (verified, held) = current;
+        self.submit(Op::Usage { verified, held }, now_ms, "report usage");
+    }
+
+    fn report(&mut self, log: &ObservationLog, now_ms: u64) {
         let epoch = epoch_of(now_ms);
         let into_epoch = (now_ms / 1000 % EPOCH_SECS) as f64 / EPOCH_SECS as f64;
         let ledger = &self.engine.ledger;
@@ -344,32 +388,22 @@ impl Chain {
                         let user = ledger.device_owner(device)?;
                         (user != me && ledger.is_member(user)).then(|| {
                             let sent = t.sent.min(MAX_CHALLENGES_PER_DEVICE_PER_EPOCH);
+                            let passed =
+                                (u64::from(t.passed) * u64::from(sent) / u64::from(t.sent)) as u32;
                             Observation {
                                 device: device.clone(),
                                 user: user.to_string(),
                                 sent,
-                                passed: t.passed.min(sent),
-                                bytes: (u128::from(t.bytes) * u128::from(t.passed)
-                                    / u128::from(t.sent))
-                                    as u64,
+                                passed,
                             }
                         })
                     })
                     .collect()
             })
             .unwrap_or_default();
-        let held: BTreeMap<String, u64> = held
-            .iter()
-            .filter(|(owner, &bytes)| bytes > 0 && ledger.is_member(owner))
-            .map(|(owner, &bytes)| (owner.clone(), bytes))
-            .collect();
-        if !results.is_empty() || !held.is_empty() {
+        if !results.is_empty() {
             self.submit(
-                Op::Observations {
-                    epoch,
-                    results,
-                    held,
-                },
+                Op::Observations { epoch, results },
                 now_ms,
                 "report observations",
             );
@@ -566,11 +600,11 @@ mod tests {
         net.now = epoch_start + 1000;
         net.settle();
         assert_eq!(net.chains[0].ledger().members[&net.fp(1)].sent, 0);
+        assert_eq!(net.chains[1].ledger().credit(&net.fp(1)), 1000);
         net.now = epoch_start + EPOCH_SECS * 950;
         net.settle();
         let member = &net.chains[0].ledger().members[&net.fp(1)];
         assert_eq!((member.sent, member.passed), (10, 9));
-        assert_eq!(member.verified_bytes, 900);
     }
 
     #[test]

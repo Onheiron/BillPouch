@@ -740,14 +740,12 @@ mod tests {
             let op = SignedOp::sign(
                 &self.people[by],
                 Op::Observations {
-                    held: Default::default(),
                     epoch: epoch_of(self.now),
                     results: vec![crate::ledger::Observation {
                         device: self.people[about].peer_id.to_string(),
                         user: self.people[about].fingerprint.clone(),
                         sent: 1,
                         passed: 1,
-                        bytes: 0,
                     }],
                 },
             )

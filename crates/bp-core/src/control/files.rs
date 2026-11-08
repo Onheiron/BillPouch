@@ -133,6 +133,35 @@ pub fn choose_layer(
     Err("every layer of the network is full".into())
 }
 
+fn check_allowance(
+    state: &DaemonState,
+    network_id: &str,
+    size: u64,
+    ph: f64,
+) -> Result<(), String> {
+    let nodes = layer_nodes(state, network_id);
+    let sample = (size as usize).clamp(1, CHUNK_BYTES);
+    let (_, peers, plan) = choose_layer(&nodes, |p| stabilities(state, p), sample, ph)?;
+    let chains = state.chains.read().unwrap();
+    let ledger = chains
+        .get(network_id)
+        .map(|c| c.ledger())
+        .ok_or_else(|| format!("you are not in a network named '{network_id}'"))?;
+    let me = &state.identity.fingerprint;
+    let others = peers
+        .iter()
+        .filter(|p| ledger.device_owner(p) != Some(me.as_str()))
+        .count() as u64;
+    let needed = size.div_ceil(plan.k as u64) * others;
+    if ledger.may_store(me, needed) {
+        return Ok(());
+    }
+    let room = ledger.credit(me).saturating_sub(ledger.usage(me));
+    Err(format!(
+        "not enough credit: this file needs {needed} bytes on other members' Pouches and you can use {room}. You earn credit by hosting: hatch a Pouch (or a bigger tier) and let the others fill and verify it"
+    ))
+}
+
 async fn store_chunk(
     state: &DaemonState,
     network_id: &str,
@@ -354,6 +383,10 @@ pub async fn put_file(
         Ok(f) => f,
         Err(e) => return ControlResponse::err(format!("cannot read {}: {e}", path.display())),
     };
+    let size_on_disk = file.metadata().await.map(|m| m.len()).unwrap_or(0);
+    if let Err(e) = check_allowance(state, &network_id, size_on_disk, ph) {
+        return ControlResponse::err(e);
+    }
     let key = new_key();
     let cipher = ChunkCipher::from_raw_key(key);
     let file_id = new_file_id();
