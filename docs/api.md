@@ -40,13 +40,15 @@ Types: `bp_core::control::protocol`; client helper: `bp_core::control::client::s
 
 ## REST API (`bp-api`)
 
-`bp-api [--host 127.0.0.1] [--port 3000]` forwards HTTP calls to a running
-daemon's socket. Every route but `GET /` needs `Authorization: Bearer <token>`;
-the token is created on first start in `api_token` (mode 0600, next to the
-daemon's files) and the start-up log prints `http://<addr>/#token=<token>`.
-`GET /` serves a dashboard that reads the token from that link and polls
-`/status` and `/peers`.
-Errors are `{"error": "…"}` with 401 (missing or wrong token), 503 (daemon unreachable), 422 (invalid base64) or 500 (daemon error).
+`bp-api [--host 127.0.0.1] [--port 3000]` forwards HTTPS calls to the daemon
+of this device. On first start it creates a self-signed certificate
+(`api_cert.pem`, `api_key.pem`) and logs its SHA-256 fingerprint at every start.
+Every route but `GET /` needs `Authorization: Session <session>`: a session is
+signed with this device's user SSH key and lasts 12 h; `bp-api` accepts only
+sessions of that key. `bp dashboard` signs one and opens
+`https://127.0.0.1:<port>/#session=<session>`; the dashboard keeps it for the
+browser session and polls `/status` and `/peers`.
+Errors are `{"error": "…"}` with 401 (missing, expired or foreign session), 503 (daemon unreachable), 422 (invalid base64) or 500 (daemon error).
 
 | Method | Path | Body / query | Control command |
 |--------|------|--------------|-----------------|
@@ -70,4 +72,4 @@ Errors are `{"error": "…"}` with 401 (missing or wrong token), 503 (daemon unr
 | DELETE | `/files/:file_id/shares/:member` | `?network=<id>` | `unshare` |
 | POST | `/relay/connect` | `{relay_addr}` | `connect_relay` |
 
-The token is the only protection and travels in clear: keep it on `127.0.0.1` or behind TLS.
+It is meant as a local tool: keep it on `127.0.0.1`.

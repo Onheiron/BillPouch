@@ -64,14 +64,14 @@
 <script>
 const base = window.location.origin;
 const fragment = new URLSearchParams(window.location.hash.slice(1));
-if (fragment.get('token')) {
-  sessionStorage.setItem('bp-token', fragment.get('token'));
+if (fragment.get('session')) {
+  sessionStorage.setItem('bp-session', fragment.get('session'));
   history.replaceState(null, '', window.location.pathname);
 }
-const token = sessionStorage.getItem('bp-token') || '';
+const session = sessionStorage.getItem('bp-session') || '';
 
 async function api(path) {
-  const r = await fetch(base + path, { headers: { Authorization: 'Bearer ' + token } });
+  const r = await fetch(base + path, { headers: { Authorization: 'Session ' + session } });
   if (!r.ok) throw new Error(r.status + ' ' + r.statusText);
   return r.json();
 }
