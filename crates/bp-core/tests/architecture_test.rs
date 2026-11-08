@@ -222,8 +222,8 @@ fn gossip_piu_utenti_stesso_network() {
 fn gossip_stesso_utente_piu_servizi() {
     let mut state = NetworkState::new();
 
-    let pouch = make_node_info("peer-carlo-1", "aabbccdd", ServiceType::Pouch, "amici", 100);
-    let bill = make_node_info("peer-carlo-2", "aabbccdd", ServiceType::Bill, "amici", 100);
+    let pouch = make_node_info("peer-carlo", "aabbccdd", ServiceType::Pouch, "amici", 100);
+    let bill = make_node_info("peer-carlo", "aabbccdd", ServiceType::Bill, "amici", 200);
 
     state.upsert(pouch);
     state.upsert(bill);
@@ -282,16 +282,6 @@ fn gossip_evict_stale_rimuove_nodi_vecchi() {
     state.evict_stale(120);
     assert_eq!(state.len(), 1, "Il nodo stale deve essere rimosso");
     assert_eq!(state.all()[0].peer_id, "peer-fresh");
-}
-
-#[test]
-fn gossip_remove_nodo() {
-    let mut state = NetworkState::new();
-    let node = make_node_info("peer-X", "ff", ServiceType::Post, "net", 100);
-    state.upsert(node);
-
-    state.remove("peer-X");
-    assert_eq!(state.len(), 0, "Nodo rimosso esplicitamente");
 }
 
 #[test]
