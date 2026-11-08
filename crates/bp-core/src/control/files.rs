@@ -37,15 +37,6 @@ pub struct Stored {
     pub peers: usize,
 }
 
-pub fn rank(chunk_id: &str, peers: &mut [String]) {
-    peers.sort_by_key(|peer| {
-        let mut h = blake3::Hasher::new();
-        h.update(chunk_id.as_bytes());
-        h.update(peer.as_bytes());
-        *h.finalize().as_bytes()
-    });
-}
-
 async fn publish(state: &DaemonState, network_id: &str, message: Gossip) {
     let _ = state
         .net_tx

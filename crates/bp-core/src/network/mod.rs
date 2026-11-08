@@ -11,13 +11,14 @@ pub use behaviour::{BillPouchBehaviour, FragmentRequest, FragmentResponse};
 pub use bootstrap::BootstrapList;
 pub use fragment_gossip::{FragmentIndexAnnouncement, FragmentPointer, RemoteFragmentIndex};
 pub use kad_store::KadPeers;
-pub use qos::{PeerQos, QosRegistry, FAULT_BLACKLISTED, FAULT_DEGRADED, FAULT_SUSPECTED};
+pub use qos::{PeerQos, QosRegistry};
 pub use quality_monitor::run_quality_monitor;
 pub use reputation::ReputationTier;
 pub use state::{NetworkState, NodeInfo};
 
 use crate::{
     chain::{now_ms, Chains, ObservationLog},
+    coding::rlnc::{self, EncodedFragment},
     error::{BpError, BpResult},
     storage::StorageManager,
 };
@@ -182,6 +183,18 @@ pub enum NetworkCommand {
         index: usize,
         resp_tx: tokio::sync::oneshot::Sender<Option<crate::storage::merkle::Proof>>,
     },
+    Catalog {
+        peer_id: PeerId,
+        network: String,
+        layer: crate::storage::StorageTier,
+        resp_tx: tokio::sync::oneshot::Sender<Vec<crate::storage::CatalogEntry>>,
+    },
+    Recode {
+        peer_id: PeerId,
+        chunk_id: String,
+        owner: crate::storage::ChunkOwner,
+        route: Vec<String>,
+    },
     Fill {
         peer_id: PeerId,
         network: String,
@@ -194,6 +207,10 @@ pub enum NetworkCommand {
 type PendingProofs = HashMap<
     request_response::OutboundRequestId,
     tokio::sync::oneshot::Sender<Option<crate::storage::merkle::Proof>>,
+>;
+type PendingCatalogs = HashMap<
+    request_response::OutboundRequestId,
+    tokio::sync::oneshot::Sender<Vec<crate::storage::CatalogEntry>>,
 >;
 type PendingFills =
     HashMap<request_response::OutboundRequestId, tokio::sync::oneshot::Sender<bool>>;
@@ -256,6 +273,7 @@ pub async fn run_network_loop(
 
     let mut pending_pos: PendingProofs = HashMap::new();
     let mut pending_fills: PendingFills = HashMap::new();
+    let mut repairs = Repairs::default();
 
     let mut pending_syncs: HashMap<request_response::OutboundRequestId, String> = HashMap::new();
 
@@ -290,7 +308,7 @@ pub async fn run_network_loop(
     loop {
         tokio::select! {
             event = swarm.select_next_some() => {
-                handle_swarm_event(event, &mut swarm, &state, &networks, &topics, &chains, &identity, &file_gossip, &storage_managers, &mut pending_fetches, &mut pending_pings, &mut pending_pos, &mut pending_fills, &fillers, &mut pending_syncs, &remote_fragment_index, &mut local_kad_peers).await;
+                handle_swarm_event(event, &mut swarm, &state, &networks, &topics, &chains, &identity, &file_gossip, &storage_managers, &mut pending_fetches, &mut pending_pings, &mut pending_pos, &mut pending_fills, &mut repairs, &fillers, &mut pending_syncs, &remote_fragment_index, &mut local_kad_peers).await;
             }
             cmd = cmd_rx.recv() => {
                 match cmd {
@@ -411,6 +429,35 @@ pub async fn run_network_loop(
                             .send_request(&peer_id, FragmentRequest::ProofOfStorage { target, index });
                         pending_pos.insert(req_id, resp_tx);
                     }
+                    Some(NetworkCommand::Catalog {
+                        peer_id,
+                        network,
+                        layer,
+                        resp_tx,
+                    }) => {
+                        let req_id = swarm
+                            .behaviour_mut()
+                            .fragment_exchange
+                            .send_request(&peer_id, FragmentRequest::Catalog { network, layer });
+                        repairs.catalogs.insert(req_id, resp_tx);
+                    }
+                    Some(NetworkCommand::Recode {
+                        peer_id,
+                        chunk_id,
+                        owner,
+                        route,
+                    }) => {
+                        repairs.awaiting.insert(chunk_id.clone());
+                        let _ = swarm.behaviour_mut().fragment_exchange.send_request(
+                            &peer_id,
+                            FragmentRequest::Recode {
+                                chunk_id,
+                                owner,
+                                route,
+                                partial: None,
+                            },
+                        );
+                    }
                     Some(NetworkCommand::Fill {
                         peer_id,
                         network,
@@ -517,6 +564,7 @@ async fn handle_swarm_event(
     >,
     pending_pos: &mut PendingProofs,
     pending_fills: &mut PendingFills,
+    repairs: &mut Repairs,
     fillers: &Fillers,
     pending_syncs: &mut HashMap<request_response::OutboundRequestId, String>,
     remote_fragment_index: &Arc<RwLock<fragment_gossip::RemoteFragmentIndex>>,
@@ -672,7 +720,24 @@ async fn handle_swarm_event(
             },
         )) => {
             let requester = member_device(chains, &peer);
-            let response = if let FragmentRequest::Commits {
+            let repair = match (&request, &requester) {
+                (
+                    FragmentRequest::Catalog { .. }
+                    | FragmentRequest::Recode { .. }
+                    | FragmentRequest::Repaired { .. },
+                    Some(_),
+                ) => Some(serve_repair(
+                    request.clone(),
+                    swarm,
+                    chains,
+                    storage_managers,
+                    repairs,
+                )),
+                _ => None,
+            };
+            let response = if let Some(response) = repair {
+                response
+            } else if let FragmentRequest::Commits {
                 network,
                 from,
                 cert,
@@ -729,6 +794,14 @@ async fn handle_swarm_event(
                 let _ = tx.send(proof);
                 return;
             }
+            if let Some(tx) = repairs.catalogs.remove(&request_id) {
+                let chunks = match response {
+                    FragmentResponse::Catalog { chunks } => chunks,
+                    _ => Vec::new(),
+                };
+                let _ = tx.send(chunks);
+                return;
+            }
             if let Some(tx) = pending_fills.remove(&request_id) {
                 let _ = tx.send(matches!(response, FragmentResponse::Stored));
                 return;
@@ -772,6 +845,7 @@ async fn handle_swarm_event(
             if let Some(tx) = pending_fills.remove(&request_id) {
                 let _ = tx.send(false);
             }
+            repairs.catalogs.remove(&request_id);
         }
 
         _ => {}
@@ -889,6 +963,117 @@ fn holdings(
         }
     }
     held
+}
+
+#[derive(Default)]
+struct Repairs {
+    catalogs: PendingCatalogs,
+    awaiting: std::collections::HashSet<String>,
+}
+
+fn serve_repair(
+    request: FragmentRequest,
+    swarm: &mut Swarm<BillPouchBehaviour>,
+    chains: &Chains,
+    storage_managers: &StorageManagerMap,
+    repairs: &mut Repairs,
+) -> FragmentResponse {
+    let managers = storage_managers.read().unwrap();
+    match request {
+        FragmentRequest::Catalog { network, layer } => FragmentResponse::Catalog {
+            chunks: managers
+                .values()
+                .filter(|sm| sm.read().unwrap().meta.network_id == network)
+                .flat_map(|sm| sm.read().unwrap().catalog(layer))
+                .collect(),
+        },
+        FragmentRequest::Recode {
+            chunk_id,
+            owner,
+            route,
+            partial,
+        } => {
+            let Some(destination) = route.last().and_then(|d| d.parse::<PeerId>().ok()) else {
+                return FragmentResponse::NotFound;
+            };
+            let Some(next) = route.first().and_then(|d| d.parse::<PeerId>().ok()) else {
+                return FragmentResponse::NotFound;
+            };
+            if member_device(chains, &destination).is_none() {
+                tracing::warn!(chunk = %chunk_id, "refused to recode for a non-member");
+                return FragmentResponse::NotFound;
+            }
+            let partial = partial.and_then(|bytes| {
+                EncodedFragment::from_bytes(String::new(), chunk_id.clone(), &bytes).ok()
+            });
+            let own = managers
+                .values()
+                .find_map(|sm| sm.read().unwrap().own_fragment(&chunk_id, &owner));
+            let mixed = match (own, partial) {
+                (Some(own), partial) => {
+                    let id = partial.as_ref().map(|p| p.id.clone());
+                    let mut m = match rlnc::mix(partial, &own) {
+                        Ok(m) => m,
+                        Err(_) => return FragmentResponse::NotFound,
+                    };
+                    if let Some(id) = id.filter(|i| !i.is_empty()) {
+                        m.id = id;
+                    }
+                    Some(m)
+                }
+                (None, partial) => partial,
+            };
+            let request = if route.len() == 1 {
+                let Some(fragment) = mixed else {
+                    return FragmentResponse::NotFound;
+                };
+                FragmentRequest::Repaired {
+                    chunk_id,
+                    owner,
+                    fragment_id: fragment.id.clone(),
+                    fragment: fragment.to_bytes(),
+                }
+            } else {
+                FragmentRequest::Recode {
+                    chunk_id,
+                    owner,
+                    route: route[1..].to_vec(),
+                    partial: mixed.map(|m| m.to_bytes()),
+                }
+            };
+            swarm
+                .behaviour_mut()
+                .fragment_exchange
+                .send_request(&next, request);
+            FragmentResponse::Stored
+        }
+        FragmentRequest::Repaired {
+            chunk_id,
+            owner,
+            fragment_id,
+            fragment,
+        } => {
+            if !repairs.awaiting.remove(&chunk_id) {
+                return FragmentResponse::NotFound;
+            }
+            let Ok(fragment) =
+                EncodedFragment::from_bytes(fragment_id, chunk_id.clone(), &fragment)
+            else {
+                return FragmentResponse::NotFound;
+            };
+            let stored = managers.values().any(|sm| {
+                let mut sm = sm.write().unwrap();
+                sm.meta.tier >= owner.layer && sm.store_fragment(&fragment, &owner).is_ok()
+            });
+            if stored {
+                tracing::info!(chunk = %chunk_id, "received a recoded fragment");
+                FragmentResponse::Stored
+            } else {
+                FragmentResponse::NotFound
+            }
+        }
+        _ => FragmentResponse::NotFound,
+    }
 }
 
 fn member_device(chains: &Chains, peer: &PeerId) -> Option<String> {
@@ -1038,7 +1223,10 @@ fn serve_fragment_request(
             }
         }
         FragmentRequest::Ping { nonce } => FragmentResponse::Pong { nonce: *nonce },
-        FragmentRequest::Commits { .. } => FragmentResponse::NotFound,
+        FragmentRequest::Commits { .. }
+        | FragmentRequest::Catalog { .. }
+        | FragmentRequest::Recode { .. }
+        | FragmentRequest::Repaired { .. } => FragmentResponse::NotFound,
         FragmentRequest::ProofOfStorage { target, index } => managers
             .values()
             .find_map(|sm| sm.read().unwrap().prove(target, *index))

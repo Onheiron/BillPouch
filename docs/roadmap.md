@@ -12,9 +12,9 @@ Alpha. Current version in the root `Cargo.toml`; history in the GitHub releases.
 - Tiers as nested layers: a chunk gets one fragment on every Pouch of the lowest layer with room, `k` from the exact recovery probability `P(Σ X_i ≥ k)`; fragments stored and served only with grants signed by the file's owner.
 - `bp rm` and `bp unshare` with owner-signed orders that Pouches enforce; old index versions are deleted.
 - Personal file index sealed with your SSH key, stored in the network and synced to all your devices; `bp share` with other members; extra devices with a self-invite.
-- Ping and Proof-of-Storage loops → QoS, fault score, rerouting of fragments
-  away from suspected or evicting Pouches, rebuilt from the other holders. Challenges ask for a random 4 KiB block with its Merkle path, checked against a root the challenger kept.
+- Ping and Proof-of-Storage loops → QoS. Challenges ask for a random 4 KiB block with its Merkle path, checked against a root the challenger kept.
 - Per-user credit in verified bytes and usage in held bytes, recorded in the ledger every epoch; Pouches refuse users storing more than they host plus 1 GiB.
+- Repair by the network: a Pouch that joins a layer catches up on every chunk of it through recoding chains across `k` Pouches.
 - Free Pouch space is filled at once with random blobs by the other Pouches and challenged like fragments; real fragments evict filler.
 - Invite-only networks: network key wrapped per member, encrypted gossip, members-only fragment exchange.
 - Shared ledger per network, committed by weighted BFT consensus: members, devices, per-user reputation from PoS observations, epoch snapshots, capabilities, expulsion votes, network key rotation every epoch and after each expulsion.
@@ -26,11 +26,12 @@ Alpha. Current version in the root `Cargo.toml`; history in the GitHub releases.
 | Area | Limitation |
 |------|------------|
 | Allowance | Usage and credit lag one epoch, and a user who joined today is not limited until tomorrow |
-| Repair | Only the owner repairs its chunks: a chunk whose owner stays offline is not repaired |
+| Repair | Recoded fragments are not challenged by the owner, who does not know their Merkle root; a lost Pouch only lowers every chunk's margin until a new one joins |
 | Available space | Comes out as 0 until enough reliable peers are known |
 | `bp-api` | A single bearer token and no TLS: keep it on localhost or behind a TLS proxy |
 
 ## Next
 
-1. Repair by other members when a chunk's owner is offline, with owner-signed repair permissions.
+1. Allowance with no credit, no upload, and credit counted as soon as the filled space passes its challenges.
+2. TLS and SSH-key sessions for `bp-api`.
 

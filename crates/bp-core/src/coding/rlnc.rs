@@ -85,6 +85,30 @@ pub fn encode(chunk: &[u8], k: usize, n: usize) -> BpResult<Vec<EncodedFragment>
     Ok(fragments)
 }
 
+pub fn mix(acc: Option<EncodedFragment>, own: &EncodedFragment) -> BpResult<EncodedFragment> {
+    let coeff = rand::thread_rng().gen_range(1..=255u8);
+    let mut acc = match acc {
+        Some(acc) => acc,
+        None => EncodedFragment {
+            id: Uuid::new_v4().to_string(),
+            chunk_id: own.chunk_id.clone(),
+            k: own.k,
+            coding_vector: vec![0; own.k],
+            data: vec![0; own.data.len()],
+        },
+    };
+    if acc.k != own.k
+        || acc.chunk_id != own.chunk_id
+        || acc.data.len() != own.data.len()
+        || acc.coding_vector.len() != own.coding_vector.len()
+    {
+        return Err(BpError::Coding("mix: fragments of different chunks".into()));
+    }
+    gf256::mul_acc(&mut acc.data, &own.data, coeff);
+    gf256::mul_acc(&mut acc.coding_vector, &own.coding_vector, coeff);
+    Ok(acc)
+}
+
 pub fn recode(fragments: &[EncodedFragment], count: usize) -> BpResult<Vec<EncodedFragment>> {
     if fragments.is_empty() {
         return Err(BpError::Coding("recode: no input fragments".into()));
@@ -229,6 +253,24 @@ fn combine(symbols: &[Vec<u8>], coeffs: &[u8], sym_size: usize) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_chain_of_k_mixes_makes_a_fragment_that_completes_any_k_minus_one() {
+        let data: Vec<u8> = (0..5000).map(|i| (i * 7 % 251) as u8).collect();
+        let k = 4;
+        let fragments = encode(&data, k, 6).unwrap();
+        let mut acc = None;
+        for f in &fragments[..k] {
+            acc = Some(mix(acc, f).unwrap());
+        }
+        let repaired = acc.unwrap();
+        let mut set: Vec<EncodedFragment> = fragments[k..].to_vec();
+        set.push(repaired);
+        set.extend(fragments[..1].iter().cloned());
+        assert_eq!(decode(&set).unwrap(), data);
+        let other = encode(b"something else entirely", 4, 4).unwrap();
+        assert!(mix(Some(fragments[0].clone()), &other[0]).is_err());
+    }
 
     const TEST_CHUNK: &[u8] = b"Hello BillPouch! This is a test chunk for RLNC encoding.";
 

@@ -38,7 +38,7 @@ Everything is under the XDG data dir (`~/.local/share/billpouch/` on Linux):
 | `control.sock`, `daemon.pid` | Daemon socket and PID |
 | `networks/<name>.json` | Genesis, your key entry and the committed ledger blocks of each network you belong to |
 | `placements.json`, `fillers.json` | Where your fragments and filler blobs went: what you challenge and repair |
-| `qos.json` | Per-peer QoS (RTT, success rate, fault score), saved every 60 s |
+| `qos.json` | Per-peer QoS (RTT, challenge success rate), saved every 60 s |
 | `files.json` | Local copy of your file index per network, the index heads you have seen, shares not yet acknowledged |
 | `kad_peers.json` | Known peer addresses, saved every 600 s and redialled at start |
 | `bootstrap.json` | Optional WAN bootstrap peers (`bp bootstrap`) |
@@ -182,17 +182,22 @@ For every peer the daemon keeps a QoS record (`network/qos.rs`):
 
 - **Stability score** `s = 0.6·exp(−rtt/500 ms) + 0.4·success_rate`
   (RTT EWMA α = 0.125, success EWMA β = 0.10). This is the `p_i` used for k/n.
-- **Fault score** 0–100: +5 per failed Proof-of-Storage, −1 per passed one.
-  At 90 (*suspected*) its fragments are repaired.
+**Repair is the network's job.** Every Pouch of a layer holds one fragment of
+every chunk of that layer, so a Pouch that dies costs every chunk of its
+layers one fragment and there is nowhere else to put it: redundancy comes back
+when a Pouch joins the layer, new or replacing the lost one. Every 60 s each
+Pouch, for each of its layers, asks a random Pouch of the layer for its
+**catalog** (chunk, owner, `file_id`, `k`) and, for each chunk it lacks (at
+most 64 per round), starts a **recoding chain**: `k` random Pouches of the layer
+in turn add `c · own fragment` (random `c` in GF(2⁸)) to the running sum and
+pass it on, and the last one hands the result to the new Pouch, which stores it
+with the chunk's owner. The result is a fresh RLNC fragment; nobody sees more
+than its own fragment and one partial sum, so no fetch grant is needed, only
+that the requester and the destination are member devices.
 
-**Repair** (`network/quality_monitor.rs`): when a Pouch is suspected, or
-announces `evicting`, the owner of each chunk it held gathers at least `k`
-fragments of that chunk from its own Pouch and the other holders, recodes as
-many new fragments as were lost and pushes them to the best-ranked Pouch below
-70 (*degraded*) that does not hold the chunk yet (its own Pouch included). Where
-each fragment went is saved in `placements.json`, so challenges and repairs
-survive a restart. Fragment index announcements list every holder, the owner's
-Pouch included, and `bp get` falls back to every known Pouch.
+Where each of your fragments went is saved in `placements.json`, so your
+challenges survive a restart. Fragment index announcements list every holder,
+the owner's Pouch included, and `bp get` falls back to every known Pouch.
 
 **Proof-of-Storage** (`storage/merkle.rs`): data is split into 4 KiB blocks
 and committed with a BLAKE3 Merkle tree. Every 300 s the daemon picks, for each

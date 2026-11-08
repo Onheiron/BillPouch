@@ -36,6 +36,22 @@ pub enum FragmentRequest {
         from: u64,
         cert: crate::identity::DeviceCert,
     },
+    Catalog {
+        network: String,
+        layer: crate::storage::StorageTier,
+    },
+    Recode {
+        chunk_id: String,
+        owner: crate::storage::ChunkOwner,
+        route: Vec<String>,
+        partial: Option<Vec<u8>>,
+    },
+    Repaired {
+        chunk_id: String,
+        owner: crate::storage::ChunkOwner,
+        fragment_id: String,
+        fragment: Vec<u8>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,6 +72,9 @@ pub enum FragmentResponse {
     },
     Commits {
         commits: Vec<crate::consensus::Commit>,
+    },
+    Catalog {
+        chunks: Vec<crate::storage::CatalogEntry>,
     },
 }
 

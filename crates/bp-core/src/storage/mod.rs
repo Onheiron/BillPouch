@@ -27,6 +27,13 @@ pub struct ChunkOwner {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CatalogEntry {
+    pub chunk_id: String,
+    pub owner: ChunkOwner,
+    pub k: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PosTarget {
     Fragment {
@@ -181,6 +188,33 @@ impl StorageManager {
             self.save_meta()?;
         }
         Ok(freed)
+    }
+
+    pub fn catalog(&self, layer: StorageTier) -> Vec<CatalogEntry> {
+        self.index
+            .chunk_ids()
+            .filter_map(|chunk| {
+                let owner = self.owner_of(chunk).filter(|o| o.layer == layer)?;
+                let k = self.index.fragments_for_chunk(chunk).first()?.k;
+                Some(CatalogEntry {
+                    chunk_id: chunk.to_string(),
+                    owner,
+                    k,
+                })
+            })
+            .collect()
+    }
+
+    pub fn has_chunk(&self, chunk_id: &str) -> bool {
+        !self.index.fragments_for_chunk(chunk_id).is_empty()
+    }
+
+    pub fn own_fragment(&self, chunk_id: &str, owner: &ChunkOwner) -> Option<EncodedFragment> {
+        if self.owner_of(chunk_id).as_ref() != Some(owner) {
+            return None;
+        }
+        let meta = self.index.fragments_for_chunk(chunk_id).first()?;
+        self.load_fragment(chunk_id, &meta.fragment_id).ok()
     }
 
     pub fn layer_free(&self, layer: StorageTier) -> u64 {
