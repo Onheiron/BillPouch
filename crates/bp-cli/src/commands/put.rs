@@ -11,7 +11,6 @@ pub async fn put(
     path: PathBuf,
     network: String,
     ph: f64,
-    q_target: f64,
     name: Option<String>,
 ) -> anyhow::Result<()> {
     if !Identity::exists()? {
@@ -27,7 +26,6 @@ pub async fn put(
         .request(ControlRequest::PutFile {
             path,
             ph: Some(ph),
-            q_target: Some(q_target),
             network_id: network.clone(),
             file_name: name,
         })
@@ -36,7 +34,10 @@ pub async fn put(
     let d: PutFileData = serde_json::from_value(data)?;
     println!("✓ Stored {} bytes in {} chunk(s)", d.size_bytes, d.chunks);
     println!("   file_id      : {}", d.file_id);
-    println!("   k / n        : {} / {}  (worst chunk)", d.k, d.n);
+    println!(
+        "   k / n        : {} / {}  (one fragment per Pouch of the layer)",
+        d.k, d.n
+    );
     println!("   Ph target    : {:.4}   Pe effective: {:.4}", d.ph, d.pe);
     println!(
         "   fragments    : {} on this node, {} pushed to other Pouches",

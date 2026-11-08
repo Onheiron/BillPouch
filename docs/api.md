@@ -29,7 +29,7 @@ Types: `bp_core::control::protocol`; client helper: `bp_core::control::client::s
 | `members` | `network_id` | Members with tier, weight, devices, pending expulsions; expelled members |
 | `expel` | `network_id`, `member` (fingerprint) | Proposes or approves an expulsion |
 | `leave` | `network_id`, `force` | Leaves a network |
-| `put_file` | `path` (on the daemon's machine), `network_id`, `ph`?, `q_target`?, `file_name`? | Streams a file in, returns `file_id`, `chunks`, `k`, `n`, placement counts |
+| `put_file` | `path` (on the daemon's machine), `network_id`, `ph`?, `file_name`? | Streams a file in, returns `file_id`, `chunks`, `k`, `n`, placement counts |
 | `get_file` | `file_id`, `network_id`, `output` (path) | Writes the decrypted file to `output` |
 | `delete_file` | `file_id`, `network_id` | Deletes one of your files, or drops a shared one from your index |
 | `share` | `network_id`, `file_id`, `member` (fingerprint) | Wraps the file key for a member and delivers it |
@@ -63,7 +63,7 @@ Errors are `{"error": "…"}` with 401 (missing or wrong token), 503 (daemon unr
 | GET | `/networks/:id/members` | — | `members` |
 | POST | `/networks/:id/expulsions` | `{member}` (fingerprint) | `expel` |
 | POST | `/networks/leave` | `{network_id, force?}` | `leave` |
-| POST | `/files` | `{data: base64, network_id, ph?, q_target?, file_name?}` → 201 | `put_file` (through a temporary file) |
+| POST | `/files` | `{data: base64, network_id, ph?, file_name?}` → 201 | `put_file` (through a temporary file) |
 | GET | `/files/:file_id` | `?network=<id>` → `{file_id, file_name, size_bytes, data: base64}` | `get_file` |
 | DELETE | `/files/:file_id` | `?network=<id>` | `delete_file` |
 | POST | `/files/:file_id/shares` | `{network_id, member}` | `share` |

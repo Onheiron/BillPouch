@@ -295,7 +295,6 @@ async fn put_file_get_file_roundtrip() {
         &ControlRequest::PutFile {
             path: source.clone(),
             ph: Some(0.99),
-            q_target: Some(1.0),
             network_id: "test-net".to_string(),
             file_name: None,
         },
@@ -390,7 +389,6 @@ async fn put_file_without_pouch_returns_error() {
         &ControlRequest::PutFile {
             path: temp_file(b"test"),
             ph: None,
-            q_target: None,
             network_id: "test-net".to_string(),
             file_name: None,
         },
@@ -487,7 +485,6 @@ async fn get_file_outside_your_index_returns_error() {
         &ControlRequest::PutFile {
             path: temp_file(b"index test payload"),
             ph: Some(0.99),
-            q_target: Some(1.0),
             network_id: "test-net".to_string(),
             file_name: None,
         },

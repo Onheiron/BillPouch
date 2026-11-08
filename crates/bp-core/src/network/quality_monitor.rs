@@ -353,6 +353,7 @@ async fn run_fill_round(
 struct LostChunk {
     chunk_id: String,
     grant: crate::files::Grant,
+    layer: crate::storage::StorageTier,
     lost: usize,
     holders: Vec<PeerId>,
 }
@@ -371,6 +372,7 @@ fn lost_chunks(outgoing: &OutgoingAssignments, lost_peer: &str) -> Vec<LostChunk
             None => chunks.push(LostChunk {
                 chunk_id: f.chunk_id.clone(),
                 grant: f.grant.clone(),
+                layer: f.layer,
                 lost: 1,
                 holders: Vec::new(),
             }),
@@ -492,6 +494,7 @@ pub async fn repair_peer(
             let owner = crate::storage::ChunkOwner {
                 owner_key: chunk.grant.owner_key.clone(),
                 file_id: chunk.grant.file_id.clone(),
+                layer: chunk.layer,
             };
             let local = storage_managers
                 .read()
@@ -514,6 +517,7 @@ pub async fn repair_peer(
                         fragment_id: fragment.id.clone(),
                         data: fragment.to_bytes(),
                         grant: chunk.grant.clone(),
+                        layer: chunk.layer,
                     })
                     .await;
             }
@@ -723,6 +727,7 @@ mod tests {
             chunk_id: chunk.into(),
             fragment_id: id.into(),
             grant: grant.clone(),
+            layer: crate::storage::StorageTier::T1,
             root: [0; 32],
             blocks: 1,
             size: 10,

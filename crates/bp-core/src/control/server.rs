@@ -687,10 +687,9 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
         ControlRequest::PutFile {
             path,
             ph,
-            q_target,
             network_id,
             file_name,
-        } => files::put_file(state, path, ph, q_target, network_id, file_name).await,
+        } => files::put_file(state, path, ph, network_id, file_name).await,
 
         ControlRequest::GetFile {
             file_id,
@@ -840,8 +839,19 @@ fn pouch_metadata(
 ) -> std::collections::HashMap<String, serde_json::Value> {
     let mut metadata = svc.metadata.clone();
     if let Some(sm) = state.storage_managers.read().unwrap().get(&svc.id) {
-        let free = sm.read().unwrap().meta.available_bytes();
-        metadata.insert("free_bytes".into(), serde_json::Value::from(free));
+        let sm = sm.read().unwrap();
+        let layer_free: std::collections::BTreeMap<StorageTier, u64> = sm
+            .meta
+            .tier
+            .layers()
+            .map(|l| (l, sm.layer_free(l)))
+            .collect();
+        metadata.insert(
+            "free_bytes".into(),
+            serde_json::Value::from(sm.meta.available_bytes()),
+        );
+        metadata.insert("tier".into(), serde_json::json!(sm.meta.tier));
+        metadata.insert("layer_free".into(), serde_json::json!(layer_free));
     }
     metadata
 }

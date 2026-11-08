@@ -16,7 +16,7 @@ use crate::{
         FragmentResponse, Gossip, NetworkCommand,
     },
     service::ServiceType,
-    storage::ChunkCipher,
+    storage::{ChunkCipher, StorageTier},
 };
 use libp2p::PeerId;
 use std::collections::HashSet;
@@ -56,13 +56,98 @@ async fn publish(state: &DaemonState, network_id: &str, message: Gossip) {
         .await;
 }
 
+pub struct LayerNode {
+    pub peer: String,
+    pub tier: StorageTier,
+    pub free: std::collections::BTreeMap<StorageTier, u64>,
+}
+
+pub fn layer_nodes(state: &DaemonState, network_id: &str) -> Vec<LayerNode> {
+    let me = state.identity.peer_id.to_string();
+    let mut nodes: Vec<LayerNode> = state
+        .network_state
+        .read()
+        .unwrap()
+        .in_network(network_id)
+        .into_iter()
+        .filter(|n| n.service_type == ServiceType::Pouch && n.peer_id != me)
+        .filter(|n| n.metadata.get("evicting").and_then(|v| v.as_bool()) != Some(true))
+        .filter_map(|n| {
+            let tier = StorageTier::parse(n.metadata.get("tier")?.as_str()?).ok()?;
+            let free = n
+                .metadata
+                .get("layer_free")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default();
+            Some(LayerNode {
+                peer: n.peer_id.clone(),
+                tier,
+                free,
+            })
+        })
+        .collect();
+    for sm in state.storage_managers.read().unwrap().values() {
+        let sm = sm.read().unwrap();
+        if sm.meta.network_id == network_id {
+            nodes.push(LayerNode {
+                peer: me.clone(),
+                tier: sm.meta.tier,
+                free: sm
+                    .meta
+                    .tier
+                    .layers()
+                    .map(|l| (l, sm.layer_free(l)))
+                    .collect(),
+            });
+        }
+    }
+    nodes
+}
+
+fn stabilities(state: &DaemonState, peers: &[String]) -> Vec<f64> {
+    let qos = state.qos.read().unwrap();
+    peers
+        .iter()
+        .map(|p| match qos.get(p) {
+            Some(q) if q.is_observed() => q.stability_score(),
+            _ => UNOBSERVED_STABILITY,
+        })
+        .collect()
+}
+
+pub fn choose_layer(
+    nodes: &[LayerNode],
+    stabilities: impl Fn(&[String]) -> Vec<f64>,
+    data_len: usize,
+    ph: f64,
+) -> Result<(StorageTier, Vec<String>, coding_params::Plan), String> {
+    if nodes.is_empty() {
+        return Err("no Pouch available — hatch a Pouch or wait for Pouch peers to join".into());
+    }
+    for layer in StorageTier::all().iter().copied() {
+        let members: Vec<&LayerNode> = nodes.iter().filter(|n| n.tier >= layer).collect();
+        if members.is_empty() {
+            break;
+        }
+        let peers: Vec<String> = members.iter().map(|n| n.peer.clone()).collect();
+        let plan = coding_params::plan(&stabilities(&peers), ph).map_err(|e| e.to_string())?;
+        let fragment = (data_len.div_ceil(plan.k) + plan.k + 16) as u64;
+        if members
+            .iter()
+            .all(|n| n.free.get(&layer).copied().unwrap_or(0) >= fragment)
+        {
+            return Ok((layer, peers, plan));
+        }
+    }
+    Err("every layer of the network is full".into())
+}
+
 async fn store_chunk(
     state: &DaemonState,
     network_id: &str,
     data: &[u8],
     grant: &Grant,
     ph: f64,
-    q_target: f64,
     total: &mut Stored,
 ) -> Result<String, String> {
     let local = state
@@ -73,84 +158,59 @@ async fn store_chunk(
         .find(|sm| sm.read().unwrap().meta.network_id == network_id)
         .cloned();
     let me = state.identity.peer_id.to_string();
-    let mut nodes: Vec<String> = state
-        .network_state
-        .read()
-        .unwrap()
-        .in_network(network_id)
-        .into_iter()
-        .filter(|n| n.service_type == ServiceType::Pouch && n.peer_id != me)
-        .map(|n| n.peer_id.clone())
-        .collect();
-    if local.is_some() {
-        nodes.push(me.clone());
-    }
-    if nodes.is_empty() {
-        return Err(format!(
-            "No Pouches available on network '{network_id}' — hatch a Pouch or wait for Pouch peers to join"
-        ));
-    }
     let chunk_id = rlnc::chunk_hash(data);
-    rank(&chunk_id, &mut nodes);
-    let stabilities: Vec<f64> = {
-        let qos = state.qos.read().unwrap();
-        nodes
-            .iter()
-            .map(|p| match qos.get(p) {
-                Some(q) if q.is_observed() => q.stability_score(),
-                _ => UNOBSERVED_STABILITY,
-            })
-            .collect()
-    };
-    let plan = coding_params::plan(&stabilities, ph, q_target).map_err(|e| e.to_string())?;
+    let (layer, nodes, plan) = choose_layer(
+        &layer_nodes(state, network_id),
+        |peers| stabilities(state, peers),
+        data.len(),
+        ph,
+    )?;
     let fragments = rlnc::encode(data, plan.k, plan.n).map_err(|e| format!("Encode error: {e}"))?;
     let owner = crate::storage::ChunkOwner {
         owner_key: grant.owner_key.clone(),
         file_id: grant.file_id.clone(),
+        layer,
     };
 
     let mut pointers = Vec::new();
-    let mut fragments = fragments.iter();
-    for (node, &count) in nodes.iter().zip(&plan.per_node) {
-        for fragment in fragments.by_ref().take(count) {
-            if *node == me {
-                let Some(sm) = &local else { continue };
-                let result = sm.write().unwrap().store_fragment(fragment, &owner);
-                match result {
-                    Ok(evicted) => {
-                        total.stored += 1;
-                        pointers.push(FragmentPointer {
-                            peer_id: me.clone(),
-                            fragment_id: fragment.id.clone(),
-                        });
-                        if !evicted.is_empty() {
-                            publish(state, network_id, Gossip::FillerEvicted { blobs: evicted })
-                                .await;
-                        }
+    for (node, fragment) in nodes.iter().zip(fragments.iter()) {
+        if *node == me {
+            let Some(sm) = &local else { continue };
+            let result = sm.write().unwrap().store_fragment(fragment, &owner);
+            match result {
+                Ok(evicted) => {
+                    total.stored += 1;
+                    pointers.push(FragmentPointer {
+                        peer_id: me.clone(),
+                        fragment_id: fragment.id.clone(),
+                    });
+                    if !evicted.is_empty() {
+                        publish(state, network_id, Gossip::FillerEvicted { blobs: evicted }).await;
                     }
-                    Err(e) => tracing::warn!(chunk_id=%chunk_id, "store_fragment failed: {e}"),
                 }
-                continue;
+                Err(e) => tracing::warn!(chunk_id=%chunk_id, "store_fragment failed: {e}"),
             }
-            let Ok(peer) = node.parse::<PeerId>() else {
-                continue;
-            };
-            let sent = state
-                .net_tx
-                .send(NetworkCommand::PushFragment {
-                    peer_id: peer,
-                    chunk_id: chunk_id.clone(),
-                    fragment_id: fragment.id.clone(),
-                    data: fragment.to_bytes(),
-                    grant: grant.clone(),
-                })
-                .await;
-            if sent.is_ok() {
-                pointers.push(FragmentPointer {
-                    peer_id: node.clone(),
-                    fragment_id: fragment.id.clone(),
-                });
-            }
+            continue;
+        }
+        let Ok(peer) = node.parse::<PeerId>() else {
+            continue;
+        };
+        let sent = state
+            .net_tx
+            .send(NetworkCommand::PushFragment {
+                peer_id: peer,
+                chunk_id: chunk_id.clone(),
+                fragment_id: fragment.id.clone(),
+                data: fragment.to_bytes(),
+                grant: grant.clone(),
+                layer,
+            })
+            .await;
+        if sent.is_ok() {
+            pointers.push(FragmentPointer {
+                peer_id: node.clone(),
+                fragment_id: fragment.id.clone(),
+            });
         }
     }
     total.distributed += pointers.iter().filter(|p| p.peer_id != me).count();
@@ -295,12 +355,10 @@ pub async fn put_file(
     state: &DaemonState,
     path: std::path::PathBuf,
     ph: Option<f64>,
-    q_target: Option<f64>,
     network_id: String,
     file_name: Option<String>,
 ) -> ControlResponse {
     let ph = ph.unwrap_or(DEFAULT_PH);
-    let q_target = q_target.unwrap_or(1.0);
     let mut file = match tokio::fs::File::open(&path).await {
         Ok(f) => f,
         Err(e) => return ControlResponse::err(format!("cannot read {}: {e}", path.display())),
@@ -331,17 +389,7 @@ pub async fn put_file(
             Ok(c) => c,
             Err(e) => return ControlResponse::err(format!("Encryption error: {e}")),
         };
-        if let Err(e) = store_chunk(
-            state,
-            &network_id,
-            &sealed,
-            &grant,
-            ph,
-            q_target,
-            &mut total,
-        )
-        .await
-        {
+        if let Err(e) = store_chunk(state, &network_id, &sealed, &grant, ph, &mut total).await {
             if !total.chunks.is_empty() {
                 send_order(state, &network_id, &file_id, Action::Delete).await;
             }
@@ -708,10 +756,7 @@ pub async fn publish_index(state: &DaemonState, network_id: &str) {
     };
     let mut total = Stored::default();
     for piece in blob.chunks(CHUNK_BYTES) {
-        if let Err(e) = store_chunk(
-            state, network_id, piece, &grant, DEFAULT_PH, 1.0, &mut total,
-        )
-        .await
+        if let Err(e) = store_chunk(state, network_id, piece, &grant, DEFAULT_PH, &mut total).await
         {
             return tracing::warn!(network = %network_id, "cannot store the file index: {e}");
         }
@@ -935,5 +980,44 @@ pub async fn sync_cycle(state: &DaemonState) {
             )
             .await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn node(peer: &str, tier: StorageTier, free: u64) -> LayerNode {
+        LayerNode {
+            peer: peer.into(),
+            tier,
+            free: tier.layers().map(|l| (l, free)).collect::<BTreeMap<_, _>>(),
+        }
+    }
+
+    #[test]
+    fn files_go_to_the_lowest_layer_with_room_on_every_node() {
+        let mut nodes: Vec<LayerNode> = (0..6)
+            .map(|i| node(&format!("t1-{i}"), StorageTier::T1, 1 << 30))
+            .collect();
+        nodes.extend((0..3).map(|i| node(&format!("t2-{i}"), StorageTier::T2, 1 << 30)));
+        let even = |peers: &[String]| vec![0.95; peers.len()];
+
+        let (layer, peers, plan) = choose_layer(&nodes, even, 4 << 20, 0.999).unwrap();
+        assert_eq!(layer, StorageTier::T1);
+        assert_eq!(peers.len(), 9, "T1 holds every node, T2 ones included");
+        assert_eq!(plan.n, 9);
+
+        nodes[0].free.insert(StorageTier::T1, 10);
+        let (layer, peers, _) = choose_layer(&nodes, even, 4 << 20, 0.999).unwrap();
+        assert_eq!(layer, StorageTier::T2);
+        assert!(peers.iter().all(|p| p.starts_with("t2-")));
+
+        for n in nodes.iter_mut() {
+            n.free.insert(StorageTier::T2, 10);
+        }
+        assert!(choose_layer(&nodes, even, 4 << 20, 0.999).is_err());
+        assert!(choose_layer(&[], even, 1, 0.999).is_err());
     }
 }

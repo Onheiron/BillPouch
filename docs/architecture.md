@@ -89,23 +89,20 @@ chunks; only one chunk is in memory at a time. Each file gets a random
    your SSH key and put in the file's manifest: `file_id`, the ordered
    `chunk_id`s, name, size, owner, one wrap and one grant per authorized user.
    Pouches only ever see ciphertext.
-2. **Rank the Pouches.** `chunk_id` is a 16-hex-char BLAKE3 prefix of the
-   ciphertext. Every Pouch of the network (yours included) is ranked by
-   `BLAKE3(chunk_id ‖ peer_id)` (rendezvous hashing), so anyone knowing the
-   Pouches can recompute where a chunk lives.
-3. **Choose k and n** (`coding/params.rs`). For a candidate `k`,
-   `n = max(k + 1, round(k·(1 + q_target)))` (`--q-target`, default 1.0) and the
-   fragments go round-robin down the ranking, `m_i` on Pouch `i`. The recovery
-   probability is exact: with `X_i` = Pouch `i` reachable (probability `p_i`, its
-   stability score; 0.8 if never pinged), `Pe = P(Σ m_i·X_i ≥ k)`, computed by
-   dynamic programming over the number of fragments reachable. The chosen plan is
-   the largest `k` (≤ 32) with `Pe ≥ Ph` (`--ph`, default 0.999), first with one
-   fragment per Pouch and, if that cannot reach `Ph`, with at most `max(1, ⌊k/4⌋)`
-   fragments per Pouch. If nothing reaches `Ph`, the plan with the highest `Pe`
-   is used and reported.
+2. **Choose the layer** (see *Storage tiers*). `chunk_id` is a 16-hex-char
+   BLAKE3 prefix of the ciphertext. The chunk goes to the lowest layer whose
+   every Pouch (yours included) still has room for one fragment in that layer's
+   slice; lower layers have more Pouches, so they are at least as stable.
+3. **Choose k** (`coding/params.rs`). Every Pouch of the layer gets exactly one
+   fragment, so `n` = Pouches in the layer. With `X_i` = Pouch `i` reachable
+   (probability `p_i`, its stability score; 0.8 if never pinged), the recovery
+   probability `Pe = P(Σ X_i ≥ k)` is computed exactly by dynamic programming,
+   and `k` is the largest (≤ 128) with `Pe ≥ Ph` (`--ph`, default 0.999). Each
+   Pouch then stores 1/k of the chunk. If even `k = 1` (a full copy on every
+   Pouch) misses `Ph`, it is used anyway and `Pe` is reported.
 4. **Encode and place.** Systematic RLNC over GF(2⁸): `n` fragments, any `k` of
-   which decode. Your own fragments are stored locally; the others are pushed to
-   their Pouches with your **owner grant**. The placement is gossiped as an
+   which decode. Your own fragment is stored locally; the others are pushed to
+   their Pouches with your **owner grant** and the layer. The placement is gossiped as an
    `Index` message and recorded for Proof-of-Storage.
 
 `bp get` looks the file up in your index and, chunk by chunk, collects local
@@ -158,7 +155,13 @@ failing peer are replaced.
 ## Storage tiers
 
 A Pouch offers exactly one tier; at most one Pouch per network per node
-(two Pouches on one machine would fail together).
+(two Pouches on one machine would fail together). Tiers are nested layers: a
+T3 Pouch is also in layers T2 and T1, and gives each layer a slice of its
+space: 10 GiB to T1, the next 90 GiB to T2, the next 400 GiB to T3, and so on.
+With 100 Pouches of which 30 are T2 and 10 are T3, layer T1 has 100 Pouches,
+T2 40 and T3 10. A fragment of layer `L` only goes into the `L` slice, and a
+Pouch announces its free space per layer (`layer_free`). Usable space and
+redundancy therefore come in steps, one per layer; files fill T1 first.
 
 | Tier | Name | Quota |
 |------|------|-------|
@@ -220,8 +223,7 @@ In the same op every Pouch reports the bytes it holds for each owner; the
 snapshot sums them into each user's **usage**. A Pouch refuses new fragments
 from a user whose usage exceeds their credit plus 1 GiB (a user who joined
 during the epoch is not limited until the next snapshot). Raw bytes count on
-both sides, so with `q_target = 1` a user can store about half of what they
-host.
+both sides, so a user stores `k/n` of what they host in user data.
 
 QoS is local to each node (`qos.json`); reputation lives in the ledger.
 

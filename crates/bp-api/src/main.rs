@@ -352,7 +352,6 @@ struct PutFileBody {
     data: String,
     network_id: String,
     ph: Option<f64>,
-    q_target: Option<f64>,
     file_name: Option<String>,
 }
 
@@ -386,7 +385,6 @@ async fn put_file(State(state): State<AppState>, Json(body): Json<PutFileBody>) 
         path: path.clone(),
         network_id: body.network_id,
         ph: body.ph,
-        q_target: body.q_target,
         file_name: body.file_name,
     };
     let response = respond(&state, req, StatusCode::CREATED).await;

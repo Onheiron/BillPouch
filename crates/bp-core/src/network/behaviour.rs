@@ -17,6 +17,7 @@ pub enum FragmentRequest {
         fragment_id: String,
         data: Vec<u8>,
         grant: crate::files::Grant,
+        layer: crate::storage::StorageTier,
     },
     Ping {
         nonce: u64,
