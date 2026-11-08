@@ -1,11 +1,12 @@
 use axum::{
+    body::Body,
     extract::{Path, Query, State},
-    http::StatusCode,
-    response::{Html, IntoResponse, Response},
+    http::{header, StatusCode},
+    response::{IntoResponse, Response},
     routing::{delete, get, post},
     Json, Router,
 };
-use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+use base64::Engine as _;
 use bp_core::{
     config,
     control::{
@@ -15,8 +16,10 @@ use bp_core::{
     service::ServiceType,
 };
 use clap::Parser;
+use futures::StreamExt;
 use serde::Deserialize;
 use std::{collections::HashMap, net::SocketAddr, path::PathBuf, sync::Arc};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::instrument;
 
 #[derive(Parser)]
@@ -135,10 +138,51 @@ fn api_error(status: StatusCode, message: String) -> Response {
     (status, Json(serde_json::json!({ "error": message }))).into_response()
 }
 
-const DASHBOARD_HTML: &str = include_str!("../static/index.html");
+fn asset(content_type: &'static str, body: &'static str) -> Response {
+    (
+        [
+            (header::CONTENT_TYPE, content_type),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        body,
+    )
+        .into_response()
+}
 
-async fn dashboard() -> impl IntoResponse {
-    Html(DASHBOARD_HTML)
+async fn index() -> Response {
+    asset(
+        "text/html; charset=utf-8",
+        include_str!("../static/index.html"),
+    )
+}
+
+async fn app_js() -> Response {
+    asset(
+        "text/javascript; charset=utf-8",
+        include_str!("../static/app.js"),
+    )
+}
+
+async fn app_css() -> Response {
+    asset("text/css; charset=utf-8", include_str!("../static/app.css"))
+}
+
+async fn service_worker() -> Response {
+    asset(
+        "text/javascript; charset=utf-8",
+        include_str!("../static/sw.js"),
+    )
+}
+
+async fn manifest() -> Response {
+    asset(
+        "application/manifest+json",
+        include_str!("../static/manifest.webmanifest"),
+    )
+}
+
+async fn icon() -> Response {
+    asset("image/svg+xml", include_str!("../static/icon.svg"))
 }
 
 #[instrument(skip_all)]
@@ -370,11 +414,10 @@ async fn network_leave(State(state): State<AppState>, Json(body): Json<NetworkBo
 }
 
 #[derive(Deserialize)]
-struct PutFileBody {
-    data: String,
-    network_id: String,
+struct PutFileQuery {
+    network: String,
+    name: Option<String>,
     ph: Option<f64>,
-    file_name: Option<String>,
 }
 
 fn scratch_file() -> std::io::Result<PathBuf> {
@@ -385,29 +428,35 @@ fn scratch_file() -> std::io::Result<PathBuf> {
     Ok(dir.join(hex::encode(rand::random::<[u8; 8]>())))
 }
 
+async fn save_body(body: Body, path: &std::path::Path) -> std::io::Result<()> {
+    let mut file = tokio::fs::File::create(path).await?;
+    let mut stream = body.into_data_stream();
+    while let Some(chunk) = stream.next().await {
+        file.write_all(&chunk.map_err(std::io::Error::other)?)
+            .await?;
+    }
+    file.flush().await
+}
+
 #[instrument(skip_all)]
-async fn put_file(State(state): State<AppState>, Json(body): Json<PutFileBody>) -> Response {
-    let raw = match B64.decode(&body.data) {
-        Ok(b) => b,
-        Err(e) => {
-            return api_error(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                format!("data is not valid base64: {e}"),
-            )
-        }
-    };
+async fn put_file(
+    State(state): State<AppState>,
+    Query(query): Query<PutFileQuery>,
+    body: Body,
+) -> Response {
     let path = match scratch_file() {
         Ok(p) => p,
         Err(e) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     };
-    if let Err(e) = tokio::fs::write(&path, &raw).await {
-        return api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+    if let Err(e) = save_body(body, &path).await {
+        let _ = tokio::fs::remove_file(&path).await;
+        return api_error(StatusCode::BAD_REQUEST, format!("upload interrupted: {e}"));
     }
     let req = ControlRequest::PutFile {
         path: path.clone(),
-        network_id: body.network_id,
-        ph: body.ph,
-        file_name: body.file_name,
+        network_id: query.network,
+        ph: query.ph,
+        file_name: query.name,
     };
     let response = respond(&state, req, StatusCode::CREATED).await;
     let _ = tokio::fs::remove_file(&path).await;
@@ -417,6 +466,47 @@ async fn put_file(State(state): State<AppState>, Json(body): Json<PutFileBody>) 
 #[derive(Deserialize)]
 struct FileQuery {
     network: String,
+}
+
+#[derive(Deserialize, Default)]
+struct NetworkQuery {
+    #[serde(default)]
+    network: String,
+}
+
+#[instrument(skip_all)]
+async fn list_files(State(state): State<AppState>, Query(query): Query<NetworkQuery>) -> Response {
+    respond(
+        &state,
+        ControlRequest::ListFiles {
+            network_id: query.network,
+        },
+        StatusCode::OK,
+    )
+    .await
+}
+
+#[instrument(skip_all)]
+async fn storage(State(state): State<AppState>, Query(query): Query<NetworkQuery>) -> Response {
+    respond(
+        &state,
+        ControlRequest::StorageInfo {
+            network_id: query.network,
+        },
+        StatusCode::OK,
+    )
+    .await
+}
+
+fn attachment(name: &str) -> String {
+    let encoded: String = name
+        .bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'.' | b'-' | b'_' => (b as char).to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect();
+    format!("attachment; filename*=UTF-8''{encoded}")
 }
 
 #[instrument(skip_all)]
@@ -438,19 +528,33 @@ async fn get_file(
         Ok(data) => data,
         Err(resp) => return *resp,
     };
-    let bytes = tokio::fs::read(&output).await;
+    let file = tokio::fs::File::open(&output).await;
     let _ = tokio::fs::remove_file(&output).await;
-    match (serde_json::from_value::<GetFileData>(data), bytes) {
-        (Ok(d), Ok(bytes)) => Json(serde_json::json!({
-            "file_id": d.file_id,
-            "file_name": d.file_name,
-            "size_bytes": d.size_bytes,
-            "data": B64.encode(&bytes),
-        }))
-        .into_response(),
-        (Err(e), _) => api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-        (_, Err(e)) => api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-    }
+    let (meta, file) = match (serde_json::from_value::<GetFileData>(data), file) {
+        (Ok(meta), Ok(file)) => (meta, file),
+        (Err(e), _) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        (_, Err(e)) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+    let stream = futures::stream::unfold(file, |mut file| async move {
+        let mut buf = vec![0u8; 1 << 16];
+        match file.read(&mut buf).await {
+            Ok(0) => None,
+            Ok(n) => {
+                buf.truncate(n);
+                Some((Ok::<_, std::io::Error>(buf), file))
+            }
+            Err(e) => Some((Err(e), file)),
+        }
+    });
+    (
+        [
+            (header::CONTENT_TYPE, "application/octet-stream".to_string()),
+            (header::CONTENT_LENGTH, meta.size_bytes.to_string()),
+            (header::CONTENT_DISPOSITION, attachment(&meta.file_name)),
+        ],
+        Body::from_stream(stream),
+    )
+        .into_response()
 }
 
 #[instrument(skip_all)]
@@ -543,7 +647,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/networks/{network_id}/members", get(network_members))
         .route("/networks/{network_id}/expulsions", post(network_expel))
         .route("/networks/leave", post(network_leave))
-        .route("/files", post(put_file))
+        .route("/files", get(list_files).post(put_file))
+        .route("/storage", get(storage))
         .route("/files/{file_id}", get(get_file).delete(delete_file))
         .route("/files/{file_id}/shares", post(share_file))
         .route("/files/{file_id}/shares/{member}", delete(unshare_file))
@@ -553,7 +658,14 @@ async fn main() -> anyhow::Result<()> {
             require_session,
         ))
         .with_state(state);
-    let app = Router::new().route("/", get(dashboard)).merge(api);
+    let app = Router::new()
+        .route("/", get(index))
+        .route("/app.js", get(app_js))
+        .route("/app.css", get(app_css))
+        .route("/sw.js", get(service_worker))
+        .route("/manifest.webmanifest", get(manifest))
+        .route("/icon.svg", get(icon))
+        .merge(api);
 
     let addr: SocketAddr = format!("{}:{}", args.host, args.port)
         .parse()

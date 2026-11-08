@@ -358,6 +358,10 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 known_peers: ns.all().into_iter().cloned().collect(),
                 networks: networks.clone(),
                 peer_count: ns.len(),
+                qos: {
+                    let qos = state.qos.read().unwrap();
+                    qos.peer_ids().filter_map(|p| qos.get(p).cloned()).collect()
+                },
             };
             ControlResponse::ok(data)
         }

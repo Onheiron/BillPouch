@@ -1,5 +1,5 @@
 use crate::{
-    network::state::NodeInfo,
+    network::{qos::PeerQos, state::NodeInfo},
     service::{ServiceInfo, ServiceType},
 };
 use serde::{Deserialize, Serialize};
@@ -126,6 +126,7 @@ pub struct FlockData {
     pub known_peers: Vec<NodeInfo>,
     pub networks: Vec<String>,
     pub peer_count: usize,
+    pub qos: Vec<PeerQos>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

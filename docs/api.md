@@ -17,7 +17,7 @@ Types: `bp_core::control::protocol`; client helper: `bp_core::control::client::s
 | `ping` | — | Returns `"pong"` |
 | `status` | — | Identity, services, networks, reputation, Pouch stats, QoS summary |
 | `announce_now` | — | Re-gossips every service, waits 2 s |
-| `flock` | — | Local services, networks, known peers |
+| `flock` | — | Local services, networks, known peers and the challenge record of each peer |
 | `hatch` | `service_type`, `network_id`, `metadata` | Starts a service (joins the network if needed) |
 | `farewell` | `service_id` | Stops a service |
 | `farewell_evict` | `service_id` | Evicts a service (see [cli.md](cli.md)) |
@@ -35,20 +35,30 @@ Types: `bp_core::control::protocol`; client helper: `bp_core::control::client::s
 | `share` | `network_id`, `file_id`, `member` (fingerprint) | Wraps the file key for a member and delivers it |
 | `unshare` | `network_id`, `file_id`, `member` | Revokes a member's access |
 | `list_files` | `network_id` (`""` = all) | Your index: your files and those shared with you (`owner`, `mine`, `shared_with`) |
-| `storage_info` | `network_id` (`""` = all) | Per-Pouch and aggregate storage |
+| `storage_info` | `network_id` (`""` = all) | Per Pouch: quota, others' fragments, filler; per network: what you offer, your credit and usage; your upload totals |
 | `connect_relay` | `relay_addr` | Dials a relay and reserves a circuit |
 
 ## REST API (`bp-api`)
 
 `bp-api [--host 127.0.0.1] [--port 3000]` forwards HTTPS calls to the daemon
-of this device. On first start it creates a self-signed certificate
-(`api_cert.pem`, `api_key.pem`) and logs its SHA-256 fingerprint at every start.
-Every route but `GET /` needs `Authorization: Session <session>`: a session is
-signed with this device's user SSH key and lasts 12 h; `bp-api` accepts only
-sessions of that key. `bp dashboard` signs one and opens
-`https://127.0.0.1:<port>/#session=<session>`; the dashboard keeps it for the
-browser session and polls `/status` and `/peers`.
-Errors are `{"error": "…"}` with 401 (missing, expired or foreign session), 503 (daemon unreachable), 422 (invalid base64) or 500 (daemon error).
+of this device and serves the BillPouch web app. On first start it creates a
+self-signed certificate (`api_cert.pem`, `api_key.pem`) and logs its SHA-256
+fingerprint at every start. The app's files (`/`, `/app.js`, `/app.css`,
+`/sw.js`, `/manifest.webmanifest`, `/icon.svg`) are public; every other route
+needs `Authorization: Session <session>`: a session is signed with this
+device's user SSH key and lasts 12 h; `bp-api` accepts only sessions of that
+key. `bp dashboard` starts `bp-api` when it is not running, signs a session and
+opens `https://127.0.0.1:<port>/#session=<session>`; the app keeps it in the
+browser until it expires.
+
+The web app is a progressive web app: your identity and network, what you can
+store, your Pouch's setup, the network's space, every node (Pouches, Bills and
+Roosts) with its setup and challenge results, and your files, which you can
+download, delete or upload by picking or dropping them. Browsers only register
+its service worker over a trusted certificate, so with the self-signed one it
+works as a page you can install but not offline.
+
+Errors are `{"error": "…"}` with 401 (missing, expired or foreign session), 503 (daemon unreachable), 400 (interrupted upload) or 500 (daemon error).
 
 | Method | Path | Body / query | Control command |
 |--------|------|--------------|-----------------|
@@ -65,8 +75,10 @@ Errors are `{"error": "…"}` with 401 (missing, expired or foreign session), 50
 | GET | `/networks/:id/members` | — | `members` |
 | POST | `/networks/:id/expulsions` | `{member}` (fingerprint) | `expel` |
 | POST | `/networks/leave` | `{network_id, force?}` | `leave` |
-| POST | `/files` | `{data: base64, network_id, ph?, file_name?}` → 201 | `put_file` (through a temporary file) |
-| GET | `/files/:file_id` | `?network=<id>` → `{file_id, file_name, size_bytes, data: base64}` | `get_file` |
+| GET | `/files` | `?network=<id>` (all if omitted) | `list_files` |
+| POST | `/files` | raw file as the body, `?network=<id>&name=<file name>&ph=<p>?` → 201 | `put_file` (streamed to a temporary file) |
+| GET | `/storage` | `?network=<id>` (all if omitted) | `storage_info` |
+| GET | `/files/:file_id` | `?network=<id>` → the raw file, as an attachment named after it | `get_file` |
 | DELETE | `/files/:file_id` | `?network=<id>` | `delete_file` |
 | POST | `/files/:file_id/shares` | `{network_id, member}` | `share` |
 | DELETE | `/files/:file_id/shares/:member` | `?network=<id>` | `unshare` |

@@ -99,6 +99,8 @@ services:
       NETWORK: "playground"
       BP_LISTEN_PORT: "4006"
       RUST_LOG: "bp_core=info,bp_cli=info"
+    ports:
+      - "127.0.0.1:3000:3000"
     networks:
       - bp-playground
 

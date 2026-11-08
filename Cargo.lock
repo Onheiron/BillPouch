@@ -485,6 +485,7 @@ dependencies = [
  "base64 0.22.1",
  "bp-core",
  "clap",
+ "futures",
  "hex",
  "rand 0.8.8",
  "rcgen",
