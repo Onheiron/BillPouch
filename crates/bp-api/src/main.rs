@@ -74,7 +74,10 @@ async fn require_token(
     if blake3::hash(presented.as_bytes()) == blake3::hash(state.token.as_bytes()) {
         next.run(request).await
     } else {
-        api_error(StatusCode::UNAUTHORIZED, "missing or wrong API token".into())
+        api_error(
+            StatusCode::UNAUTHORIZED,
+            "missing or wrong API token".into(),
+        )
     }
 }
 
