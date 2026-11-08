@@ -232,30 +232,25 @@ else
     fail "carlo-laptop's Pouch holds no filler"
 fi
 
-docker exec bp-pouch bash -c 'head -c 2097152 /dev/urandom > /tmp/doc.bin'
-DOC_ID=$(docker exec bp-pouch bp put /tmp/doc.bin --network smoketest 2>&1 | grep -oP 'file_id\s*:\s*\K\S+' || true)
-docker exec bp-laptop bp farewell "${LAPTOP_POUCH}" --evict >/dev/null 2>&1 || true
-info "Waiting up to 150s for carlo-pouch to repair the fragments the laptop Pouch dropped..."
-REPAIRED=false
+info "Waiting up to 150s for the laptop's new Pouch to catch up on the existing files..."
+CAUGHT_UP=false
 for _ in $(seq 1 75); do
-    if grep -q "repaired fragments away from a lost Pouch" <<< "$(docker logs bp-pouch 2>&1)"; then
-        REPAIRED=true
+    if grep -q "received a recoded fragment" <<< "$(docker logs bp-laptop 2>&1)"; then
+        CAUGHT_UP=true
         break
     fi
     sleep 2
 done
-if [ "${REPAIRED}" = true ]; then
-    pass "carlo-pouch repaired the fragments of the evicted laptop Pouch"
+if [ "${CAUGHT_UP}" = true ]; then
+    pass "the laptop's new Pouch received recoded fragments of the files stored before it joined"
 else
-    fail "carlo-pouch never repaired the evicted laptop Pouch"
+    fail "the laptop's new Pouch never caught up"
 fi
-docker exec bp-laptop bp get "${DOC_ID}" /tmp/doc.bin --network smoketest >/dev/null 2>&1 || true
-DOC_A=$(docker exec bp-pouch sha256sum /tmp/doc.bin | cut -d' ' -f1)
-DOC_B=$(docker exec bp-laptop sha256sum /tmp/doc.bin 2>/dev/null | cut -d' ' -f1 || true)
-if [ "${DOC_A}" = "${DOC_B}" ]; then
-    pass "carlo-laptop still reads the file after its own Pouch left"
+FRAGS=$(docker exec bp-laptop bash -c 'find ~/.local/share/billpouch/storage -name "*.frag" | wc -l' || echo 0)
+if [ "${FRAGS}" -gt 0 ]; then
+    pass "carlo-laptop's Pouch holds ${FRAGS} recoded fragment(s)"
 else
-    fail "carlo-laptop cannot read the file after the repair"
+    fail "carlo-laptop's Pouch holds no fragment"
 fi
 
 UNSHARE_OUT=$(docker exec bp-pouch bp unshare "${CHUNK}" "${BILL_FP}" --network smoketest 2>&1) || true

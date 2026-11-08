@@ -1,16 +1,14 @@
 use crate::{
     chain::{observe, ObservationLog},
-    coding::rlnc,
-    coding::rlnc::EncodedFragment,
     network::{
-        qos::QosRegistry, state::NetworkState, Fillers, FragmentResponse, NetworkCommand,
-        OutgoingAssignments, StorageManagerMap, FAULT_DEGRADED, FAULT_SUSPECTED,
+        qos::QosRegistry, state::NetworkState, Fillers, NetworkCommand, OutgoingAssignments,
+        StorageManagerMap,
     },
     service::ServiceType,
     storage::{
         filler::{Sponsored, BLOB_BLOCKS, BLOB_BYTES},
         merkle::{self, Proof},
-        PosTarget,
+        PosTarget, StorageTier,
     },
 };
 use libp2p::PeerId;
@@ -30,6 +28,10 @@ const POS_TIMEOUT_SECS: u64 = 10;
 const FILL_INTERVAL_SECS: u64 = 60;
 
 const MAX_BLOBS_PER_ROUND: u64 = 256;
+
+const CATCH_UP_INTERVAL_SECS: u64 = 60;
+
+const MAX_REPAIRS_PER_ROUND: usize = 64;
 
 #[allow(clippy::too_many_arguments)]
 pub async fn run_quality_monitor(
@@ -51,6 +53,9 @@ pub async fn run_quality_monitor(
     let mut pos_interval = tokio::time::interval(Duration::from_secs(POS_INTERVAL_SECS));
     pos_interval.reset();
 
+    let mut catch_up_interval = tokio::time::interval(Duration::from_secs(CATCH_UP_INTERVAL_SECS));
+    catch_up_interval.reset();
+
     tracing::info!(
         ping_interval_secs = PING_INTERVAL_SECS,
         pos_interval_secs = POS_INTERVAL_SECS,
@@ -61,17 +66,19 @@ pub async fn run_quality_monitor(
         tokio::select! {
             _ = ping_interval.tick() => {
                 run_ping_round(&network_state, &qos, &net_tx).await;
-                repair_evicting(&me, &outgoing_assignments, &network_state, &qos, &storage_managers, &net_tx).await;
                 crate::network::save_outgoing(&outgoing_assignments);
                 if let Ok(q) = qos.read() {
                     q.save();
                 }
             }
             _ = pos_interval.tick() => {
-                run_pos_round(&outgoing_assignments, &fillers, &network_state, &qos, &observations, &storage_managers, &net_tx, &me).await;
+                run_pos_round(&outgoing_assignments, &fillers, &qos, &observations, &net_tx).await;
             }
             _ = fill_interval.tick() => {
                 run_fill_round(&me, &network_state, &storage_managers, &fillers, &net_tx).await;
+            }
+            _ = catch_up_interval.tick() => {
+                run_catch_up(&me, &network_state, &storage_managers, &net_tx).await;
             }
         }
     }
@@ -203,63 +210,149 @@ fn placed_bytes(outgoing: &OutgoingAssignments, fillers: &Fillers, peer: &str) -
     fragments + filler
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn run_pos_round(
     outgoing_assignments: &OutgoingAssignments,
     fillers: &Fillers,
-    network_state: &Arc<RwLock<NetworkState>>,
     qos: &Arc<RwLock<QosRegistry>>,
     observations: &ObservationLog,
-    storage_managers: &StorageManagerMap,
     net_tx: &mpsc::Sender<NetworkCommand>,
-    me: &str,
 ) {
-    let challenges = challenges(outgoing_assignments, fillers);
-    if challenges.is_empty() {
-        return;
-    }
-    let mut suspected: Vec<String> = Vec::new();
     let mut handles = Vec::new();
-    for challenge in challenges {
+    for challenge in challenges(outgoing_assignments, fillers) {
         let net_tx = net_tx.clone();
         handles.push(tokio::spawn(async move {
             let passed = prove_one(&challenge, net_tx).await;
-            (challenge.peer, challenge.peer_id, passed)
+            (challenge.peer, passed)
         }));
     }
     for handle in handles {
-        let Ok((peer, _, passed)) = handle.await else {
+        let Ok((peer, Some(passed))) = handle.await else {
             continue;
         };
-        let Some(passed) = passed else { continue };
         tracing::debug!(peer = %peer, passed, "PoS challenge result");
         if let Ok(mut q) = qos.write() {
-            if passed {
-                q.entry(peer.clone()).record_pos_success();
-            } else {
-                q.entry(peer.clone()).record_pos_failure();
-            }
+            q.entry(peer.clone()).record_challenge(passed);
         }
         let placed = placed_bytes(outgoing_assignments, fillers, &peer);
         observe(observations, &peer, passed, placed, crate::chain::now_ms());
-        let is_suspected = qos
-            .read()
-            .is_ok_and(|q| q.fault_score(&peer) >= FAULT_SUSPECTED);
-        if is_suspected && !suspected.contains(&peer) {
-            suspected.push(peer);
-        }
     }
-    for peer in suspected {
-        repair_peer(
-            me,
-            &peer,
-            outgoing_assignments,
-            network_state,
-            qos,
-            storage_managers,
-            net_tx,
-        )
-        .await;
+}
+
+fn layer_peers(
+    network_state: &Arc<RwLock<NetworkState>>,
+    network: &str,
+    layer: StorageTier,
+    me: &str,
+) -> Vec<String> {
+    network_state
+        .read()
+        .map(|ns| {
+            ns.in_network(network)
+                .into_iter()
+                .filter(|n| n.service_type == ServiceType::Pouch && n.peer_id != me)
+                .filter(|n| n.metadata.get("evicting").and_then(|v| v.as_bool()) != Some(true))
+                .filter(|n| {
+                    n.metadata
+                        .get("tier")
+                        .and_then(|t| t.as_str())
+                        .and_then(|t| StorageTier::parse(t).ok())
+                        .is_some_and(|t| t >= layer)
+                })
+                .map(|n| n.peer_id.clone())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+pub fn repair_route(peers: &[String], k: usize, me: &str) -> Option<Vec<String>> {
+    if peers.len() < k {
+        return None;
+    }
+    let mut route: Vec<String> = peers
+        .choose_multiple(&mut rand::thread_rng(), k)
+        .cloned()
+        .collect();
+    route.push(me.to_string());
+    Some(route)
+}
+
+async fn run_catch_up(
+    me: &str,
+    network_state: &Arc<RwLock<NetworkState>>,
+    storage_managers: &StorageManagerMap,
+    net_tx: &mpsc::Sender<NetworkCommand>,
+) {
+    let pouches: Vec<(
+        String,
+        StorageTier,
+        Arc<RwLock<crate::storage::StorageManager>>,
+    )> = storage_managers
+        .read()
+        .map(|m| {
+            m.values()
+                .map(|sm| {
+                    let meta = &sm.read().unwrap().meta;
+                    (meta.network_id.clone(), meta.tier, Arc::clone(sm))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    for (network, tier, sm) in pouches {
+        for layer in tier.layers() {
+            let peers = layer_peers(network_state, &network, layer, me);
+            let Some(source) = peers
+                .choose(&mut rand::thread_rng())
+                .and_then(|p| p.parse::<PeerId>().ok())
+            else {
+                continue;
+            };
+            let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+            let sent = net_tx
+                .send(NetworkCommand::Catalog {
+                    peer_id: source,
+                    network: network.clone(),
+                    layer,
+                    resp_tx,
+                })
+                .await;
+            if sent.is_err() {
+                continue;
+            }
+            let Ok(Ok(catalog)) =
+                tokio::time::timeout(Duration::from_secs(POS_TIMEOUT_SECS), resp_rx).await
+            else {
+                continue;
+            };
+            let missing: Vec<_> = {
+                let sm = sm.read().unwrap();
+                catalog
+                    .into_iter()
+                    .filter(|entry| !sm.has_chunk(&entry.chunk_id))
+                    .take(MAX_REPAIRS_PER_ROUND)
+                    .collect()
+            };
+            let mut started = 0;
+            for entry in missing {
+                let Some(route) = repair_route(&peers, entry.k, me) else {
+                    continue;
+                };
+                let Ok(first) = route[0].parse::<PeerId>() else {
+                    continue;
+                };
+                let _ = net_tx
+                    .send(NetworkCommand::Recode {
+                        peer_id: first,
+                        chunk_id: entry.chunk_id,
+                        owner: entry.owner,
+                        route: route[1..].to_vec(),
+                    })
+                    .await;
+                started += 1;
+            }
+            if started > 0 {
+                tracing::info!(network = %network, layer = ?layer, chunks = started, "catching up: recoding missing fragments");
+            }
+        }
     }
 }
 
@@ -347,223 +440,6 @@ async fn run_fill_round(
                 tracing::info!(pouch = %pouch, network = %network, blobs = filled, "filled free space");
             }
         }
-    }
-}
-
-struct LostChunk {
-    chunk_id: String,
-    grant: crate::files::Grant,
-    layer: crate::storage::StorageTier,
-    lost: usize,
-    holders: Vec<PeerId>,
-}
-
-fn lost_chunks(outgoing: &OutgoingAssignments, lost_peer: &str) -> Vec<LostChunk> {
-    let Ok(guard) = outgoing.read() else {
-        return Vec::new();
-    };
-    let Some(on_lost) = guard.get(lost_peer) else {
-        return Vec::new();
-    };
-    let mut chunks: Vec<LostChunk> = Vec::new();
-    for f in on_lost {
-        match chunks.iter_mut().find(|c| c.chunk_id == f.chunk_id) {
-            Some(c) => c.lost += 1,
-            None => chunks.push(LostChunk {
-                chunk_id: f.chunk_id.clone(),
-                grant: f.grant.clone(),
-                layer: f.layer,
-                lost: 1,
-                holders: Vec::new(),
-            }),
-        }
-    }
-    for chunk in &mut chunks {
-        chunk.holders = guard
-            .iter()
-            .filter(|(peer, frags)| {
-                peer.as_str() != lost_peer && frags.iter().any(|f| f.chunk_id == chunk.chunk_id)
-            })
-            .filter_map(|(peer, _)| peer.parse().ok())
-            .collect();
-    }
-    chunks
-}
-
-async fn gather(
-    chunk: &LostChunk,
-    storage_managers: &StorageManagerMap,
-    net_tx: &mpsc::Sender<NetworkCommand>,
-) -> Vec<EncodedFragment> {
-    let mut fragments: Vec<EncodedFragment> = Vec::new();
-    if let Ok(managers) = storage_managers.read() {
-        for sm in managers.values() {
-            let sm = sm.read().unwrap();
-            for meta in sm.index.fragments_for_chunk(&chunk.chunk_id) {
-                if let Ok(f) = sm.load_fragment(&chunk.chunk_id, &meta.fragment_id) {
-                    fragments.push(f);
-                }
-            }
-        }
-    }
-    for holder in &chunk.holders {
-        if fragments.first().is_some_and(|f| fragments.len() >= f.k) {
-            break;
-        }
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        let sent = net_tx
-            .send(NetworkCommand::FetchChunkFragments {
-                peer_id: *holder,
-                chunk_id: chunk.chunk_id.clone(),
-                grant: chunk.grant.clone(),
-                resp_tx: tx,
-            })
-            .await;
-        if sent.is_err() {
-            continue;
-        }
-        if let Ok(Ok(FragmentResponse::FoundMany { fragments: found })) =
-            tokio::time::timeout(Duration::from_secs(POS_TIMEOUT_SECS), rx).await
-        {
-            fragments.extend(found.into_iter().filter_map(|(id, bytes)| {
-                EncodedFragment::from_bytes(id, chunk.chunk_id.clone(), &bytes).ok()
-            }));
-        }
-    }
-    fragments
-}
-
-#[allow(clippy::too_many_arguments)]
-pub async fn repair_peer(
-    me: &str,
-    lost_peer: &str,
-    outgoing: &OutgoingAssignments,
-    network_state: &Arc<RwLock<NetworkState>>,
-    qos: &Arc<RwLock<QosRegistry>>,
-    storage_managers: &StorageManagerMap,
-    net_tx: &mpsc::Sender<NetworkCommand>,
-) {
-    let chunks = lost_chunks(outgoing, lost_peer);
-    if chunks.is_empty() {
-        return;
-    }
-    let mut pouches: Vec<String> = {
-        let (Ok(ns), Ok(q)) = (network_state.read(), qos.read()) else {
-            return;
-        };
-        ns.all()
-            .into_iter()
-            .filter(|n| n.service_type == ServiceType::Pouch && n.peer_id != lost_peer)
-            .filter(|n| n.metadata.get("evicting").and_then(|v| v.as_bool()) != Some(true))
-            .filter(|n| q.fault_score(&n.peer_id) < FAULT_DEGRADED)
-            .map(|n| n.peer_id.clone())
-            .collect()
-    };
-    if storage_managers.read().is_ok_and(|m| !m.is_empty()) {
-        pouches.push(me.to_string());
-    }
-    let mut repaired = 0;
-    for chunk in chunks {
-        let fragments = gather(&chunk, storage_managers, net_tx).await;
-        let Some(k) = fragments.first().map(|f| f.k) else {
-            tracing::warn!(chunk = %chunk.chunk_id, "repair: no fragment reachable");
-            continue;
-        };
-        if fragments.len() < k {
-            tracing::warn!(chunk = %chunk.chunk_id, have = fragments.len(), k, "repair: not enough fragments");
-            continue;
-        }
-        let holders: Vec<String> = chunk.holders.iter().map(|p| p.to_string()).collect();
-        let mut targets: Vec<String> = pouches
-            .iter()
-            .filter(|p| !holders.contains(p))
-            .cloned()
-            .collect();
-        crate::control::files::rank(&chunk.chunk_id, &mut targets);
-        if targets.is_empty() {
-            targets = holders.clone();
-        }
-        let Some(target) = targets.first().cloned() else {
-            tracing::warn!(chunk = %chunk.chunk_id, "repair: no Pouch to move fragments to");
-            continue;
-        };
-        let Ok(recoded) = rlnc::recode(&fragments, chunk.lost) else {
-            continue;
-        };
-        if target == me {
-            let owner = crate::storage::ChunkOwner {
-                owner_key: chunk.grant.owner_key.clone(),
-                file_id: chunk.grant.file_id.clone(),
-                layer: chunk.layer,
-            };
-            let local = storage_managers
-                .read()
-                .ok()
-                .and_then(|m| m.values().next().cloned());
-            if let Some(sm) = local {
-                for fragment in &recoded {
-                    if let Err(e) = sm.write().unwrap().store_fragment(fragment, &owner) {
-                        tracing::warn!(chunk = %chunk.chunk_id, "repair: local store failed: {e}");
-                    }
-                }
-            }
-        }
-        if let Some(peer) = target.parse::<PeerId>().ok().filter(|_| target != me) {
-            for fragment in recoded {
-                let _ = net_tx
-                    .send(NetworkCommand::PushFragment {
-                        peer_id: peer,
-                        chunk_id: chunk.chunk_id.clone(),
-                        fragment_id: fragment.id.clone(),
-                        data: fragment.to_bytes(),
-                        grant: chunk.grant.clone(),
-                        layer: chunk.layer,
-                    })
-                    .await;
-            }
-        }
-        if let Ok(mut o) = outgoing.write() {
-            if let Some(frags) = o.get_mut(lost_peer) {
-                frags.retain(|f| f.chunk_id != chunk.chunk_id);
-            }
-            o.retain(|_, frags| !frags.is_empty());
-        }
-        repaired += 1;
-    }
-    if repaired > 0 {
-        tracing::info!(lost = %lost_peer, chunks = repaired, "repaired fragments away from a lost Pouch");
-    }
-}
-
-async fn repair_evicting(
-    me: &str,
-    outgoing: &OutgoingAssignments,
-    network_state: &Arc<RwLock<NetworkState>>,
-    qos: &Arc<RwLock<QosRegistry>>,
-    storage_managers: &StorageManagerMap,
-    net_tx: &mpsc::Sender<NetworkCommand>,
-) {
-    let evicting: Vec<String> = network_state
-        .read()
-        .map(|ns| {
-            ns.all()
-                .into_iter()
-                .filter(|n| n.metadata.get("evicting").and_then(|v| v.as_bool()) == Some(true))
-                .map(|n| n.peer_id.clone())
-                .collect()
-        })
-        .unwrap_or_default();
-    for peer in evicting {
-        repair_peer(
-            me,
-            &peer,
-            outgoing,
-            network_state,
-            qos,
-            storage_managers,
-            net_tx,
-        )
-        .await;
     }
 }
 
@@ -655,37 +531,6 @@ mod tests {
     }
 
     #[test]
-    fn pos_failure_increments_fault_score() {
-        let qos = Arc::new(RwLock::new(QosRegistry::new()));
-        assert_eq!(qos.read().unwrap().fault_score("p1"), 0);
-
-        for _ in 0..3 {
-            qos.write().unwrap().entry("p1").record_pos_failure();
-        }
-        let fault = qos.read().unwrap().fault_score("p1");
-        assert!(fault > 0, "fault score should increase after PoS failures");
-    }
-
-    #[test]
-    fn pos_success_decays_fault_score() {
-        let qos = Arc::new(RwLock::new(QosRegistry::new()));
-        for _ in 0..4 {
-            qos.write().unwrap().entry("p1").record_pos_failure();
-        }
-        let fault_after_failures = qos.read().unwrap().fault_score("p1");
-
-        {
-            let mut g = qos.write().unwrap();
-            g.entry("p1").record_pos_success();
-        }
-        let fault_after_success = qos.read().unwrap().fault_score("p1");
-        assert!(
-            fault_after_success < fault_after_failures,
-            "PoS success should decay fault score"
-        );
-    }
-
-    #[test]
     fn challenges_accept_only_the_right_block() {
         let data: Vec<u8> = (0..3 * merkle::BLOCK).map(|i| i as u8).collect();
         let fragment = Challenge {
@@ -720,40 +565,14 @@ mod tests {
     }
 
     #[test]
-    fn a_lost_pouch_lists_its_chunks_and_who_else_holds_them() {
-        let carlo = crate::identity::Identity::in_memory(None).unwrap();
-        let grant = crate::files::Grant::sign(&carlo, "f", &carlo.fingerprint).unwrap();
-        let frag = |chunk: &str, id: &str| crate::network::OutgoingFragment {
-            chunk_id: chunk.into(),
-            fragment_id: id.into(),
-            grant: grant.clone(),
-            layer: crate::storage::StorageTier::T1,
-            root: [0; 32],
-            blocks: 1,
-            size: 10,
-        };
-        let (lost, other) = (PeerId::random().to_string(), PeerId::random());
-        let outgoing: OutgoingAssignments = Arc::new(RwLock::new(
-            [
-                (
-                    lost.clone(),
-                    vec![frag("a", "1"), frag("a", "2"), frag("b", "3")],
-                ),
-                (other.to_string(), vec![frag("a", "4")]),
-            ]
-            .into_iter()
-            .collect(),
-        ));
-        let mut chunks = lost_chunks(&outgoing, &lost);
-        chunks.sort_by(|x, y| x.chunk_id.cmp(&y.chunk_id));
-        assert_eq!(chunks.len(), 2);
-        assert_eq!(
-            (chunks[0].lost, chunks[0].holders.clone()),
-            (2, vec![other])
-        );
-        assert_eq!((chunks[1].lost, chunks[1].holders.len()), (1, 0));
-        assert!(lost_chunks(&outgoing, "nobody").is_empty());
-        assert_eq!(placed_bytes(&outgoing, &Default::default(), &lost), 30);
+    fn a_repair_route_crosses_k_distinct_holders_and_ends_here() {
+        let peers: Vec<String> = (0..6).map(|i| format!("p{i}")).collect();
+        let route = repair_route(&peers, 4, "me").unwrap();
+        assert_eq!(route.len(), 5);
+        assert_eq!(route.last().map(String::as_str), Some("me"));
+        let hops: std::collections::HashSet<_> = route[..4].iter().collect();
+        assert_eq!(hops.len(), 4);
+        assert!(repair_route(&peers, 7, "me").is_none());
     }
 
     #[tokio::test]

@@ -11,16 +11,6 @@ const W_LATENCY: f64 = 0.6;
 
 const W_RELIABILITY: f64 = 0.4;
 
-pub const FAULT_DEGRADED: u8 = 70;
-
-pub const FAULT_SUSPECTED: u8 = 90;
-
-pub const FAULT_BLACKLISTED: u8 = 100;
-
-const FAULT_INCREMENT: u8 = 5;
-
-const FAULT_DECAY: u8 = 1;
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeerQos {
     pub peer_id: String,
@@ -34,8 +24,6 @@ pub struct PeerQos {
     pub challenges_sent: u64,
 
     pub challenges_succeeded: u64,
-
-    pub fault_score: u8,
 }
 
 impl PeerQos {
@@ -47,7 +35,6 @@ impl PeerQos {
             last_ping_at: None,
             challenges_sent: 0,
             challenges_succeeded: 0,
-            fault_score: 0,
         }
     }
 
@@ -71,16 +58,6 @@ impl PeerQos {
         if success {
             self.challenges_succeeded += 1;
         }
-    }
-
-    pub fn record_pos_success(&mut self) {
-        self.fault_score = self.fault_score.saturating_sub(FAULT_DECAY);
-        self.record_challenge(true);
-    }
-
-    pub fn record_pos_failure(&mut self) {
-        self.fault_score = self.fault_score.saturating_add(FAULT_INCREMENT).min(100);
-        self.record_challenge(false);
     }
 
     pub fn latency_score(&self) -> f64 {
@@ -156,10 +133,6 @@ impl QosRegistry {
 
     pub fn peer_ids(&self) -> impl Iterator<Item = &str> {
         self.peers.keys().map(String::as_str)
-    }
-
-    pub fn fault_score(&self, peer_id: &str) -> u8 {
-        self.peers.get(peer_id).map_or(0, |p| p.fault_score)
     }
 }
 
