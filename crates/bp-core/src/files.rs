@@ -9,6 +9,55 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Grant {
+    pub chunk_id: String,
+    pub owner_key: String,
+    pub grantee: String,
+    pub signature: String,
+}
+
+impl Grant {
+    fn message(chunk_id: &str, owner_key: &str, grantee: &str) -> Vec<u8> {
+        let mut msg = b"billpouch/grant/v1".to_vec();
+        msg.extend_from_slice(
+            &serde_json::to_vec(&(chunk_id, owner_key, grantee)).unwrap_or_default(),
+        );
+        msg
+    }
+
+    pub fn sign(owner: &Identity, chunk_id: &str, grantee: &str) -> BpResult<Self> {
+        let signature = owner
+            .user
+            .sign(&Self::message(chunk_id, &owner.user_key, grantee))
+            .map_err(|e| BpError::Identity(format!("cannot sign grant: {e}")))?;
+        Ok(Self {
+            chunk_id: chunk_id.to_string(),
+            owner_key: owner.user_key.clone(),
+            grantee: grantee.to_string(),
+            signature: hex::encode(signature),
+        })
+    }
+
+    pub fn owner(&self) -> Option<String> {
+        let (public, fingerprint) = parse_user_key(&self.owner_key).ok()?;
+        let signature = hex::decode(&self.signature).ok()?;
+        let message = Self::message(&self.chunk_id, &self.owner_key, &self.grantee);
+        public.verify(&message, &signature).then_some(fingerprint)
+    }
+
+    pub fn allows(&self, chunk_id: &str, owner_key: &str, requester: &str) -> bool {
+        self.chunk_id == chunk_id
+            && self.owner_key == owner_key
+            && self.grantee == requester
+            && self.owner().is_some()
+    }
+
+    pub fn is_owner_claim(&self, chunk_id: &str) -> bool {
+        self.chunk_id == chunk_id && self.owner().as_deref() == Some(self.grantee.as_str())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Manifest {
     pub chunk_id: String,
     pub network: String,
@@ -17,6 +66,7 @@ pub struct Manifest {
     pub uploaded_at: u64,
     pub owner: String,
     pub wraps: BTreeMap<String, WrappedKey>,
+    pub grants: BTreeMap<String, Grant>,
 }
 
 pub struct Sealed {
@@ -47,6 +97,10 @@ impl Manifest {
             uploaded_at: chrono::Utc::now().timestamp() as u64,
             owner: owner.fingerprint.clone(),
             wraps: BTreeMap::from([(owner.fingerprint.clone(), wrap_for(key, &owner.user_key)?)]),
+            grants: BTreeMap::from([(
+                owner.fingerprint.clone(),
+                Grant::sign(owner, chunk_id, &owner.fingerprint)?,
+            )]),
         })
     }
 
@@ -61,22 +115,43 @@ impl Manifest {
         ChunkCipher::from_raw_key(self.file_key(identity)?).decrypt(ciphertext)
     }
 
+    pub fn grant_for(&self, user: &str) -> BpResult<&Grant> {
+        self.grants.get(user).ok_or_else(|| {
+            BpError::Identity(format!("no fetch permission for '{}'", self.file_name))
+        })
+    }
+
     pub fn share_with(&mut self, identity: &Identity, member_key: &str) -> BpResult<String> {
+        if self.owner != identity.fingerprint {
+            return Err(BpError::Identity(format!(
+                "only the owner can share '{}'",
+                self.file_name
+            )));
+        }
         let key = self.file_key(identity)?;
         let (_, fingerprint) = parse_user_key(member_key)?;
         self.wraps
             .insert(fingerprint.clone(), wrap_for(&key, member_key)?);
+        self.grants.insert(
+            fingerprint.clone(),
+            Grant::sign(identity, &self.chunk_id, &fingerprint)?,
+        );
         Ok(fingerprint)
     }
 
     fn merge(&mut self, other: &Manifest) -> bool {
-        let before = self.wraps.len();
+        let before = self.wraps.len() + self.grants.len();
         for (user, wrapped) in &other.wraps {
             self.wraps
                 .entry(user.clone())
                 .or_insert_with(|| wrapped.clone());
         }
-        self.wraps.len() > before
+        for (user, grant) in &other.grants {
+            self.grants
+                .entry(user.clone())
+                .or_insert_with(|| grant.clone());
+        }
+        self.wraps.len() + self.grants.len() > before
     }
 }
 
@@ -254,6 +329,30 @@ mod tests {
         assert_eq!(manifest.open(&marco, &sealed.ciphertext).unwrap(), b"ciao");
         assert!(manifest.open(&lucia, &sealed.ciphertext).is_err());
         assert!(manifest.share_with(&lucia, &lucia.user_key).is_err());
+        assert!(manifest.share_with(&marco, &lucia.user_key).is_err());
+    }
+
+    #[test]
+    fn grants_name_one_chunk_one_owner_and_one_grantee() {
+        let carlo = Identity::in_memory(None).unwrap();
+        let marco = Identity::in_memory(None).unwrap();
+        let sealed = seal_file(b"x").unwrap();
+        let mut manifest = Manifest::new(&carlo, "amici", "x", 1, "c1", &sealed.key).unwrap();
+        let own = manifest.grant_for(&carlo.fingerprint).unwrap().clone();
+        assert!(own.is_owner_claim("c1"));
+        assert!(own.allows("c1", &carlo.user_key, &carlo.fingerprint));
+        assert!(!own.allows("c1", &carlo.user_key, &marco.fingerprint));
+        assert!(!own.allows("c2", &carlo.user_key, &carlo.fingerprint));
+        assert!(manifest.grant_for(&marco.fingerprint).is_err());
+
+        manifest.share_with(&carlo, &marco.user_key).unwrap();
+        let theirs = manifest.grant_for(&marco.fingerprint).unwrap();
+        assert!(theirs.allows("c1", &carlo.user_key, &marco.fingerprint));
+        assert!(!theirs.is_owner_claim("c1"));
+
+        let mut forged = theirs.clone();
+        forged.grantee = Identity::in_memory(None).unwrap().fingerprint;
+        assert!(!forged.allows("c1", &carlo.user_key, &forged.grantee));
     }
 
     #[test]

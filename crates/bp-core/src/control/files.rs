@@ -6,7 +6,7 @@ use crate::{
         },
         server::DaemonState,
     },
-    files::{seal_file, Head, Index, Manifest, PendingShare},
+    files::{seal_file, Grant, Head, Index, Manifest, PendingShare},
     network::{
         fragment_gossip::{FragmentIndexAnnouncement, FragmentPointer},
         FragmentResponse, Gossip, NetworkCommand,
@@ -18,6 +18,7 @@ use std::collections::HashSet;
 
 const DEFAULT_PH: f64 = 0.999;
 const FETCH_TIMEOUT_SECS: u64 = 10;
+const UNOBSERVED_STABILITY: f64 = 0.8;
 
 pub struct StoredBlob {
     pub chunk_id: String,
@@ -28,6 +29,15 @@ pub struct StoredBlob {
     pub stored: usize,
     pub distributed: usize,
     pub peers: usize,
+}
+
+pub fn rank(chunk_id: &str, peers: &mut [String]) {
+    peers.sort_by_key(|peer| {
+        let mut h = blake3::Hasher::new();
+        h.update(chunk_id.as_bytes());
+        h.update(peer.as_bytes());
+        *h.finalize().as_bytes()
+    });
 }
 
 pub async fn store_blob(
@@ -44,71 +54,61 @@ pub async fn store_blob(
         .values()
         .find(|sm| sm.read().unwrap().meta.network_id == network_id)
         .cloned();
-    let local_peer = state.identity.peer_id.to_string();
-    let remote: Vec<PeerId> = state
+    let me = state.identity.peer_id.to_string();
+    let mut nodes: Vec<String> = state
         .network_state
         .read()
         .unwrap()
         .in_network(network_id)
         .into_iter()
-        .filter(|n| n.service_type == ServiceType::Pouch && n.peer_id != local_peer)
-        .filter_map(|n| n.peer_id.parse().ok())
+        .filter(|n| n.service_type == ServiceType::Pouch && n.peer_id != me)
+        .map(|n| n.peer_id.clone())
         .collect();
-    if local.is_none() && remote.is_empty() {
+    if local.is_some() {
+        nodes.push(me.clone());
+    }
+    if nodes.is_empty() {
         return Err(format!(
             "No Pouches available on network '{network_id}' — hatch a Pouch or wait for Pouch peers to join"
         ));
     }
-
+    let chunk_id = rlnc::chunk_hash(data);
+    rank(&chunk_id, &mut nodes);
     let stabilities: Vec<f64> = {
         let qos = state.qos.read().unwrap();
-        if remote.is_empty() {
-            vec![0.8]
-        } else {
-            remote
-                .iter()
-                .map(|p| match qos.get(&p.to_string()) {
-                    Some(q) if q.is_observed() => q.stability_score(),
-                    _ => 0.8,
-                })
-                .collect()
-        }
+        nodes
+            .iter()
+            .map(|p| match qos.get(p) {
+                Some(q) if q.is_observed() => q.stability_score(),
+                _ => UNOBSERVED_STABILITY,
+            })
+            .collect()
     };
-    let (k, n, q) = match coding_params::compute_coding_params(&stabilities, ph, q_target) {
-        Ok(p) => (p.k, p.n, p.q),
-        Err(e) => {
-            tracing::warn!("compute_coding_params failed ({e}), using fallback");
-            let n = stabilities.len().max(2);
-            let k = (n / 2).max(1);
-            (k, n, (n - k) as f64 / k as f64)
-        }
-    };
-    let pe = coding_params::effective_recovery_probability(&stabilities, k);
-
-    let fragments = rlnc::encode(data, k, n).map_err(|e| format!("Encode error: {e}"))?;
-    let chunk_id = fragments
-        .first()
-        .map(|f| f.chunk_id.clone())
-        .ok_or("Encoding produced no fragments")?;
+    let plan = coding_params::plan(&stabilities, ph, q_target).map_err(|e| e.to_string())?;
+    let fragments = rlnc::encode(data, plan.k, plan.n).map_err(|e| format!("Encode error: {e}"))?;
+    let grant = Grant::sign(&state.identity, &chunk_id, &state.identity.fingerprint)
+        .map_err(|e| e.to_string())?;
 
     let mut stored = 0;
-    if let Some(sm) = &local {
-        let mut sm = sm.write().unwrap();
-        for fragment in &fragments {
-            match sm.store_fragment(fragment) {
-                Ok(()) => stored += 1,
-                Err(e) => {
-                    tracing::warn!(chunk_id=%chunk_id, "store_fragment failed: {e}");
-                    break;
-                }
-            }
-        }
-    }
-
     let mut pointers = Vec::new();
-    if !remote.is_empty() {
-        for (i, fragment) in fragments.iter().enumerate() {
-            let peer = remote[i % remote.len()];
+    let mut fragments = fragments.iter();
+    for (node, &count) in nodes.iter().zip(&plan.per_node) {
+        for fragment in fragments.by_ref().take(count) {
+            if *node == me {
+                let Some(sm) = &local else { continue };
+                match sm
+                    .write()
+                    .unwrap()
+                    .store_fragment(fragment, &state.identity.user_key)
+                {
+                    Ok(()) => stored += 1,
+                    Err(e) => tracing::warn!(chunk_id=%chunk_id, "store_fragment failed: {e}"),
+                }
+                continue;
+            }
+            let Ok(peer) = node.parse::<PeerId>() else {
+                continue;
+            };
             let sent = state
                 .net_tx
                 .send(NetworkCommand::PushFragment {
@@ -116,11 +116,12 @@ pub async fn store_blob(
                     chunk_id: chunk_id.clone(),
                     fragment_id: fragment.id.clone(),
                     data: fragment.to_bytes(),
+                    grant: grant.clone(),
                 })
                 .await;
             if sent.is_ok() {
                 pointers.push(FragmentPointer {
-                    peer_id: peer.to_string(),
+                    peer_id: node.clone(),
                     fragment_id: fragment.id.clone(),
                 });
             }
@@ -141,16 +142,16 @@ pub async fn store_blob(
             .upsert(ann.clone());
         publish(state, network_id, Gossip::Index(ann)).await;
     }
-    tracing::info!(chunk_id=%chunk_id, k, n, stored, distributed, "blob stored");
+    tracing::info!(chunk_id=%chunk_id, k = plan.k, n = plan.n, pe = plan.pe, stored, distributed, "blob stored");
     Ok(StoredBlob {
         chunk_id,
-        k,
-        n,
-        q,
-        pe,
+        k: plan.k,
+        n: plan.n,
+        q: plan.q(),
+        pe: plan.pe,
         stored,
         distributed,
-        peers: remote.len(),
+        peers: nodes.len(),
     })
 }
 
@@ -158,6 +159,7 @@ pub async fn fetch_blob(
     state: &DaemonState,
     network_id: &str,
     chunk_id: &str,
+    grant: &Grant,
 ) -> Result<(Vec<u8>, usize, usize), String> {
     let mut fragments: Vec<EncodedFragment> = Vec::new();
     for sm in state.storage_managers.read().unwrap().values() {
@@ -213,6 +215,7 @@ pub async fn fetch_blob(
                 .send(NetworkCommand::FetchChunkFragments {
                     peer_id: peer,
                     chunk_id: chunk_id.to_string(),
+                    grant: grant.clone(),
                     resp_tx: tx,
                 })
                 .await;
@@ -339,8 +342,12 @@ pub async fn get_file(
             "'{chunk_id}' is not one of your files on '{network_id}' (see bp ls)"
         ));
     };
+    let grant = match manifest.grant_for(&state.identity.fingerprint) {
+        Ok(g) => g.clone(),
+        Err(e) => return ControlResponse::err(e.to_string()),
+    };
     let (ciphertext, fragments_used, fragments_remote) =
-        match fetch_blob(state, &network_id, &chunk_id).await {
+        match fetch_blob(state, &network_id, &chunk_id, &grant).await {
             Ok(r) => r,
             Err(e) => return ControlResponse::err(e),
         };
@@ -486,7 +493,11 @@ pub async fn publish_index(state: &DaemonState, network_id: &str) {
 }
 
 async fn pull_own_index(state: &DaemonState, network_id: &str, head: &Head) {
-    let blob = match fetch_blob(state, network_id, &head.chunk_id).await {
+    let grant = match Grant::sign(&state.identity, &head.chunk_id, &state.identity.fingerprint) {
+        Ok(g) => g,
+        Err(e) => return tracing::warn!("cannot sign a grant for own index: {e}"),
+    };
+    let blob = match fetch_blob(state, network_id, &head.chunk_id, &grant).await {
         Ok((blob, _, _)) => blob,
         Err(e) => return tracing::debug!(network = %network_id, "own index not reachable yet: {e}"),
     };

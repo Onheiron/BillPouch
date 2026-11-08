@@ -9,11 +9,13 @@ use std::time::Duration;
 pub enum FragmentRequest {
     FetchChunkFragments {
         chunk_id: String,
+        grant: crate::files::Grant,
     },
     Store {
         chunk_id: String,
         fragment_id: String,
         data: Vec<u8>,
+        grant: crate::files::Grant,
     },
     Ping {
         nonce: u64,

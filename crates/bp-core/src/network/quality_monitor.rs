@@ -4,7 +4,7 @@ use crate::{
     coding::rlnc::EncodedFragment,
     network::{
         qos::QosRegistry, state::NetworkState, FragmentResponse, NetworkCommand,
-        OutgoingAssignments, OutgoingFragment, FAULT_DEGRADED, FAULT_SUSPECTED,
+        OutgoingAssignments, FAULT_DEGRADED, FAULT_SUSPECTED,
     },
     service::ServiceType,
 };
@@ -217,7 +217,7 @@ async fn reroute_suspected_peer(
     qos: &Arc<RwLock<QosRegistry>>,
     net_tx: &mpsc::Sender<NetworkCommand>,
 ) {
-    let chunks: Vec<String> = {
+    let chunks: Vec<(String, crate::files::Grant)> = {
         let guard = match outgoing.read() {
             Ok(g) => g,
             Err(_) => return,
@@ -227,8 +227,8 @@ async fn reroute_suspected_peer(
             .cloned()
             .unwrap_or_default()
             .iter()
-            .map(|f| f.chunk_id.clone())
-            .collect::<std::collections::HashSet<_>>()
+            .map(|f| (f.chunk_id.clone(), f.grant.clone()))
+            .collect::<std::collections::HashMap<_, _>>()
             .into_iter()
             .collect()
     };
@@ -282,12 +282,13 @@ async fn reroute_suspected_peer(
         "reroute: starting preventive fragment rerouting"
     );
 
-    for chunk_id in chunks {
+    for (chunk_id, grant) in chunks {
         let (tx, rx) = tokio::sync::oneshot::channel();
         if net_tx
             .send(NetworkCommand::FetchChunkFragments {
                 peer_id: suspected_peer,
                 chunk_id: chunk_id.clone(),
+                grant: grant.clone(),
                 resp_tx: tx,
             })
             .await
@@ -321,17 +322,9 @@ async fn reroute_suspected_peer(
                                     chunk_id: chunk_id.clone(),
                                     fragment_id: frag_id.clone(),
                                     data: new_frag.to_bytes(),
+                                    grant: grant.clone(),
                                 })
                                 .await;
-
-                            if let Ok(mut oa) = outgoing.write() {
-                                oa.entry(healthy_str.clone())
-                                    .or_default()
-                                    .push(OutgoingFragment {
-                                        chunk_id: chunk_id.clone(),
-                                        fragment_id: frag_id,
-                                    });
-                            }
 
                             tracing::info!(
                                 chunk   = %chunk_id,
@@ -474,7 +467,6 @@ fn record_timeout(peer_id_str: &str, qos: &Arc<RwLock<QosRegistry>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::network::OutgoingFragment;
 
     #[test]
     fn record_timeout_degrades_score() {
@@ -549,22 +541,5 @@ mod tests {
         )
         .await
         .ok();
-    }
-
-    #[test]
-    fn outgoing_assignment_structure() {
-        let outgoing: OutgoingAssignments = Arc::new(RwLock::new(std::collections::HashMap::new()));
-        {
-            let mut g = outgoing.write().unwrap();
-            g.entry("peer-1".into())
-                .or_default()
-                .push(OutgoingFragment {
-                    chunk_id: "chunk-a".into(),
-                    fragment_id: "frag-1".into(),
-                });
-        }
-        let g = outgoing.read().unwrap();
-        assert_eq!(g.get("peer-1").unwrap().len(), 1);
-        assert_eq!(g.get("peer-1").unwrap()[0].chunk_id, "chunk-a");
     }
 }

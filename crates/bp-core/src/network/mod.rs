@@ -75,6 +75,7 @@ pub type StorageManagerMap = Arc<RwLock<HashMap<String, Arc<RwLock<StorageManage
 pub struct OutgoingFragment {
     pub chunk_id: String,
     pub fragment_id: String,
+    pub grant: crate::files::Grant,
 }
 
 pub type OutgoingAssignments = Arc<RwLock<HashMap<String, Vec<OutgoingFragment>>>>;
@@ -126,10 +127,12 @@ pub enum NetworkCommand {
         chunk_id: String,
         fragment_id: String,
         data: Vec<u8>,
+        grant: crate::files::Grant,
     },
     FetchChunkFragments {
         peer_id: PeerId,
         chunk_id: String,
+        grant: crate::files::Grant,
         resp_tx: tokio::sync::oneshot::Sender<FragmentResponse>,
     },
     DialRelay {
@@ -280,11 +283,13 @@ pub async fn run_network_loop(
                         chunk_id,
                         fragment_id,
                         data,
+                        grant,
                     }) => {
                         let req = FragmentRequest::Store {
                             chunk_id: chunk_id.clone(),
                             fragment_id: fragment_id.clone(),
                             data,
+                            grant: grant.clone(),
                         };
                         let _ = swarm
                             .behaviour_mut()
@@ -297,6 +302,7 @@ pub async fn run_network_loop(
                                 .push(OutgoingFragment {
                                     chunk_id: chunk_id.clone(),
                                     fragment_id: fragment_id.clone(),
+                                    grant,
                                 });
                         }
                         tracing::debug!(peer=%peer_id, chunk=%chunk_id, frag=%fragment_id, "PushFragment sent");
@@ -304,10 +310,12 @@ pub async fn run_network_loop(
                     Some(NetworkCommand::FetchChunkFragments {
                         peer_id,
                         chunk_id,
+                        grant,
                         resp_tx,
                     }) => {
                         let req = FragmentRequest::FetchChunkFragments {
                             chunk_id: chunk_id.clone(),
+                            grant,
                         };
                         let req_id = swarm
                             .behaviour_mut()
@@ -607,7 +615,7 @@ async fn handle_swarm_event(
                     },
             },
         )) => {
-            let known = member_device(chains, &peer);
+            let requester = member_device(chains, &peer);
             let response = if let FragmentRequest::Commits {
                 network,
                 from,
@@ -615,8 +623,8 @@ async fn handle_swarm_event(
             } = &request
             {
                 serve_commits(chains, &peer, network, *from, cert)
-            } else if known {
-                serve_fragment_request(&request, storage_managers)
+            } else if let Some(user) = requester {
+                serve_fragment_request(&request, storage_managers, &user)
             } else {
                 tracing::warn!(peer=%peer, "Refused fragment request from a non-member");
                 FragmentResponse::NotFound
@@ -764,7 +772,7 @@ fn handle_gossip(
             None
         }
         Gossip::Index(ann) => {
-            let known = publisher.is_some_and(|p| member_device(chains, p));
+            let known = publisher.is_some_and(|p| member_device(chains, p).is_some());
             if known && ann.network_id == network_id {
                 if let Ok(mut idx) = remote_fragment_index.write() {
                     idx.upsert(ann);
@@ -793,14 +801,14 @@ fn handle_gossip(
     }
 }
 
-fn member_device(chains: &Chains, peer: &PeerId) -> bool {
+fn member_device(chains: &Chains, peer: &PeerId) -> Option<String> {
     let peer = peer.to_string();
-    chains.read().is_ok_and(|all| {
-        all.values().any(|c| {
-            c.ledger()
-                .device_owner(&peer)
-                .is_some_and(|user| c.is_member(user))
-        })
+    let all = chains.read().ok()?;
+    all.values().find_map(|c| {
+        c.ledger()
+            .device_owner(&peer)
+            .filter(|user| c.is_member(user))
+            .map(str::to_string)
     })
 }
 
@@ -833,13 +841,20 @@ fn serve_commits(
 fn serve_fragment_request(
     req: &FragmentRequest,
     storage_managers: &StorageManagerMap,
+    requester: &str,
 ) -> FragmentResponse {
     let managers = storage_managers.read().unwrap();
     match req {
-        FragmentRequest::FetchChunkFragments { chunk_id } => {
+        FragmentRequest::FetchChunkFragments { chunk_id, grant } => {
             let mut fragments = Vec::new();
             for sm_arc in managers.values() {
                 let sm = sm_arc.read().unwrap();
+                let allowed = sm
+                    .owner_of(chunk_id)
+                    .is_some_and(|owner| grant.allows(chunk_id, &owner, requester));
+                if !allowed {
+                    continue;
+                }
                 for meta in sm.index.fragments_for_chunk(chunk_id) {
                     match sm.load_fragment(chunk_id, &meta.fragment_id) {
                         Ok(f) => fragments.push((meta.fragment_id.clone(), f.to_bytes())),
@@ -857,13 +872,19 @@ fn serve_fragment_request(
             chunk_id,
             fragment_id,
             data,
+            grant,
         } => {
             use crate::coding::rlnc::EncodedFragment;
+            if !grant.is_owner_claim(chunk_id) || grant.grantee != requester {
+                return FragmentResponse::StoreFailed {
+                    reason: "a fragment can only be stored by a device of its owner".into(),
+                };
+            }
             match EncodedFragment::from_bytes(fragment_id.clone(), chunk_id.clone(), data) {
                 Ok(fragment) => {
                     for sm_arc in managers.values() {
                         let mut sm = sm_arc.write().unwrap();
-                        match sm.store_fragment(&fragment) {
+                        match sm.store_fragment(&fragment, &grant.owner_key) {
                             Ok(()) => {
                                 tracing::debug!(chunk=%chunk_id, frag=%fragment_id, "Remote fragment stored");
                                 return FragmentResponse::Stored;

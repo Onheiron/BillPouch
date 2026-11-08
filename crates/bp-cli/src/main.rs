@@ -207,7 +207,7 @@ enum Cmd {
 
     #[command(
         about = "Share one of your files with another member",
-        long_about = "Share one of your files with another member.\n\nThe file key is encrypted for their SSH key and delivered to them; the file then shows up in their `bp ls`. Files you were shared can be shared on."
+        long_about = "Share one of your files with another member.\n\nThe file key is encrypted for their SSH key and delivered to them; the file then shows up in their `bp ls`. Only the owner of a file can share it."
     )]
     Share {
         #[arg(help = "The chunk_id of the file (see `bp ls`)")]
