@@ -725,7 +725,7 @@ fn availability_factor(state: &DaemonState) -> f64 {
     let own_score = qos.get(&own_peer).map_or(0.4, |q| q.stability_score());
     let mut stabilities = qos.all_stability_scores();
     stabilities.push(own_score);
-    coding_params::compute_network_storage_factor(&stabilities, tier.qos_target_ph())
+    coding_params::storage_factor(&stabilities, tier.qos_target_ph())
 }
 
 fn pouch_stats(

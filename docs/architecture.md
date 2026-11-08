@@ -84,22 +84,36 @@ A daemon can be in several networks at once. Gossip messages are `Node` (NodeInf
    (X25519 + ChaCha20-Poly1305, as for the network key) for your SSH key and put in
    the file's manifest: name, size, `chunk_id`, owner, one wrap per authorized user.
    Pouches only ever see ciphertext.
-2. **Choose k and n.** From the stability score `p_i` of every known Pouch,
-   `k = ⌊μ − z(Ph)·σ + 0.5⌋` with `μ = Σp_i` and `σ² = Σp_i(1−p_i)`: the largest
-   `k` such that P(at least k Pouches are reachable) ≥ `Ph` (`--ph`, default 0.999).
-   Then `n = round(k·(1 + q_target))` (`--q-target`, default 1.0). Peers never
-   pinged count as 0.8.
-3. **Encode.** Systematic RLNC over GF(2⁸): `n` fragments, any `k` of which decode.
-   `chunk_id` is a 16-hex-char BLAKE3 prefix.
-4. **Place.** Fragments go to the local Pouch (if any) and round-robin to the
-   remote Pouches of the network. The placement is gossiped as an `Index` message
-   and recorded for Proof-of-Storage.
+2. **Rank the Pouches.** `chunk_id` is a 16-hex-char BLAKE3 prefix of the
+   ciphertext. Every Pouch of the network (yours included) is ranked by
+   `BLAKE3(chunk_id ‖ peer_id)` (rendezvous hashing), so anyone knowing the
+   Pouches can recompute where a chunk lives.
+3. **Choose k and n** (`coding/params.rs`). For a candidate `k`,
+   `n = max(k + 1, round(k·(1 + q_target)))` (`--q-target`, default 1.0) and the
+   fragments go round-robin down the ranking, `m_i` on Pouch `i`. The recovery
+   probability is exact: with `X_i` = Pouch `i` reachable (probability `p_i`, its
+   stability score; 0.8 if never pinged), `Pe = P(Σ m_i·X_i ≥ k)`, computed by
+   dynamic programming over the number of fragments reachable. The chosen plan is
+   the largest `k` (≤ 32) with `Pe ≥ Ph` (`--ph`, default 0.999), first with one
+   fragment per Pouch and, if that cannot reach `Ph`, with at most `max(1, ⌊k/4⌋)`
+   fragments per Pouch. If nothing reaches `Ph`, the plan with the highest `Pe`
+   is used and reported.
+4. **Encode and place.** Systematic RLNC over GF(2⁸): `n` fragments, any `k` of
+   which decode. Your own fragments are stored locally; the others are pushed to
+   their Pouches with your **owner grant**. The placement is gossiped as an
+   `Index` message and recorded for Proof-of-Storage.
 
 `bp get` looks the file up in your index, collects local fragments, fetches
 more from the Pouches listed in the gossiped fragment index (falling back to
 every known Pouch) until it has `k`, decodes, opens its wrap and decrypts.
 
-Fragments are served to any registered device of a current ledger member.
+**Grants.** A grant `(chunk_id, owner key, grantee fingerprint)` is signed with
+the owner's SSH key. A Pouch accepts a fragment only from a device of a member
+whose own grant (grantee = owner) comes with it, and records the owner key with
+the chunk; the first owner of a chunk keeps it. It serves a chunk's fragments
+only to a device of the grantee of a grant signed by that owner: you (all your
+devices) and the members you shared the file with, whose grant travels in the
+manifest. Only the owner can share a file.
 
 ## Your file index, devices and sharing
 
@@ -138,8 +152,8 @@ A Pouch offers exactly one tier; at most one Pouch per network per node
 | T5 | Monolith | 5 TiB |
 
 The *available* space reported by `bp status` / `bp storage` is the free quota
-times the k/N rate the network can currently sustain for this node's
-reputation target (`Ph` = 0.70 for R1 … 0.999 for R4; 0 for R0). With few or
+times the k/N rate the network can currently sustain, one fragment per Pouch
+(largest `k` with `P(ΣX_i ≥ k) ≥ Ph`), for this node's reputation target (`Ph` = 0.70 for R1 … 0.999 for R4; 0 for R0). With few or
 unknown peers it can be 0.
 
 ## Quality, Proof-of-Storage, reputation

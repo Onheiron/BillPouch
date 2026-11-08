@@ -52,7 +52,20 @@ impl StorageManager {
         Ok(Self { root, meta, index })
     }
 
-    pub fn store_fragment(&mut self, fragment: &EncodedFragment) -> BpResult<()> {
+    pub fn owner_of(&self, chunk_id: &str) -> Option<String> {
+        std::fs::read_to_string(self.root.join("fragments").join(chunk_id).join("owner")).ok()
+    }
+
+    pub fn store_fragment(&mut self, fragment: &EncodedFragment, owner_key: &str) -> BpResult<()> {
+        if self
+            .owner_of(&fragment.chunk_id)
+            .is_some_and(|owner| owner != owner_key)
+        {
+            return Err(BpError::Storage(format!(
+                "chunk {} belongs to someone else",
+                fragment.chunk_id
+            )));
+        }
         let bytes = fragment.to_bytes();
         let size = bytes.len() as u64;
 
@@ -65,6 +78,7 @@ impl StorageManager {
 
         let chunk_dir = self.root.join("fragments").join(&fragment.chunk_id);
         std::fs::create_dir_all(&chunk_dir).map_err(BpError::Io)?;
+        std::fs::write(chunk_dir.join("owner"), owner_key).map_err(BpError::Io)?;
 
         let frag_path = chunk_dir.join(format!("{}.frag", fragment.id));
         std::fs::write(&frag_path, &bytes).map_err(BpError::Io)?;
@@ -221,7 +235,7 @@ mod tests {
             let mut sm = StorageManager::init("net".into(), "svc".into(), 1_000_000).unwrap();
             let frags = rlnc::encode(CHUNK, 4, 6).unwrap();
 
-            sm.store_fragment(&frags[0]).unwrap();
+            sm.store_fragment(&frags[0], "owner").unwrap();
 
             let loaded = sm.load_fragment(&frags[0].chunk_id, &frags[0].id).unwrap();
             assert_eq!(loaded.coding_vector, frags[0].coding_vector);
@@ -232,11 +246,25 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
+    fn a_chunk_keeps_the_owner_of_its_first_fragment() {
+        with_temp_home_storage(|| {
+            let mut sm = StorageManager::init("net".into(), "svc".into(), 1_000_000).unwrap();
+            let frags = rlnc::encode(CHUNK, 2, 3).unwrap();
+            sm.store_fragment(&frags[0], "carlo").unwrap();
+            assert!(sm.store_fragment(&frags[1], "mallory").is_err());
+            sm.store_fragment(&frags[1], "carlo").unwrap();
+            assert_eq!(sm.owner_of(&frags[0].chunk_id).as_deref(), Some("carlo"));
+            assert_eq!(sm.index.fragment_count(), 2);
+        });
+    }
+
+    #[test]
+    #[cfg(unix)]
     fn quota_exceeded_returns_error() {
         with_temp_home_storage(|| {
             let mut sm = StorageManager::init("net".into(), "svc".into(), 1).unwrap();
             let frags = rlnc::encode(CHUNK, 4, 4).unwrap();
-            assert!(sm.store_fragment(&frags[0]).is_err());
+            assert!(sm.store_fragment(&frags[0], "owner").is_err());
         });
     }
 
@@ -251,8 +279,8 @@ mod tests {
             {
                 let mut sm =
                     StorageManager::init(network_id.into(), service_id.into(), 1_000_000).unwrap();
-                sm.store_fragment(&frags[0]).unwrap();
-                sm.store_fragment(&frags[1]).unwrap();
+                sm.store_fragment(&frags[0], "owner").unwrap();
+                sm.store_fragment(&frags[1], "owner").unwrap();
             }
 
             let sm2 = StorageManager::load(network_id, service_id).unwrap();
