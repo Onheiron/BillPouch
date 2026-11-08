@@ -157,6 +157,8 @@ A Pouch offers exactly one tier; at most one Pouch per network per node
 (two Pouches on one machine would fail together). Tiers are nested layers: a
 T3 Pouch is also in layers T2 and T1, and gives each layer a slice of its
 space: 10 GiB to T1, the next 90 GiB to T2, the next 400 GiB to T3, and so on.
+A Pouch may offer less than its tier (`--size`); its slices then stop where
+the offer ends, so a 512 MiB T1 Pouch has a 512 MiB T1 slice.
 With 100 Pouches of which 30 are T2 and 10 are T3, layer T1 has 100 Pouches,
 T2 40 and T3 10. A fragment of layer `L` only goes into the `L` slice, and a
 Pouch announces its free space per layer (`layer_free`). Usable space and

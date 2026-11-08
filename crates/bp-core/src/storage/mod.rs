@@ -51,12 +51,17 @@ pub struct StorageManager {
 }
 
 impl StorageManager {
-    pub fn init(network_id: String, service_id: String, storage_bytes_bid: u64) -> BpResult<Self> {
+    pub fn init(
+        network_id: String,
+        service_id: String,
+        tier: StorageTier,
+        storage_bytes_bid: u64,
+    ) -> BpResult<Self> {
         let root = Self::root_path(&network_id, &service_id)?;
         let fragments_dir = root.join("fragments");
         std::fs::create_dir_all(&fragments_dir).map_err(BpError::Io)?;
 
-        let meta = PouchMeta::new(network_id, service_id, storage_bytes_bid);
+        let meta = PouchMeta::new(network_id, service_id, tier, storage_bytes_bid);
         meta.save(&root.join("meta.json"))?;
 
         Ok(Self {
@@ -216,11 +221,8 @@ impl StorageManager {
     }
 
     pub fn layer_free(&self, layer: StorageTier) -> u64 {
-        if layer > self.meta.tier {
-            return 0;
-        }
         let used = self.layer_used.get(&layer).copied().unwrap_or(0);
-        layer.slice_bytes().saturating_sub(used)
+        self.meta.slice(layer).saturating_sub(used)
     }
 
     pub fn filler_bytes(&self) -> u64 {
@@ -512,7 +514,9 @@ mod tests {
     #[cfg(unix)]
     fn init_creates_directory_and_meta() {
         with_temp_home_storage(|| {
-            let sm = StorageManager::init("amici".into(), "svc-1".into(), 1_000_000).unwrap();
+            let sm =
+                StorageManager::init("amici".into(), "svc-1".into(), StorageTier::T1, 1_000_000)
+                    .unwrap();
             assert!(sm.root.join("meta.json").exists());
             assert!(sm.root.join("fragments").exists());
             assert_eq!(sm.meta.storage_bytes_bid, 1_000_000);
@@ -524,7 +528,9 @@ mod tests {
     #[cfg(unix)]
     fn store_and_load_fragment() {
         with_temp_home_storage(|| {
-            let mut sm = StorageManager::init("net".into(), "svc".into(), 1_000_000).unwrap();
+            let mut sm =
+                StorageManager::init("net".into(), "svc".into(), StorageTier::T1, 1_000_000)
+                    .unwrap();
             let frags = rlnc::encode(CHUNK, 4, 6).unwrap();
 
             sm.store_fragment(&frags[0], &owner("carlo"), &commit(&frags[0]))
@@ -541,7 +547,9 @@ mod tests {
     #[cfg(unix)]
     fn a_chunk_keeps_the_owner_of_its_first_fragment() {
         with_temp_home_storage(|| {
-            let mut sm = StorageManager::init("net".into(), "svc".into(), 1_000_000).unwrap();
+            let mut sm =
+                StorageManager::init("net".into(), "svc".into(), StorageTier::T1, 1_000_000)
+                    .unwrap();
             let frags = rlnc::encode(CHUNK, 2, 3).unwrap();
             sm.store_fragment(&frags[0], &owner("carlo"), &commit(&frags[0]))
                 .unwrap();
@@ -559,7 +567,9 @@ mod tests {
     #[cfg(unix)]
     fn the_owner_can_revoke_and_delete_and_nobody_else() {
         with_temp_home_storage(|| {
-            let mut sm = StorageManager::init("net".into(), "svc".into(), 1_000_000).unwrap();
+            let mut sm =
+                StorageManager::init("net".into(), "svc".into(), StorageTier::T1, 1_000_000)
+                    .unwrap();
             let frags = rlnc::encode(CHUNK, 2, 2).unwrap();
             sm.store_fragment(&frags[0], &owner("carlo"), &commit(&frags[0]))
                 .unwrap();
@@ -585,7 +595,9 @@ mod tests {
         with_temp_home_storage(|| {
             let frags = rlnc::encode(CHUNK, 1, 1).unwrap();
             let size = frags[0].to_bytes().len() as u64;
-            let mut sm = StorageManager::init("net".into(), "svc".into(), size + 10).unwrap();
+            let mut sm =
+                StorageManager::init("net".into(), "svc".into(), StorageTier::T1, size + 10)
+                    .unwrap();
             let filler = vec![7u8; size as usize];
             let blob = |id: &str| Held::Filler { blob_id: id.into() };
             let device = libp2p::identity::Keypair::generate_ed25519();
@@ -619,7 +631,9 @@ mod tests {
     #[cfg(unix)]
     fn a_fragment_must_match_its_commitment() {
         with_temp_home_storage(|| {
-            let mut sm = StorageManager::init("net".into(), "svc".into(), 1_000_000).unwrap();
+            let mut sm =
+                StorageManager::init("net".into(), "svc".into(), StorageTier::T1, 1_000_000)
+                    .unwrap();
             let frags = rlnc::encode(CHUNK, 2, 2).unwrap();
             assert!(sm
                 .store_fragment(&frags[0], &owner("carlo"), &commit(&frags[1]))
@@ -632,7 +646,9 @@ mod tests {
     #[cfg(unix)]
     fn a_pouch_only_takes_fragments_of_its_layers_within_each_slice() {
         with_temp_home_storage(|| {
-            let mut sm = StorageManager::init("net".into(), "svc".into(), 1_000_000).unwrap();
+            let mut sm =
+                StorageManager::init("net".into(), "svc".into(), StorageTier::T1, 1_000_000)
+                    .unwrap();
             assert_eq!(sm.meta.tier, StorageTier::T1);
             let frags = rlnc::encode(CHUNK, 1, 2).unwrap();
             let mut upper = owner("carlo");
@@ -655,7 +671,8 @@ mod tests {
     #[cfg(unix)]
     fn quota_exceeded_returns_error() {
         with_temp_home_storage(|| {
-            let mut sm = StorageManager::init("net".into(), "svc".into(), 1).unwrap();
+            let mut sm =
+                StorageManager::init("net".into(), "svc".into(), StorageTier::T1, 1).unwrap();
             let frags = rlnc::encode(CHUNK, 4, 4).unwrap();
             assert!(sm
                 .store_fragment(&frags[0], &owner("carlo"), &commit(&frags[0]))
@@ -672,8 +689,13 @@ mod tests {
             let frags = rlnc::encode(CHUNK, 4, 4).unwrap();
 
             {
-                let mut sm =
-                    StorageManager::init(network_id.into(), service_id.into(), 1_000_000).unwrap();
+                let mut sm = StorageManager::init(
+                    network_id.into(),
+                    service_id.into(),
+                    StorageTier::T1,
+                    1_000_000,
+                )
+                .unwrap();
                 sm.store_fragment(&frags[0], &owner("carlo"), &commit(&frags[0]))
                     .unwrap();
                 sm.store_fragment(&frags[1], &owner("carlo"), &commit(&frags[1]))

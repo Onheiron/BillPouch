@@ -13,15 +13,28 @@ pub struct PouchMeta {
 }
 
 impl PouchMeta {
-    pub fn new(network_id: String, service_id: String, storage_bytes_bid: u64) -> Self {
+    pub fn new(
+        network_id: String,
+        service_id: String,
+        tier: super::StorageTier,
+        storage_bytes_bid: u64,
+    ) -> Self {
         Self {
             network_id,
             service_id,
-            tier: super::StorageTier::fitting(storage_bytes_bid),
+            tier,
             storage_bytes_bid,
             storage_bytes_used: 0,
             joined_at: chrono::Utc::now().timestamp() as u64,
         }
+    }
+
+    pub fn slice(&self, layer: super::StorageTier) -> u64 {
+        if layer > self.tier {
+            return 0;
+        }
+        let upto = |t: super::StorageTier| t.quota_bytes().min(self.storage_bytes_bid);
+        upto(layer) - layer.below().map_or(0, upto)
     }
 
     pub fn available_bytes(&self) -> u64 {
@@ -49,8 +62,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_pouch_slices_its_offer_across_its_layers() {
+        use super::super::tier::{StorageTier, TIER_T1_BYTES};
+        let full = PouchMeta::new("n".into(), "s".into(), StorageTier::T2, 50 * (1 << 30));
+        assert_eq!(full.slice(StorageTier::T1), TIER_T1_BYTES);
+        assert_eq!(full.slice(StorageTier::T2), 40 * (1 << 30));
+        assert_eq!(full.slice(StorageTier::T3), 0);
+        let small = PouchMeta::new("n".into(), "s".into(), StorageTier::T1, 512 << 20);
+        assert_eq!(small.slice(StorageTier::T1), 512 << 20);
+        assert_eq!(small.slice(StorageTier::T2), 0);
+    }
+
+    #[test]
     fn available_bytes_correct() {
-        let mut m = PouchMeta::new("net".into(), "svc".into(), 1000);
+        let mut m = PouchMeta::new(
+            "net".into(),
+            "svc".into(),
+            super::super::StorageTier::T1,
+            1000,
+        );
         assert_eq!(m.available_bytes(), 1000);
         m.storage_bytes_used = 400;
         assert_eq!(m.available_bytes(), 600);
@@ -58,7 +88,12 @@ mod tests {
 
     #[test]
     fn has_capacity_boundary() {
-        let mut m = PouchMeta::new("net".into(), "svc".into(), 100);
+        let mut m = PouchMeta::new(
+            "net".into(),
+            "svc".into(),
+            super::super::StorageTier::T1,
+            100,
+        );
         assert!(m.has_capacity(100));
         assert!(!m.has_capacity(101));
         m.storage_bytes_used = 50;
@@ -74,7 +109,12 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("meta.json");
 
-        let meta = PouchMeta::new("amici".into(), "svc-uuid".into(), 10_737_418_240);
+        let meta = PouchMeta::new(
+            "amici".into(),
+            "svc-uuid".into(),
+            super::super::StorageTier::T1,
+            10_737_418_240,
+        );
         meta.save(&path).unwrap();
 
         let loaded = PouchMeta::load(&path).unwrap();

@@ -14,6 +14,7 @@ services:
       NETWORK: "playground"
       BP_LISTEN_PORT: "4001"
       STORAGE_TIER: "T1"
+      STORAGE_SIZE: "512MiB"
       RUST_LOG: "bp_core=info,bp_cli=info"
     ports:
       - "127.0.0.1:3001:3000"
@@ -33,6 +34,7 @@ services:
       NETWORK: "playground"
       BP_LISTEN_PORT: "4002"
       STORAGE_TIER: "T1"
+      STORAGE_SIZE: "512MiB"
       RUST_LOG: "bp_core=info,bp_cli=info"
     ports:
       - "127.0.0.1:3002:3000"
@@ -70,6 +72,7 @@ services:
       NETWORK: "playground"
       BP_LISTEN_PORT: "4004"
       STORAGE_TIER: "T1"
+      STORAGE_SIZE: "512MiB"
       RUST_LOG: "bp_core=info,bp_cli=info"
     ports:
       - "127.0.0.1:3004:3000"

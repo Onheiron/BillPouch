@@ -29,21 +29,8 @@ impl StorageTier {
         }
     }
 
-    pub fn fitting(bytes: u64) -> Self {
-        Self::all()
-            .iter()
-            .rev()
-            .copied()
-            .find(|t| t.quota_bytes() <= bytes)
-            .unwrap_or(StorageTier::T1)
-    }
-
     pub fn below(self) -> Option<Self> {
         Self::all().iter().copied().rev().find(|t| *t < self)
-    }
-
-    pub fn slice_bytes(self) -> u64 {
-        self.quota_bytes() - self.below().map_or(0, StorageTier::quota_bytes)
     }
 
     pub fn layers(self) -> impl Iterator<Item = StorageTier> {
@@ -111,17 +98,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tiers_are_nested_layers_with_their_own_slice() {
-        assert_eq!(StorageTier::T1.slice_bytes(), TIER_T1_BYTES);
-        assert_eq!(StorageTier::T2.slice_bytes(), TIER_T2_BYTES - TIER_T1_BYTES);
-        let slices: u64 = StorageTier::T3.layers().map(StorageTier::slice_bytes).sum();
-        assert_eq!(slices, TIER_T3_BYTES);
+    fn tiers_are_nested_layers() {
         assert_eq!(
             StorageTier::T3.layers().collect::<Vec<_>>(),
             vec![StorageTier::T1, StorageTier::T2, StorageTier::T3]
         );
-        assert_eq!(StorageTier::fitting(TIER_T2_BYTES + 1), StorageTier::T2);
-        assert_eq!(StorageTier::fitting(1), StorageTier::T1);
+        assert_eq!(StorageTier::T2.below(), Some(StorageTier::T1));
         assert_eq!(StorageTier::T1.below(), None);
     }
 

@@ -16,7 +16,7 @@ started automatically when missing.
 
 | Command | Description |
 |---------|-------------|
-| `bp hatch <pouch\|bill\|post> --network <id> [--tier T1..T5]` | Start a service in a network you are a member of. `--tier` is required for `pouch`; one Pouch per network per node |
+| `bp hatch <pouch\|bill\|post> --network <id> [--tier T1..T5] [--size 512MiB]` | Start a service in a network you are a member of. `--tier` is required for `pouch`; `--size` offers less than the whole tier (at least 64 MiB); one service of each type per network per node |
 | `bp status` | Identity, services, reputation, per-Pouch storage, peer count (re-announces first) |
 | `bp flock` | Local services, joined networks and every known peer |
 | `bp pause <service_id> --eta <minutes>` | Announce planned maintenance |
