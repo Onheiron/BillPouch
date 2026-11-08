@@ -77,7 +77,8 @@ pub async fn members(network_id: String) -> anyhow::Result<()> {
             ""
         };
         println!(
-            "   {}  {:<10} weight {}  hosts {:.1} MiB  stores {:.1} MiB  devices {}{}{}",
+            "   {:<12} {}  {:<10} weight {}  hosts {:.1} MiB  stores {:.1} MiB  devices {}{}{}",
+            member.name,
             member.fingerprint,
             member.tier,
             member.weight,

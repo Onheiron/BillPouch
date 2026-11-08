@@ -177,6 +177,7 @@ pub struct InviteData {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemberInfo {
     pub fingerprint: String,
+    pub name: String,
     pub tier: String,
     pub weight: u64,
     pub credit_bytes: u64,

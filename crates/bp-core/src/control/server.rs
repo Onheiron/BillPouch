@@ -485,6 +485,12 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 .active_members()
                 .map(|(fingerprint, m)| MemberInfo {
                     fingerprint: fingerprint.clone(),
+                    name: m
+                        .key
+                        .split_whitespace()
+                        .skip(2)
+                        .collect::<Vec<_>>()
+                        .join(" "),
                     tier: ledger
                         .snapshot
                         .tier(fingerprint)

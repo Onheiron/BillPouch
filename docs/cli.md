@@ -30,7 +30,7 @@ started automatically when missing.
 |---------|-------------|
 | `bp network create <name>` | Create a network; you are its first member and its creator |
 | `bp invite <network> "<ssh public key>"` | Submit the invitation to the network, wait until it is committed and print (on stdout) the token they join with. Requires the `invite` capability (R2+, or the creator while nobody is R2) |
-| `bp members <network>` | Members (yours marked `← you`) with tier, voting weight, bytes they host (verified by the others last epoch) and store, devices and pending expulsions; expelled members |
+| `bp members <network>` | Members by name (the comment of their SSH key, yours marked `← you`) with tier, voting weight, bytes they host (verified by the others last epoch) and store, devices and pending expulsions; expelled members |
 | `bp expel <network> <fingerprint>` | Propose an expulsion (R3+, or the creator while nobody is R3) or approve one (R1+). It passes with > 2/3 of the other members' weight and at least half of them; the network key is then rotated without the expelled member |
 | `bp invite <network> "<your own public key>"` | Token for another device of yours: log in there with the same SSH key and `bp join` it |
 | `bp dashboard [--port 3000]` | Sign a 12 h session with your SSH key and open the local `bp-api` dashboard with it |
