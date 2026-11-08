@@ -119,6 +119,10 @@ async fn store_chunk(
                 match result {
                     Ok(evicted) => {
                         total.stored += 1;
+                        pointers.push(FragmentPointer {
+                            peer_id: me.clone(),
+                            fragment_id: fragment.id.clone(),
+                        });
                         if !evicted.is_empty() {
                             publish(state, network_id, Gossip::FillerEvicted { blobs: evicted })
                                 .await;
@@ -149,7 +153,7 @@ async fn store_chunk(
             }
         }
     }
-    total.distributed += pointers.len();
+    total.distributed += pointers.iter().filter(|p| p.peer_id != me).count();
     if !pointers.is_empty() {
         let ann = FragmentIndexAnnouncement {
             network_id: network_id.to_string(),
@@ -200,12 +204,12 @@ pub async fn fetch_chunk(
         let local_peer = state.identity.peer_id.to_string();
         let peers: Vec<PeerId> = {
             let idx = state.remote_fragment_index.read().unwrap();
-            let pointed: Vec<String> = idx
+            let mut candidates: Vec<String> = idx
                 .pointers_for(chunk_id)
                 .iter()
                 .map(|p| p.peer_id.clone())
                 .collect();
-            let candidates: Vec<String> = if pointed.is_empty() {
+            candidates.extend(
                 state
                     .network_state
                     .read()
@@ -213,11 +217,8 @@ pub async fn fetch_chunk(
                     .in_network(network_id)
                     .into_iter()
                     .filter(|n| n.service_type == ServiceType::Pouch)
-                    .map(|n| n.peer_id.clone())
-                    .collect()
-            } else {
-                pointed
-            };
+                    .map(|n| n.peer_id.clone()),
+            );
             let mut seen = HashSet::new();
             candidates
                 .into_iter()

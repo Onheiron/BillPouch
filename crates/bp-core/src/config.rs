@@ -44,6 +44,10 @@ pub fn networks_dir() -> BpResult<PathBuf> {
     Ok(base_dir()?.join("networks"))
 }
 
+pub fn outgoing_path() -> BpResult<PathBuf> {
+    Ok(base_dir()?.join("placements.json"))
+}
+
 pub fn fillers_path() -> BpResult<PathBuf> {
     Ok(base_dir()?.join("fillers.json"))
 }

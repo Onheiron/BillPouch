@@ -71,7 +71,7 @@ fn switch_key(
 
 pub type StorageManagerMap = Arc<RwLock<HashMap<String, Arc<RwLock<StorageManager>>>>>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutgoingFragment {
     pub chunk_id: String,
     pub fragment_id: String,
@@ -82,6 +82,26 @@ pub struct OutgoingFragment {
 }
 
 pub type OutgoingAssignments = Arc<RwLock<HashMap<String, Vec<OutgoingFragment>>>>;
+
+pub fn load_outgoing() -> OutgoingAssignments {
+    let placed = crate::config::outgoing_path()
+        .ok()
+        .and_then(|p| std::fs::read(p).ok())
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+    Arc::new(RwLock::new(placed))
+}
+
+pub fn save_outgoing(outgoing: &OutgoingAssignments) {
+    let result = crate::config::outgoing_path().and_then(|p| {
+        let bytes = serde_json::to_vec(&*outgoing.read().unwrap())?;
+        std::fs::write(p, bytes)?;
+        Ok(())
+    });
+    if let Err(e) = result {
+        tracing::warn!("cannot save fragment placements: {e}");
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]

@@ -37,6 +37,7 @@ Everything is under the XDG data dir (`~/.local/share/billpouch/` on Linux):
 | `profile.json` | Alias and creation time |
 | `control.sock`, `daemon.pid` | Daemon socket and PID |
 | `networks/<name>.json` | Genesis, your key entry and the committed ledger blocks of each network you belong to |
+| `placements.json`, `fillers.json` | Where your fragments and filler blobs went: what you challenge and repair |
 | `files.json` | Local copy of your file index per network, the index heads you have seen, shares not yet acknowledged |
 | `kad_peers.json` | Known peer addresses, saved every 600 s and redialled at start |
 | `bootstrap.json` | Optional WAN bootstrap peers (`bp bootstrap`) |
@@ -178,8 +179,16 @@ For every peer the daemon keeps a QoS record (`network/qos.rs`):
 - **Stability score** `s = 0.6·exp(−rtt/500 ms) + 0.4·success_rate`
   (RTT EWMA α = 0.125, success EWMA β = 0.10). This is the `p_i` used for k/n.
 - **Fault score** 0–100: +5 per failed Proof-of-Storage, −1 per passed one.
-  At 90 (*suspected*) the fragments it holds are recoded and pushed to a peer
-  below 70 (*degraded*).
+  At 90 (*suspected*) its fragments are repaired.
+
+**Repair** (`network/quality_monitor.rs`): when a Pouch is suspected, or
+announces `evicting`, the owner of each chunk it held gathers at least `k`
+fragments of that chunk from its own Pouch and the other holders, recodes as
+many new fragments as were lost and pushes them to the best-ranked Pouch below
+70 (*degraded*) that does not hold the chunk yet (its own Pouch included). Where
+each fragment went is saved in `placements.json`, so challenges and repairs
+survive a restart. Fragment index announcements list every holder, the owner's
+Pouch included, and `bp get` falls back to every known Pouch.
 
 **Proof-of-Storage** (`storage/merkle.rs`): data is split into 4 KiB blocks
 and committed with a BLAKE3 Merkle tree. Every 300 s the daemon picks, for each
