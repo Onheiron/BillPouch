@@ -35,7 +35,7 @@ Everything is under the XDG data dir (`~/.local/share/billpouch/` on Linux):
 | `user_ed25519` | Your user key (OpenSSH format, optionally passphrase-encrypted) |
 | `device.key`, `device_cert.json` | This device's libp2p key and the certificate your user key signed for it |
 | `profile.json` | Alias and creation time |
-| `control.sock`, `daemon.pid` | Daemon socket and PID |
+| `control.sock`, `daemon.log` | Daemon socket, and the log of a daemon the CLI started |
 | `networks/<name>.json` | Genesis, your key entry and the committed ledger blocks of each network you belong to |
 | `qos.json` | Per-peer QoS (RTT, challenge success rate), saved every 60 s |
 | `files.json` | Local copy of your file index per network, the index heads you have seen, shares not yet acknowledged |

@@ -1,8 +1,4 @@
-use bp_core::{
-    control::protocol::{ControlRequest, PutFileData},
-    daemon,
-    identity::Identity,
-};
+use bp_core::control::protocol::{ControlRequest, PutFileData};
 use std::path::PathBuf;
 
 use crate::client::ControlClient;
@@ -13,12 +9,6 @@ pub async fn put(
     ph: f64,
     name: Option<String>,
 ) -> anyhow::Result<()> {
-    if !Identity::exists()? {
-        anyhow::bail!("Not logged in. Run `bp login` first.");
-    }
-    if !daemon::is_running() {
-        anyhow::bail!("Daemon is not running. Start a Pouch first with: bp hatch pouch");
-    }
     let path = std::fs::canonicalize(&path)
         .map_err(|e| anyhow::anyhow!("Cannot read {:?}: {}", path, e))?;
     let data = ControlClient::connect()

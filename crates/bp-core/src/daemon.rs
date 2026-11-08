@@ -14,6 +14,9 @@ use tokio::sync::mpsc;
 
 pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
     config::ensure_dirs()?;
+    if is_running() {
+        return Err(BpError::Control("a daemon is already running".into()));
+    }
 
     let resolved_pass = passphrase
         .or_else(|| std::env::var("BP_PASSPHRASE").ok())
@@ -25,8 +28,6 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
         fingerprint = %identity.fingerprint,
         "BillPouch daemon starting"
     );
-
-    write_pid()?;
 
     let network_state = Arc::new(RwLock::new(NetworkState::new()));
     let (net_tx, net_rx) = mpsc::channel::<crate::network::NetworkCommand>(64);
@@ -141,37 +142,9 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
     });
 
     let socket_path = config::socket_path()?;
-    run_control_server(socket_path, daemon_state).await?;
-
-    remove_pid();
-    Ok(())
-}
-
-fn write_pid() -> BpResult<()> {
-    let pid = std::process::id();
-    let path = config::pid_path()?;
-    std::fs::write(&path, pid.to_string()).map_err(BpError::Io)
-}
-
-fn remove_pid() {
-    if let Ok(path) = config::pid_path() {
-        let _ = std::fs::remove_file(path);
-    }
+    run_control_server(socket_path, daemon_state).await
 }
 
 pub fn is_running() -> bool {
-    let path = match config::pid_path() {
-        Ok(p) => p,
-        Err(_) => return false,
-    };
-    let content = match std::fs::read_to_string(&path) {
-        Ok(c) => c,
-        Err(_) => return false,
-    };
-    let pid: u32 = match content.trim().parse() {
-        Ok(p) => p,
-        Err(_) => return false,
-    };
-    let proc_path = format!("/proc/{}", pid);
-    std::path::Path::new(&proc_path).exists()
+    config::socket_path().is_ok_and(|p| std::os::unix::net::UnixStream::connect(p).is_ok())
 }

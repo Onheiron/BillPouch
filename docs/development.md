@@ -43,7 +43,7 @@ docker compose -f docker-compose.smoke.yml down -v
 ./playground.sh down
 ```
 
-Playground nodes keep their data in `playground/data/<node>/`.
+Every `./playground.sh up` starts from a clean network.
 
 ## CI and releases (`.github/workflows/`)
 
