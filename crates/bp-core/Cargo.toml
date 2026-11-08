@@ -16,7 +16,7 @@ uuid       = { workspace = true }
 chrono     = { workspace = true }
 directories = { workspace = true }
 
-libp2p = { version = "0.54", features = [
+libp2p = { version = "0.57", features = [
     "gossipsub",
     "kad",
     "noise",
@@ -38,7 +38,6 @@ hex     = "0.4"
 blake3  = "1"
 rand    = "0.8"
 futures = "0.3"
-async-trait = "0.1"
 cbor4ii = { version = "0.3", features = ["serde1", "use_std"] }
 argon2  = "0.5"
 chacha20poly1305 = "0.10"

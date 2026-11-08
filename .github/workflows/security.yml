@@ -10,7 +10,6 @@ jobs:
   deny:
     name: cargo deny (advisories, licenses, bans, sources)
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: EmbarkStudios/cargo-deny-action@v2

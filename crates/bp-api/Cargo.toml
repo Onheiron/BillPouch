@@ -17,8 +17,8 @@ serde_json = { workspace = true }
 anyhow     = { workspace = true }
 tracing    = { workspace = true }
 
-axum               = "0.7"
-axum-server        = { version = "0.7", features = ["tls-rustls"] }
+axum               = "0.8"
+axum-server        = { version = "0.9", features = ["tls-rustls"] }
 rcgen              = "0.13"
 base64             = "0.22"
 hex                = "0.4"
