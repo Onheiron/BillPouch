@@ -1,13 +1,14 @@
 use crate::{
-    chain::{observe, ObservationLog},
+    chain::{observe, Chains, ObservationLog},
+    identity::Identity,
     network::{
-        qos::QosRegistry, state::NetworkState, Fillers, NetworkCommand, OutgoingAssignments,
+        qos::QosRegistry, state::NetworkState, valid_commitment, NetworkCommand, Proven,
         StorageManagerMap,
     },
     service::ServiceType,
     storage::{
-        filler::{Sponsored, BLOB_BLOCKS, BLOB_BYTES},
-        merkle::{self, Proof},
+        commitment::{Commitment, Held},
+        filler::{blob, BLOB_BYTES},
         PosTarget, StorageTier,
     },
 };
@@ -33,17 +34,19 @@ const CATCH_UP_INTERVAL_SECS: u64 = 60;
 
 const MAX_REPAIRS_PER_ROUND: usize = 64;
 
+const MAX_CHALLENGES_PER_ROUND: usize = 8;
+
 #[allow(clippy::too_many_arguments)]
 pub async fn run_quality_monitor(
-    me: String,
+    identity: Identity,
     network_state: Arc<RwLock<NetworkState>>,
     qos: Arc<RwLock<QosRegistry>>,
     observations: ObservationLog,
     net_tx: mpsc::Sender<NetworkCommand>,
-    outgoing_assignments: OutgoingAssignments,
     storage_managers: StorageManagerMap,
-    fillers: Fillers,
+    chains: Chains,
 ) {
+    let me = identity.peer_id.to_string();
     let mut fill_interval = tokio::time::interval(Duration::from_secs(FILL_INTERVAL_SECS));
     fill_interval.reset();
 
@@ -66,16 +69,15 @@ pub async fn run_quality_monitor(
         tokio::select! {
             _ = ping_interval.tick() => {
                 run_ping_round(&network_state, &qos, &net_tx).await;
-                crate::network::save_outgoing(&outgoing_assignments);
                 if let Ok(q) = qos.read() {
                     q.save();
                 }
             }
             _ = pos_interval.tick() => {
-                run_pos_round(&outgoing_assignments, &fillers, &qos, &observations, &net_tx).await;
+                run_pos_round(&identity, &network_state, &storage_managers, &chains, &qos, &observations, &net_tx).await;
             }
             _ = fill_interval.tick() => {
-                run_fill_round(&me, &network_state, &storage_managers, &fillers, &net_tx).await;
+                run_fill_round(&identity, &network_state, &storage_managers, &net_tx).await;
             }
             _ = catch_up_interval.tick() => {
                 run_catch_up(&me, &network_state, &storage_managers, &net_tx).await;
@@ -136,110 +138,140 @@ async fn run_ping_round(
     tracing::debug!("quality_monitor: Ping round complete");
 }
 
-enum Expect {
-    Merkle { root: [u8; 32], blocks: usize },
-    Filler(Box<Sponsored>),
-}
-
-struct Challenge {
-    peer: String,
-    peer_id: PeerId,
-    target: PosTarget,
-    index: usize,
-    expect: Expect,
+pub struct Challenge {
+    pub peer: String,
+    pub peer_user: String,
+    pub target: PosTarget,
+    pub seed: u64,
+    pub stored_bytes: u64,
 }
 
 impl Challenge {
-    fn passes(&self, proof: &Proof) -> bool {
-        proof.index == self.index
-            && match &self.expect {
-                Expect::Merkle { root, blocks } => merkle::verify(root, *blocks, proof),
-                Expect::Filler(sponsored) => sponsored.verify(proof),
+    pub fn passes(&self, proven: &Proven, signer_user: Option<&str>, valid: bool) -> bool {
+        let (proof, commitment) = proven;
+        let held_ok = match (&self.target, &commitment.held) {
+            (PosTarget::Fragment { chunk_id }, Held::Fragment { chunk_id: c, .. }) => c == chunk_id,
+            (PosTarget::Filler { .. }, Held::Filler { .. }) => {
+                signer_user.is_some_and(|u| u != self.peer_user)
             }
+            _ => false,
+        };
+        valid && held_ok && commitment.holder == self.peer && commitment.proves(self.seed, proof)
     }
 }
 
-fn challenges(outgoing: &OutgoingAssignments, fillers: &Fillers) -> Vec<Challenge> {
+fn challenges(
+    me_user: &str,
+    me: &str,
+    network_state: &Arc<RwLock<NetworkState>>,
+    storage_managers: &StorageManagerMap,
+) -> Vec<Challenge> {
+    let pouches: Vec<(String, StorageTier, Vec<String>)> = storage_managers
+        .read()
+        .map(|m| {
+            m.values()
+                .map(|sm| {
+                    let sm = sm.read().unwrap();
+                    let chunks = sm
+                        .meta
+                        .tier
+                        .layers()
+                        .flat_map(|l| sm.catalog(l))
+                        .map(|e| e.chunk_id)
+                        .collect();
+                    (sm.meta.network_id.clone(), sm.meta.tier, chunks)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let mut rng = rand::thread_rng();
     let mut out = Vec::new();
-    if let Ok(assignments) = outgoing.read() {
-        for (peer, fragments) in assignments.iter() {
-            let (Some(f), Ok(peer_id)) = (fragments.choose(&mut rng), peer.parse()) else {
-                continue;
+    let Ok(ns) = network_state.read() else {
+        return out;
+    };
+    for (network, my_tier, my_chunks) in pouches {
+        let mut peers: Vec<_> = ns
+            .in_network(&network)
+            .into_iter()
+            .filter(|n| n.service_type == ServiceType::Pouch && n.peer_id != me)
+            .filter(|n| n.user_fingerprint != me_user)
+            .collect();
+        peers.shuffle(&mut rng);
+        for node in peers.into_iter().take(MAX_CHALLENGES_PER_ROUND) {
+            let meta = |key: &str| node.metadata.get(key).and_then(|v| v.as_u64()).unwrap_or(0);
+            let tier = node
+                .metadata
+                .get("tier")
+                .and_then(|t| t.as_str())
+                .and_then(|t| StorageTier::parse(t).ok())
+                .unwrap_or(StorageTier::T1);
+            let fillers = meta("fillers");
+            let shared = tier.min(my_tier) >= StorageTier::T1 && !my_chunks.is_empty();
+            let target = match (shared, fillers > 0) {
+                (true, true) if rng.gen_bool(0.5) => PosTarget::Filler {
+                    nth: rng.gen_range(0..fillers),
+                },
+                (true, _) => PosTarget::Fragment {
+                    chunk_id: my_chunks.choose(&mut rng).cloned().unwrap_or_default(),
+                },
+                (false, true) => PosTarget::Filler {
+                    nth: rng.gen_range(0..fillers),
+                },
+                (false, false) => continue,
             };
             out.push(Challenge {
-                peer: peer.clone(),
-                peer_id,
-                target: PosTarget::Fragment {
-                    chunk_id: f.chunk_id.clone(),
-                    fragment_id: f.fragment_id.clone(),
-                },
-                index: rng.gen_range(0..f.blocks),
-                expect: Expect::Merkle {
-                    root: f.root,
-                    blocks: f.blocks,
-                },
-            });
-        }
-    }
-    if let Ok(book) = fillers.read() {
-        for (peer, blobs) in &book.by_pouch {
-            let (Some(blob), Ok(peer_id)) = (blobs.choose(&mut rng), peer.parse()) else {
-                continue;
-            };
-            out.push(Challenge {
-                peer: peer.clone(),
-                peer_id,
-                target: PosTarget::Filler {
-                    blob_id: blob.blob_id.clone(),
-                },
-                index: rng.gen_range(0..BLOB_BLOCKS),
-                expect: Expect::Filler(Box::new(blob.clone())),
+                peer: node.peer_id.clone(),
+                peer_user: node.user_fingerprint.clone(),
+                target,
+                seed: rng.gen(),
+                stored_bytes: meta("stored_bytes"),
             });
         }
     }
     out
 }
 
-fn placed_bytes(outgoing: &OutgoingAssignments, fillers: &Fillers, peer: &str) -> u64 {
-    let fragments: u64 = outgoing
-        .read()
-        .map(|o| o.get(peer).map_or(0, |f| f.iter().map(|f| f.size).sum()))
-        .unwrap_or(0);
-    let filler = fillers.read().map_or(0, |b| b.bytes_for(peer));
-    fragments + filler
-}
-
+#[allow(clippy::too_many_arguments)]
 async fn run_pos_round(
-    outgoing_assignments: &OutgoingAssignments,
-    fillers: &Fillers,
+    identity: &Identity,
+    network_state: &Arc<RwLock<NetworkState>>,
+    storage_managers: &StorageManagerMap,
+    chains: &Chains,
     qos: &Arc<RwLock<QosRegistry>>,
     observations: &ObservationLog,
     net_tx: &mpsc::Sender<NetworkCommand>,
 ) {
+    let me = identity.peer_id.to_string();
     let mut handles = Vec::new();
-    for challenge in challenges(outgoing_assignments, fillers) {
+    for challenge in challenges(&identity.fingerprint, &me, network_state, storage_managers) {
         let net_tx = net_tx.clone();
         handles.push(tokio::spawn(async move {
-            let passed = prove_one(&challenge, net_tx).await;
-            (challenge.peer, passed)
+            let proven = prove_one(&challenge, net_tx).await;
+            (challenge, proven)
         }));
     }
     for handle in handles {
-        let Ok((peer, Some(passed))) = handle.await else {
+        let Ok((challenge, Some(proven))) = handle.await else {
             continue;
         };
-        tracing::debug!(peer = %peer, passed, "PoS challenge result");
+        let passed = proven.as_ref().is_some_and(|p| {
+            let signer_user = chains.read().ok().and_then(|all| {
+                all.values()
+                    .find_map(|c| c.ledger().device_owner(&p.1.signer).map(str::to_string))
+            });
+            let valid = valid_commitment(chains, &p.1, &challenge.peer);
+            challenge.passes(p, signer_user.as_deref(), valid)
+        });
+        tracing::debug!(peer = %challenge.peer, passed, "PoS challenge result");
         let success = qos.write().map_or(0.0, |mut q| {
-            let entry = q.entry(peer.clone());
+            let entry = q.entry(challenge.peer.clone());
             entry.record_challenge(passed);
             entry.challenge_success_ewma
         });
-        let placed = placed_bytes(outgoing_assignments, fillers, &peer);
-        let verified = (placed as f64 * success) as u64;
+        let verified = (challenge.stored_bytes as f64 * success) as u64;
         observe(
             observations,
-            &peer,
+            &challenge.peer,
             passed,
             verified,
             crate::chain::now_ms(),
@@ -365,32 +397,37 @@ async fn run_catch_up(
     }
 }
 
-async fn prove_one(challenge: &Challenge, net_tx: mpsc::Sender<NetworkCommand>) -> Option<bool> {
+async fn prove_one(
+    challenge: &Challenge,
+    net_tx: mpsc::Sender<NetworkCommand>,
+) -> Option<Option<Proven>> {
+    let peer_id = challenge.peer.parse::<PeerId>().ok()?;
     let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
     net_tx
         .send(NetworkCommand::ProofOfStorage {
-            peer_id: challenge.peer_id,
+            peer_id,
             target: challenge.target.clone(),
-            index: challenge.index,
+            seed: challenge.seed,
             resp_tx,
         })
         .await
         .ok()?;
-    let proof = tokio::time::timeout(Duration::from_secs(POS_TIMEOUT_SECS), resp_rx)
-        .await
-        .ok()
-        .and_then(|r| r.ok())
-        .flatten();
-    Some(proof.is_some_and(|p| challenge.passes(&p)))
+    Some(
+        tokio::time::timeout(Duration::from_secs(POS_TIMEOUT_SECS), resp_rx)
+            .await
+            .ok()
+            .and_then(|r| r.ok())
+            .flatten(),
+    )
 }
 
 async fn run_fill_round(
-    me: &str,
+    identity: &Identity,
     network_state: &Arc<RwLock<NetworkState>>,
     storage_managers: &StorageManagerMap,
-    fillers: &Fillers,
     net_tx: &mpsc::Sender<NetworkCommand>,
 ) {
+    let me = identity.peer_id.to_string();
     let networks: Vec<String> = storage_managers
         .read()
         .map(|m| {
@@ -406,6 +443,7 @@ async fn run_fill_round(
                 ns.in_network(&network)
                     .into_iter()
                     .filter(|n| n.service_type == ServiceType::Pouch && n.peer_id != me)
+                    .filter(|n| n.user_fingerprint != identity.fingerprint)
                     .filter_map(|n| {
                         let free = n.metadata.get("free_bytes")?.as_u64()?;
                         Some((n.peer_id.clone(), free))
@@ -413,7 +451,7 @@ async fn run_fill_round(
                     .collect()
             })
             .unwrap_or_default();
-        let sponsors = pouches.len() as u64;
+        let sponsors = pouches.len() as u64 + 1;
         for (pouch, free) in pouches {
             let Ok(peer_id) = pouch.parse::<PeerId>() else {
                 continue;
@@ -421,14 +459,22 @@ async fn run_fill_round(
             let blobs = (free / sponsors / BLOB_BYTES as u64).min(MAX_BLOBS_PER_ROUND);
             let mut filled = 0;
             for _ in 0..blobs {
-                let (sponsored, data) = Sponsored::new(&network);
+                let (blob_id, data) = blob();
+                let held = Held::Filler {
+                    blob_id: blob_id.clone(),
+                };
+                let Ok(commitment) = Commitment::sign(&identity.device, &me, held, &pouch, &data)
+                else {
+                    break;
+                };
                 let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
                 let sent = net_tx
                     .send(NetworkCommand::Fill {
                         peer_id,
                         network: network.clone(),
-                        blob_id: sponsored.blob_id.clone(),
+                        blob_id,
                         data,
+                        commitment,
                         resp_tx,
                     })
                     .await;
@@ -439,9 +485,6 @@ async fn run_fill_round(
                     );
                 if !stored {
                     break;
-                }
-                if let Ok(mut book) = fillers.write() {
-                    book.add(&pouch, sponsored);
                 }
                 filled += 1;
             }
@@ -540,37 +583,55 @@ mod tests {
     }
 
     #[test]
-    fn challenges_accept_only_the_right_block() {
-        let data: Vec<u8> = (0..3 * merkle::BLOCK).map(|i| i as u8).collect();
-        let fragment = Challenge {
-            peer: "p".into(),
-            peer_id: PeerId::random(),
+    fn a_challenge_passes_only_with_the_right_commitment_and_block() {
+        let sponsor = libp2p::identity::Keypair::generate_ed25519();
+        let data: Vec<u8> = (0..3 * crate::storage::merkle::BLOCK)
+            .map(|i| i as u8)
+            .collect();
+        let commit = |held: Held, holder: &str| {
+            Commitment::sign(&sponsor, "sponsor-device", held, holder, &data).unwrap()
+        };
+        let fragment = Held::Fragment {
+            chunk_id: "c".into(),
+            fragment_id: "f".into(),
+        };
+        let challenge = Challenge {
+            peer: "pouch".into(),
+            peer_user: "lucia".into(),
             target: PosTarget::Fragment {
                 chunk_id: "c".into(),
-                fragment_id: "f".into(),
             },
-            index: 1,
-            expect: Expect::Merkle {
-                root: merkle::root(&data),
-                blocks: 3,
-            },
+            seed: 4,
+            stored_bytes: 0,
         };
-        assert!(fragment.passes(&merkle::prove(&data, 1).unwrap()));
-        assert!(!fragment.passes(&merkle::prove(&data, 2).unwrap()));
+        let c = commit(fragment.clone(), "pouch");
+        let proof = |c: &Commitment, seed: u64| {
+            crate::storage::merkle::prove(&data, c.index_for(seed)).unwrap()
+        };
+        let right = (proof(&c, 4), c.clone());
+        assert!(challenge.passes(&right, Some("carlo"), true));
+        assert!(!challenge.passes(&right, Some("carlo"), false));
+        assert!(!challenge.passes(&(proof(&c, 5), c.clone()), Some("carlo"), true));
+        let elsewhere = commit(fragment, "another pouch");
+        assert!(!challenge.passes(&(proof(&elsewhere, 4), elsewhere), Some("carlo"), true));
 
-        let (sponsored, blob) = Sponsored::new("amici");
-        let (_, other) = Sponsored::new("amici");
         let filler = Challenge {
-            peer: "p".into(),
-            peer_id: PeerId::random(),
-            target: PosTarget::Filler {
-                blob_id: sponsored.blob_id.clone(),
-            },
-            index: 7,
-            expect: Expect::Filler(Box::new(sponsored)),
+            target: PosTarget::Filler { nth: 0 },
+            ..challenge
         };
-        assert!(filler.passes(&merkle::prove(&blob, 7).unwrap()));
-        assert!(!filler.passes(&merkle::prove(&other, 7).unwrap()));
+        let blob = commit(
+            Held::Filler {
+                blob_id: "b".into(),
+            },
+            "pouch",
+        );
+        let proven = (proof(&blob, 4), blob);
+        assert!(filler.passes(&proven, Some("carlo"), true));
+        assert!(
+            !filler.passes(&proven, Some("lucia"), true),
+            "self-sponsored filler"
+        );
+        assert!(!filler.passes(&right, Some("carlo"), true));
     }
 
     #[test]
@@ -589,17 +650,15 @@ mod tests {
         let ns = Arc::new(RwLock::new(NetworkState::new()));
         let qos = Arc::new(RwLock::new(QosRegistry::new()));
         let (net_tx, _net_rx) = mpsc::channel(8);
-        let outgoing = Arc::new(RwLock::new(std::collections::HashMap::new()));
 
         tokio::time::timeout(
             Duration::from_millis(200),
             run_quality_monitor(
-                "me".into(),
+                Identity::in_memory(None).unwrap(),
                 ns,
                 qos,
                 Default::default(),
                 net_tx,
-                outgoing,
                 Default::default(),
                 Default::default(),
             ),

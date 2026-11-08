@@ -16,7 +16,10 @@ use crate::{
         FragmentResponse, Gossip, NetworkCommand,
     },
     service::ServiceType,
-    storage::{ChunkCipher, StorageTier},
+    storage::{
+        commitment::{Commitment, Held},
+        ChunkCipher, StorageTier,
+    },
 };
 use libp2p::PeerId;
 use std::collections::HashSet;
@@ -194,19 +197,31 @@ async fn store_chunk(
 
     let mut pointers = Vec::new();
     for (node, fragment) in nodes.iter().zip(fragments.iter()) {
+        let bytes = fragment.to_bytes();
+        let commitment = Commitment::sign(
+            &state.identity.device,
+            &me,
+            Held::Fragment {
+                chunk_id: chunk_id.clone(),
+                fragment_id: fragment.id.clone(),
+            },
+            node,
+            &bytes,
+        )
+        .map_err(|e| e.to_string())?;
         if *node == me {
             let Some(sm) = &local else { continue };
-            let result = sm.write().unwrap().store_fragment(fragment, &owner);
+            let result = sm
+                .write()
+                .unwrap()
+                .store_fragment(fragment, &owner, &commitment);
             match result {
-                Ok(evicted) => {
+                Ok(()) => {
                     total.stored += 1;
                     pointers.push(FragmentPointer {
                         peer_id: me.clone(),
                         fragment_id: fragment.id.clone(),
                     });
-                    if !evicted.is_empty() {
-                        publish(state, network_id, Gossip::FillerEvicted { blobs: evicted }).await;
-                    }
                 }
                 Err(e) => tracing::warn!(chunk_id=%chunk_id, "store_fragment failed: {e}"),
             }
@@ -221,9 +236,10 @@ async fn store_chunk(
                 peer_id: peer,
                 chunk_id: chunk_id.clone(),
                 fragment_id: fragment.id.clone(),
-                data: fragment.to_bytes(),
+                data: bytes,
                 grant: grant.clone(),
                 layer,
+                commitment,
             })
             .await;
         if sent.is_ok() {
@@ -685,13 +701,6 @@ fn apply_order(state: &DaemonState, order: &Order) {
     let Some(owner) = order.owner() else {
         return;
     };
-    if matches!(order.action, Action::Delete) && order.owner_key == state.identity.user_key {
-        let mut outgoing = state.outgoing_assignments.write().unwrap();
-        for fragments in outgoing.values_mut() {
-            fragments.retain(|f| f.grant.file_id != order.file_id);
-        }
-        outgoing.retain(|_, fragments| !fragments.is_empty());
-    }
     for sm in state.storage_managers.read().unwrap().values() {
         let mut sm = sm.write().unwrap();
         let result = match &order.action {

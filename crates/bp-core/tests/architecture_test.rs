@@ -721,9 +721,6 @@ fn make_in_memory_state() -> std::sync::Arc<bp_core::control::server::DaemonStat
             std::collections::HashMap::new(),
         )),
         qos: std::sync::Arc::new(std::sync::RwLock::new(bp_core::network::QosRegistry::new())),
-        outgoing_assignments: std::sync::Arc::new(std::sync::RwLock::new(
-            std::collections::HashMap::new(),
-        )),
         remote_fragment_index: std::sync::Arc::new(std::sync::RwLock::new(
             bp_core::network::RemoteFragmentIndex::new(),
         )),
@@ -1030,8 +1027,6 @@ async fn network_loop_accetta_e_processa_comandi() {
     let network_state = std::sync::Arc::new(std::sync::RwLock::new(NetworkState::new()));
     let storage_managers: StorageManagerMap =
         std::sync::Arc::new(std::sync::RwLock::new(HashMap::new()));
-    let outgoing: bp_core::network::OutgoingAssignments =
-        std::sync::Arc::new(std::sync::RwLock::new(HashMap::new()));
     let frag_idx = std::sync::Arc::new(std::sync::RwLock::new(RemoteFragmentIndex::new()));
 
     let handle = tokio::spawn(run_network_loop(
@@ -1040,13 +1035,11 @@ async fn network_loop_accetta_e_processa_comandi() {
         network_state.clone(),
         listen_addr,
         storage_managers,
-        outgoing,
         frag_idx,
         std::sync::Arc::new(std::sync::RwLock::new(HashMap::new())),
         bp_core::identity::Identity::in_memory(None).unwrap(),
         bp_core::chain::ObservationLog::default(),
         tokio::sync::mpsc::channel(8).0,
-        Default::default(),
     ));
 
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;

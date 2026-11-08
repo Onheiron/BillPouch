@@ -294,12 +294,23 @@ impl Ledger {
     }
 
     pub fn credit(&self, user: &str) -> u64 {
-        self.verified
-            .iter()
-            .filter(|(observer, _)| self.is_member(observer))
-            .flat_map(|(_, devices)| devices.iter())
-            .filter(|(device, _)| self.device_owner(device) == Some(user))
-            .map(|(_, &bytes)| bytes)
+        let mut by_device: BTreeMap<&str, Vec<u64>> = BTreeMap::new();
+        for (observer, devices) in &self.verified {
+            if !self.is_member(observer) {
+                continue;
+            }
+            for (device, &bytes) in devices {
+                if self.device_owner(device) == Some(user) {
+                    by_device.entry(device).or_default().push(bytes);
+                }
+            }
+        }
+        by_device
+            .into_values()
+            .map(|mut reports| {
+                reports.sort_unstable();
+                reports[reports.len() / 2]
+            })
             .fold(0u64, u64::saturating_add)
     }
 
@@ -915,9 +926,9 @@ mod tests {
         assert!(net.ledger.may_store(&marco, 0));
 
         let a = usage(&net, 0, &[(1, 600)], &[(1, 100)]);
-        let b = usage(&net, 2, &[(1, 400)], &[(1, 200)]);
+        let b = usage(&net, 2, &[(1, 1000)], &[(1, 200)]);
         net.commit(0, t, vec![a, b]).unwrap();
-        assert_eq!(net.ledger.credit(&marco), 1000);
+        assert_eq!(net.ledger.credit(&marco), 1000, "median of 600 and 1000");
         assert_eq!(net.ledger.usage(&marco), 300);
         assert!(net.ledger.may_store(&marco, 700));
         assert!(!net.ledger.may_store(&marco, 701));
@@ -927,7 +938,7 @@ mod tests {
         t += USAGE_INTERVAL_SECS;
         let replaced = usage(&net, 0, &[(1, 50)], &[]);
         net.commit(0, t, vec![replaced]).unwrap();
-        assert_eq!(net.ledger.credit(&marco), 450);
+        assert_eq!(net.ledger.credit(&marco), 1000, "median of 50 and 1000");
         assert_eq!(net.ledger.usage(&marco), 200);
 
         t += USAGE_INTERVAL_SECS;
@@ -941,7 +952,7 @@ mod tests {
 
         let leave = SignedOp::sign(&net.people[2], Op::Leave).unwrap();
         net.commit(0, t, vec![leave]).unwrap();
-        assert_eq!(net.ledger.credit(&marco), 50);
+        assert_eq!(net.ledger.credit(&marco), 50, "only one observer left");
         assert_eq!(net.ledger.usage(&marco), 0);
     }
 

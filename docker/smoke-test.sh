@@ -210,7 +210,18 @@ else
     fail "carlo-laptop's copy differs (${SUM_A} vs ${SUM_C})"
 fi
 
+docker exec bp-pouch bash -c 'echo temporaneo > /tmp/tmp.txt'
+TMP_ID=$(docker exec bp-pouch bp put /tmp/tmp.txt --network smoketest 2>&1 | grep -oP 'file_id\s*:\s*\K\S+' || true)
+RM_OUT=$(docker exec bp-pouch bp rm "${TMP_ID}" --network smoketest 2>&1) || true
+if echo "${RM_OUT}" | grep -q "deleted" && ! docker exec bp-pouch bp ls --network smoketest 2>&1 | grep -q "tmp.txt"; then
+    pass "carlo-pouch deleted a file"
+else
+    fail "bp rm failed: ${RM_OUT}"
+fi
+
 LAPTOP_POUCH=$(docker exec bp-laptop bp hatch pouch --network smoketest --tier T1 2>&1 | grep -oP 'Service ID\s*:\s*\K\S+' || true)
+docker exec bp-bill bp hatch pouch --network smoketest --tier T1 >/dev/null 2>&1 || true
+HATCHED_AT=$(date +%s)
 info "Waiting up to 150s for carlo-pouch to fill the new Pouch on carlo-laptop..."
 FILLED=false
 for _ in $(seq 1 75); do
@@ -267,14 +278,6 @@ else
     fail "marco-bill still reads a revoked file: ${REVOKED}"
 fi
 
-docker exec bp-pouch bash -c 'echo temporaneo > /tmp/tmp.txt'
-TMP_ID=$(docker exec bp-pouch bp put /tmp/tmp.txt --network smoketest 2>&1 | grep -oP 'file_id\s*:\s*\K\S+' || true)
-RM_OUT=$(docker exec bp-pouch bp rm "${TMP_ID}" --network smoketest 2>&1) || true
-if echo "${RM_OUT}" | grep -q "deleted" && ! docker exec bp-pouch bp ls --network smoketest 2>&1 | grep -q "tmp.txt"; then
-    pass "carlo-pouch deleted a file"
-else
-    fail "bp rm failed: ${RM_OUT}"
-fi
 
 docker exec bp-post bash -c 'head -c 100000 /dev/urandom > /tmp/free.bin'
 FREE_OUT=$(docker exec bp-post bp put /tmp/free.bin --network smoketest 2>&1) || true
@@ -282,6 +285,27 @@ if echo "${FREE_OUT}" | grep -q "not enough credit"; then
     pass "lucia-post, who hosts nothing, cannot store on the others' Pouches"
 else
     fail "lucia-post stored without credit: ${FREE_OUT}"
+fi
+
+info "Waiting up to 360s since marco-bill opened a Pouch for the network to fill, challenge and credit it..."
+CREDITED=false
+while [ $(( $(date +%s) - HATCHED_AT )) -lt 360 ]; do
+    if docker exec bp-pouch bp members smoketest 2>/dev/null | grep "${BILL_FP}" | grep -qv "hosts 0.0 MiB"; then
+        CREDITED=true
+        break
+    fi
+    sleep 5
+done
+docker exec bp-pouch bp members smoketest 2>&1 | grep "${BILL_FP}" || true
+if [ "${CREDITED}" = true ]; then
+    pass "the network challenged marco-bill's Pouch and credited what it holds"
+else
+    fail "marco-bill's Pouch was never credited"
+fi
+if grep -q "PoS challenge result.*passed=true" <<< "$(docker logs bp-pouch 2>&1 | sed 's/\x1b\[[0-9;]*m//g')"; then
+    pass "carlo-pouch's challenges to another user's Pouch pass"
+else
+    fail "no passing challenge from carlo-pouch"
 fi
 
 header "10. Expulsion and key rotation"
