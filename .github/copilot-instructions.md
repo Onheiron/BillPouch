@@ -24,6 +24,6 @@ P2P social distributed filesystem in Rust. Read `README.md`, then `docs/`
 - Update the relevant page in `docs/` in the same change; one topic, one place.
 - Before pushing: `cargo fmt --all -- --check`,
   `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`.
-- Conventional commits (`feat:`, `fix:`, `refactor:`, `docs:`, `chore:` …).
-  Versions and tags belong to release-please: never bump them by hand.
+- Work and push directly on `main`: no branches, no pull requests.
+  Conventional commits (`feat:`, `fix:`, `refactor:`, `docs:`, `chore:` …).
 - Tests that change `HOME` / `XDG_DATA_HOME` must hold `ENV_LOCK`.

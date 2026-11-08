@@ -56,7 +56,6 @@ To try a whole network on one machine: `./playground.sh up` (Docker, 6 nodes).
 | [docs/api.md](docs/api.md) | Control protocol (CLI ↔ daemon) and REST API (`bp-api`) |
 | [docs/development.md](docs/development.md) | Build, tests, playground, CI and releases |
 | [docs/roadmap.md](docs/roadmap.md) | What is done, known limitations, what is next |
-| [CHANGELOG.md](CHANGELOG.md) | Release history (generated) |
 
 ## License
 

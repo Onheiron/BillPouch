@@ -49,14 +49,19 @@ Playground nodes keep their data in `playground/data/<node>/`.
 
 | Workflow | Trigger | Does |
 |----------|---------|------|
-| `ci.yml` | push / PR to `main` | fmt, clippy, tests (Linux + macOS) |
-| `smoke.yml` | push / PR to `main` | Docker smoke test |
-| `commitlint.yml` | PR | Conventional commit messages (needed by release-please) |
+| `ci.yml` | push to `main` | fmt, clippy, tests (Linux + macOS) |
+| `smoke.yml` | push to `main` | Docker smoke test |
 | `security.yml` | push to `main`, weekly | `cargo deny check` (advisories, licenses, sources) |
-| `release-please.yml` | push to `main` | Keeps a release PR open; merging it tags `billpouch-vX.Y.Z`, builds `bp` for Linux x86_64 and macOS x86_64/aarch64, publishes the GitHub release and the Docker image |
-| `docker.yml` | called by release-please, manual run, or `v*`/`billpouch-v*` tag | Builds and pushes `onheirongithub/billpouch` (`latest` + tag) |
+| `release.yml` | `vX.Y.Z` tag | Checks the tag matches `Cargo.toml`, builds `bp` for Linux x86_64 and macOS x86_64/aarch64, publishes the GitHub release with generated notes |
+| `docker.yml` | `vX.Y.Z` tag, manual run | Builds and pushes `onheirongithub/billpouch` (`latest` + tag) |
 
-Versions are owned by release-please: it bumps `version.txt`,
-`.release-please-manifest.json`, `Cargo.toml` and `CHANGELOG.md`. Don't bump
-them by hand and don't push version tags. For an ad-hoc image (e.g. to refresh
-the playground) run the Docker workflow manually from the Actions tab.
+Everything is committed straight to `main`; there are no pull requests. To
+release, bump `version` in the root `Cargo.toml`, commit, then tag and push:
+
+```bash
+git tag v0.4.0
+git push origin main v0.4.0
+```
+
+For an ad-hoc image (e.g. to refresh the playground) run the Docker workflow
+manually from the Actions tab.

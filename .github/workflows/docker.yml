@@ -2,26 +2,13 @@ name: Docker
 
 on:
   push:
-    tags:
-      - "v*"
-      - "billpouch-v*"
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       image_tag:
         description: "Extra image tag (default: sha-<short commit>)"
         required: false
         type: string
-  workflow_call:
-    inputs:
-      tag:
-        description: "Release tag to build and push (e.g. billpouch-v0.3.2)"
-        required: true
-        type: string
-    secrets:
-      DOCKERHUB_USERNAME:
-        required: true
-      DOCKERHUB_TOKEN:
-        required: true
 
 jobs:
   docker:
@@ -31,15 +18,11 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.tag || github.ref }}
 
       - name: Compute image tag
         id: meta
         run: |
-          if [ -n "${{ inputs.tag }}" ]; then
-            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
-          elif [ -n "${{ inputs.image_tag }}" ]; then
+          if [ -n "${{ inputs.image_tag }}" ]; then
             echo "tag=${{ inputs.image_tag }}" >> "$GITHUB_OUTPUT"
           elif [ "${{ github.ref_type }}" = "tag" ]; then
             echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
