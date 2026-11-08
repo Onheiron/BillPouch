@@ -1,167 +1,65 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>🦤 BillPouch Dashboard</title>
-<style>
-  :root {
-    --bg:   #0f1117;
-    --card: #1a1d27;
-    --border: #2a2d3e;
-    --text: #e2e8f0;
-    --muted: #6b7280;
-    --accent: #7c3aed;
-    --green: #22c55e;
-    --red:   #ef4444;
-    --yellow:#f59e0b;
-  }
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; font-size: 14px; line-height: 1.6; }
-  header { background: var(--card); border-bottom: 1px solid var(--border); padding: 16px 24px; display: flex; align-items: center; gap: 12px; }
-  header h1 { font-size: 18px; font-weight: 600; }
-  header .badge { font-size: 11px; background: var(--accent); color: #fff; padding: 2px 8px; border-radius: 9999px; }
-  #status-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--red); margin-left: auto; }
-  #status-dot.ok { background: var(--green); }
-  main { padding: 24px; display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 20px; }
-  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 20px; }
-  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 16px; }
-  .kv { display: flex; justify-content: space-between; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); }
-  .kv:last-child { border-bottom: none; }
-  .kv .k { color: var(--muted); }
-  .kv .v { font-family: monospace; word-break: break-all; text-align: right; }
-  table { width: 100%; border-collapse: collapse; font-size: 12px; }
-  th { text-align: left; color: var(--muted); padding: 4px 8px 8px 0; border-bottom: 1px solid var(--border); }
-  td { padding: 6px 8px 6px 0; border-bottom: 1px solid var(--border); word-break: break-all; }
-  tr:last-child td { border-bottom: none; }
-  .chip { display: inline-block; padding: 1px 8px; border-radius: 9999px; font-size: 11px; font-weight: 500; }
-  .chip.pouch   { background: #1e3a5f; color: #60a5fa; }
-  .chip.bill    { background: #1e3a2f; color: #4ade80; }
-  .chip.post    { background: #3b2f1e; color: #fb923c; }
-  .chip.ok      { background: #14532d; color: #4ade80; }
-  .chip.paused  { background: #422006; color: #fbbf24; }
-  .chip.err     { background: #450a0a; color: #f87171; }
-  .empty { color: var(--muted); font-style: italic; padding: 8px 0; }
-  footer { text-align: center; padding: 24px; color: var(--muted); font-size: 12px; }
-  #refresh-ts { font-size: 12px; color: var(--muted); margin-left: 12px; }
-</style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#1e88e5">
+<title>BillPouch</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icon.svg">
+<link rel="stylesheet" href="/app.css">
 </head>
 <body>
-<header>
-  <span>🦤</span>
-  <h1>BillPouch</h1>
-  <span class="badge">v0.3</span>
-  <span id="refresh-ts"></span>
-  <span id="status-dot" title="Daemon connectivity"></span>
+<header class="topbar">
+  <div class="brand">
+    <img src="/icon.svg" alt="" width="34" height="34">
+    <span>BillPouch</span>
+  </div>
+  <label class="network-pick">
+    <span>Network</span>
+    <select id="network"></select>
+  </label>
+  <div class="me" id="me"></div>
+  <span class="live" id="live" title="Daemon connection"></span>
 </header>
-<main id="main">
-  <div class="card" id="card-identity"><h2>Identity</h2><div class="empty">Loading…</div></div>
-  <div class="card" id="card-services"><h2>Services</h2><div class="empty">Loading…</div></div>
-  <div class="card" id="card-peers"><h2>Peers</h2><div class="empty">Loading…</div></div>
+
+<div class="banner" id="banner" hidden></div>
+
+<main>
+  <section class="cards" id="summary"></section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>Nodes</h2>
+      <div class="tabs" id="node-tabs">
+        <button data-kind="all" class="active">All</button>
+        <button data-kind="pouch">Pouches</button>
+        <button data-kind="bill">Bills</button>
+        <button data-kind="post">Roosts</button>
+      </div>
+    </div>
+    <div class="nodes" id="nodes"></div>
+  </section>
+
+  <section class="panel files-panel" id="files-panel">
+    <div class="panel-head">
+      <h2>Files</h2>
+      <label class="button accent">
+        <input type="file" id="picker" multiple hidden>
+        Upload files
+      </label>
+    </div>
+    <div class="dropzone" id="dropzone">
+      <strong>Drop files here</strong>
+      <span>They are encrypted on this device, split and spread across the Pouches of the network.</span>
+    </div>
+    <div class="uploads" id="uploads"></div>
+    <div class="files" id="files"></div>
+  </section>
 </main>
-<footer>Auto-refresh every 5 s &nbsp;·&nbsp; BillPouch <span id="bp-version"></span></footer>
 
-<script>
-const base = window.location.origin;
-const fragment = new URLSearchParams(window.location.hash.slice(1));
-if (fragment.get('session')) {
-  sessionStorage.setItem('bp-session', fragment.get('session'));
-  history.replaceState(null, '', window.location.pathname);
-}
-const session = sessionStorage.getItem('bp-session') || '';
-
-async function api(path) {
-  const r = await fetch(base + path, { headers: { Authorization: 'Session ' + session } });
-  if (!r.ok) throw new Error(r.status + ' ' + r.statusText);
-  return r.json();
-}
-
-function kv(k, v) {
-  return `<div class="kv"><span class="k">${k}</span><span class="v">${v ?? '—'}</span></div>`;
-}
-
-function chip(type) {
-  const t = (type ?? '').toLowerCase();
-  return `<span class="chip ${t}">${t}</span>`;
-}
-
-function statusChip(status) {
-  const s = (status ?? '').toLowerCase();
-  if (s.startsWith('paused')) return `<span class="chip paused">${status}</span>`;
-  if (s === 'running') return `<span class="chip ok">${status}</span>`;
-  return `<span class="chip err">${status}</span>`;
-}
-
-function empty(msg) { return `<div class="empty">${msg}</div>`; }
-
-async function refresh() {
-  const dot = document.getElementById('status-dot');
-  const ts  = document.getElementById('refresh-ts');
-
-  try {
-    const s = await api('/status');
-    dot.className = 'ok';
-
-    document.getElementById('card-identity').innerHTML =
-      '<h2>Identity</h2>' +
-      kv('Fingerprint', `<code>${s.fingerprint ?? '—'}</code>`) +
-      kv('Alias',       s.alias ?? '<em>none</em>') +
-      kv('PeerId',      `<code style="font-size:11px">${(s.peer_id ?? '').slice(0,32)}…</code>`) +
-      kv('Networks',    (s.networks ?? []).join(', ') || '<em>none</em>');
-    if (s.version) document.getElementById('bp-version').textContent = 'v' + s.version;
-
-    const svcs = s.local_services ?? [];
-    let svcHtml = '<h2>Services (' + svcs.length + ')</h2>';
-    if (!svcs.length) {
-      svcHtml += empty('No active services — run <code>bp hatch &lt;type&gt;</code>');
-    } else {
-      svcHtml += '<table><tr><th>ID</th><th>Type</th><th>Network</th><th>Status</th><th>Tier</th></tr>';
-      for (const sv of svcs) {
-        const tier = sv.metadata?.tier ?? '—';
-        svcHtml += `<tr><td><code>${(sv.id ?? '').slice(0,8)}…</code></td>` +
-                   `<td>${chip(sv.service_type)}</td>` +
-                   `<td>${sv.network_id ?? '—'}</td>` +
-                   `<td>${statusChip(sv.status)}</td>` +
-                   `<td>${tier}</td></tr>`;
-      }
-      svcHtml += '</table>';
-    }
-    document.getElementById('card-services').innerHTML = svcHtml;
-
-  } catch (e) {
-    dot.className = '';
-    const err = `<div class="chip err">Daemon unavailable</div>`;
-    document.getElementById('card-identity').innerHTML  = '<h2>Identity</h2>'  + err;
-    document.getElementById('card-services').innerHTML  = '<h2>Services</h2>'  + err;
-  }
-
-  try {
-    const p = await api('/peers');
-    const peers = p.known_peers ?? (Array.isArray(p) ? p : []);
-    let html = '<h2>Peers (' + peers.length + ')</h2>';
-    if (!peers.length) {
-      html += empty('No peers discovered yet');
-    } else {
-      html += '<table><tr><th>Fingerprint</th><th>Alias</th><th>Type</th><th>Network</th></tr>';
-      for (const peer of peers.slice(0, 20)) {
-        html += `<tr><td><code>${peer.user_fingerprint ?? '—'}</code></td>` +
-                `<td>${peer.user_alias ?? '—'}</td>` +
-                `<td>${chip(peer.service_type)}</td>` +
-                `<td>${peer.network_id ?? '—'}</td></tr>`;
-      }
-      if (peers.length > 20) html += `<tr><td colspan="4" class="empty">…and ${peers.length - 20} more</td></tr>`;
-      html += '</table>';
-    }
-    document.getElementById('card-peers').innerHTML = html;
-  } catch {
-    document.getElementById('card-peers').innerHTML = '<h2>Peers</h2>' + empty('Unavailable');
-  }
-
-  ts.textContent = 'Updated ' + new Date().toLocaleTimeString();
-}
-
-refresh();
-setInterval(refresh, 5000);
-</script>
+<div class="toasts" id="toasts"></div>
+<script src="/app.js"></script>
 </body>
 </html>

@@ -121,12 +121,20 @@ enum Cmd {
 
     #[command(
         about = "Open the local dashboard with a session signed by your SSH key",
-        long_about = "Open the local dashboard with a session signed by your SSH key.\n\nbp-api must be running on this machine. The session lasts 12 hours; bp-api only accepts sessions signed by the key of this device's user."
+        long_about = "Open the local web app with a session signed by your SSH key.\n\nStarts bp-api on this machine if it is not running yet. The session lasts 12 hours; bp-api only accepts sessions signed by the key of this device's user."
     )]
     Dashboard {
         #[arg(help = "Port bp-api listens on")]
         #[arg(long, default_value_t = 3000)]
         port: u16,
+
+        #[arg(help = "Address bp-api binds to when this command starts it")]
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+
+        #[arg(help = "Only print the address, do not open a browser")]
+        #[arg(long)]
+        no_open: bool,
     },
 
     #[command(about = "Join a network with the token you were sent")]
@@ -417,8 +425,12 @@ async fn main() -> anyhow::Result<()> {
             commands::network::invite(network_id, member_key).await?;
         }
 
-        Some(Cmd::Dashboard { port }) => {
-            commands::dashboard::dashboard(port, cli.passphrase.as_deref())?;
+        Some(Cmd::Dashboard {
+            port,
+            host,
+            no_open,
+        }) => {
+            commands::dashboard::dashboard(port, &host, no_open, cli.passphrase.as_deref()).await?;
         }
 
         Some(Cmd::Join { token }) => {

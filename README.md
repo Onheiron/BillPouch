@@ -36,6 +36,7 @@ bp put photo.jpg --network friends              # → file_id
 bp get <file_id> photo-copy.jpg --network friends
 bp ls                                           # your files and the ones shared with you
 bp members friends                              # who is in, what they host and store
+bp dashboard                                    # the web app: nodes, space, your files
 ```
 
 Networks are invite-only. Your friend sends you the public key `bp login` printed for them:
@@ -48,7 +49,7 @@ bp join <token>                                  # on Marco's machine
 You can only store what the others have verified you host, so a network needs at
 least two users with a Pouch each before anyone can upload.
 
-To try a whole network on one machine: `./playground.sh up` (Docker, 6 nodes, built from this checkout).
+To try a whole network on one machine: `./playground.sh up` (Docker, 6 nodes, built from this checkout), then `./playground.sh app` for the web app.
 
 ## Documentation
 

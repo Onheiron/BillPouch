@@ -1,0 +1,14 @@
+{
+  "name": "BillPouch",
+  "short_name": "BillPouch",
+  "description": "Your files on your friends' disks",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f4f9ff",
+  "theme_color": "#1e88e5",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}

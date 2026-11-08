@@ -6,7 +6,7 @@
 |-------|------|------|
 | `bp-core` | library | Everything: identity, daemon, networking, coding, storage, control protocol |
 | `bp-cli`  | binary `bp` | Thin client: parses commands, talks to the daemon over the control socket |
-| `bp-api`  | binary `bp-api` | HTTP gateway to the same socket, plus an embedded web dashboard |
+| `bp-api`  | binary `bp-api` | HTTPS gateway to the same socket, plus the embedded web app |
 
 `bp-core` never prints or exits; it returns `BpResult<T>` (`thiserror`). The
 binaries use `anyhow` and own all terminal output.

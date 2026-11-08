@@ -40,6 +40,7 @@ docker compose -f docker-compose.smoke.yml down -v
 ./playground.sh up            # builds billpouch:local from this checkout
 ./playground.sh enter         # shell on your node; try bp status, bp put …
 ./playground.sh status        # bp status on every node
+./playground.sh app           # web app of your node at https://127.0.0.1:3000
 ./playground.sh down
 ```
 

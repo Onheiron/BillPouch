@@ -10,7 +10,7 @@ FROM chef AS builder
 COPY --from=planner /src/recipe.json recipe.json
 RUN cargo chef cook --release --recipe-path recipe.json
 COPY . .
-RUN cargo build --release --bin bp
+RUN cargo build --release --bin bp --bin bp-api
 
 FROM debian:bookworm-slim
 
@@ -18,7 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates socat \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /src/target/release/bp /usr/local/bin/bp
+COPY --from=builder /src/target/release/bp /src/target/release/bp-api /usr/local/bin/
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
