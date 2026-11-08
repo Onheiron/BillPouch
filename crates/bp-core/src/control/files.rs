@@ -193,6 +193,9 @@ fn check_allowance(
     ph: f64,
 ) -> Result<(), String> {
     let rate = quota_rate(state, network_id, size, ph)?;
+    if rate.others == 0 {
+        return Ok(());
+    }
     let chains = state.chains.read().unwrap();
     let ledger = chains
         .get(network_id)
