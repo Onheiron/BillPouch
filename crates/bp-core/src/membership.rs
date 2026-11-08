@@ -80,6 +80,10 @@ pub fn wrap_for(key: &[u8; 32], member_key: &str) -> BpResult<WrappedKey> {
     wrap(key, &parse_user_key(member_key)?.0)
 }
 
+pub fn unwrap_for(wrapped: &WrappedKey, identity: &Identity) -> BpResult<[u8; 32]> {
+    unwrap(wrapped, &identity.user)
+}
+
 pub fn open_key(wrapped: &WrappedKey, commitment: &str, identity: &Identity) -> BpResult<[u8; 32]> {
     let key = unwrap(wrapped, &identity.user)?;
     if key_commitment(&key) != commitment {
@@ -148,8 +152,9 @@ impl Invite {
         let genesis_ok = invite.genesis.body.genesis.is_none()
             && invite.genesis.body.author == invite.genesis.body.member
             && invite.genesis.signed_by_author().is_some();
-        let entry_ok = invite.entry.body.genesis.as_deref() == Some(&invite.genesis.id())
-            && invite.entry.signed_by_author().is_some();
+        let entry_ok = invite.entry == invite.genesis
+            || (invite.entry.body.genesis.as_deref() == Some(&invite.genesis.id())
+                && invite.entry.signed_by_author().is_some());
         if !genesis_ok || !entry_ok {
             return Err(BpError::InvalidInput("forged invite token".into()));
         }
@@ -262,6 +267,19 @@ mod tests {
         let received = Invite::from_token(&invite.to_token().unwrap()).unwrap();
         assert_eq!(received.entry.unwrap_key(&marco).unwrap(), key);
         assert!(received.entry.unwrap_key(&carlo).is_err());
+    }
+
+    #[test]
+    fn the_creator_can_hand_its_genesis_to_another_device() {
+        let carlo = Identity::in_memory(None).unwrap();
+        let (root, key) = genesis(&carlo, "amici").unwrap();
+        let invite = Invite {
+            entry: root.clone(),
+            genesis: root,
+            creator_device: carlo.cert.clone(),
+        };
+        let received = Invite::from_token(&invite.to_token().unwrap()).unwrap();
+        assert_eq!(received.entry.unwrap_key(&carlo).unwrap(), key);
     }
 
     #[test]

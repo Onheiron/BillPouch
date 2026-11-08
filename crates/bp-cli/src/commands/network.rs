@@ -30,6 +30,14 @@ pub async fn invite(
         .await?
         .ok_or_else(|| anyhow::anyhow!("empty response from daemon"))?;
     let invite: InviteData = serde_json::from_value(data)?;
+    if invite.for_device {
+        eprintln!(
+            "📱 Token for another device of yours on '{}'. Log in there with the same SSH key (bp login --ssh-key …), then run: bp join <token>",
+            invite.network_id
+        );
+        println!("{}", invite.token);
+        return Ok(());
+    }
     eprintln!(
         "✅ {} can now join '{}'. Send them this token; they run: bp join <token>",
         invite.member, invite.network_id

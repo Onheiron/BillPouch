@@ -39,6 +39,20 @@ services:
     networks:
       - bp-lan
 
+  node-laptop:
+    build: .
+    container_name: bp-laptop
+    hostname: bp-laptop
+    environment:
+      NODE_NAME: "carlo-laptop"
+      DEVICE_OF: "carlo-pouch"
+      NETWORK: "smoketest"
+      RUST_LOG: "bp_core=debug,bp_cli=info"
+    volumes:
+      - shared:/shared
+    networks:
+      - bp-lan
+
 networks:
   bp-lan:
     driver: bridge

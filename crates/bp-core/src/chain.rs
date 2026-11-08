@@ -160,6 +160,18 @@ impl Chain {
         })
     }
 
+    pub fn own_invite(&self) -> Invite {
+        Invite {
+            genesis: self.genesis.clone(),
+            creator_device: self.creator_device.clone(),
+            entry: self.own_entry.clone(),
+        }
+    }
+
+    pub fn key_is_current(&self) -> bool {
+        key_commitment(&self.key) == self.engine.ledger.commitment
+    }
+
     pub fn expel(&mut self, member: &str, now_ms: u64) -> BpResult<()> {
         let op = if self.engine.ledger.expel_approvals.contains_key(member) {
             Op::ApproveExpel {

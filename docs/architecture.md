@@ -37,8 +37,7 @@ Everything is under the XDG data dir (`~/.local/share/billpouch/` on Linux):
 | `profile.json` | Alias and creation time |
 | `control.sock`, `daemon.pid` | Daemon socket and PID |
 | `networks/<name>.json` | Genesis, your key entry and the committed ledger blocks of each network you belong to |
-| `cek_hints.json` | `chunk_id → BLAKE3(plaintext)`, needed to decrypt your files |
-| `file_registry.json` | Files you uploaded (`bp ls`) |
+| `files.json` | Local copy of your file index per network, the index heads you have seen, shares not yet acknowledged |
 | `kad_peers.json` | Known peer addresses, saved every 600 s and redialled at start |
 | `bootstrap.json` | Optional WAN bootstrap peers (`bp bootstrap`) |
 | `storage/<network>/<service_id>/` | A Pouch's `meta.json` and `fragments/<chunk_id>/<fragment_id>.frag` |
@@ -81,9 +80,10 @@ A daemon can be in several networks at once. Gossip messages are `Node` (NodeInf
 
 `bp put` sends the whole file to the daemon, which treats it as one chunk:
 
-1. **Encrypt.** ChaCha20-Poly1305 with a per-user content key:
-   `CEK = BLAKE3_keyed(identity secret, "billpouch/cek/v1" ‖ BLAKE3(plaintext))`.
-   `BLAKE3(plaintext)` is kept in `cek_hints.json`; Pouches only ever see ciphertext.
+1. **Encrypt.** ChaCha20-Poly1305 with a random per-file key. The key is wrapped
+   (X25519 + ChaCha20-Poly1305, as for the network key) for your SSH key and put in
+   the file's manifest: name, size, `chunk_id`, owner, one wrap per authorized user.
+   Pouches only ever see ciphertext.
 2. **Choose k and n.** From the stability score `p_i` of every known Pouch,
    `k = ⌊μ − z(Ph)·σ + 0.5⌋` with `μ = Σp_i` and `σ² = Σp_i(1−p_i)`: the largest
    `k` such that P(at least k Pouches are reachable) ≥ `Ph` (`--ph`, default 0.999).
@@ -95,9 +95,30 @@ A daemon can be in several networks at once. Gossip messages are `Node` (NodeInf
    remote Pouches of the network. The placement is gossiped as an `Index` message
    and recorded for Proof-of-Storage.
 
-`bp get` collects local fragments, fetches more from the Pouches listed in the
-gossiped index (falling back to every known Pouch) until it has `k`, decodes
-and decrypts.
+`bp get` looks the file up in your index, collects local fragments, fetches
+more from the Pouches listed in the gossiped fragment index (falling back to
+every known Pouch) until it has `k`, decodes, opens its wrap and decrypts.
+
+Fragments are served to any registered device of a current ledger member.
+
+## Your file index, devices and sharing
+
+- **Index**: every manifest you own or were shared, per network. It is sealed
+  with `BLAKE3-derive("billpouch/index-key/v1", user secret)`, so every device
+  holding your SSH key can open it and nobody else can, and stored in the network
+  like a file. A **head** `(owner key, network, version, chunk_id)` signed with
+  your SSH key points at the latest version; heads are gossiped, cached by every
+  node and re-gossiped by your devices every 30 s (or requested with a
+  `HeadRequest` when a device has none).
+- **Devices**: `bp invite <network> <your own public key>` prints a token for
+  another device of yours, without touching the ledger. On that device,
+  `bp login --ssh-key <same key>` and `bp join <token>`: it syncs the ledger,
+  registers itself, receives your head and pulls your index. Indexes merge by
+  union, so two devices adding files at the same time both keep them.
+- **Sharing**: `bp share` wraps the file key for the member's SSH key (taken
+  from the ledger) and gossips the manifest to them; they add it to their index
+  and acknowledge. Until the acknowledgement arrives the share is re-sent every
+  30 s.
 
 RLNC was chosen because a Pouch can **recode**: combine the fragments it holds
 into new valid fragments without decoding. This is how fragments held by a

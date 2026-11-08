@@ -40,6 +40,11 @@ pub enum ControlRequest {
     Members {
         network_id: String,
     },
+    Share {
+        network_id: String,
+        chunk_id: String,
+        member: String,
+    },
     Expel {
         network_id: String,
         member: String,
@@ -154,6 +159,7 @@ pub struct InviteData {
     pub token: String,
     pub network_id: String,
     pub member: String,
+    pub for_device: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -217,6 +223,17 @@ pub struct FileEntry {
     pub chunk_id: String,
     pub network_id: String,
     pub uploaded_at: u64,
+    pub owner: String,
+    pub mine: bool,
+    pub shared_with: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShareData {
+    pub network_id: String,
+    pub chunk_id: String,
+    pub file_name: String,
+    pub member: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

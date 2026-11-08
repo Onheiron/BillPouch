@@ -44,12 +44,8 @@ pub fn networks_dir() -> BpResult<PathBuf> {
     Ok(base_dir()?.join("networks"))
 }
 
-pub fn cek_hints_path() -> BpResult<PathBuf> {
-    Ok(base_dir()?.join("cek_hints.json"))
-}
-
-pub fn file_registry_path() -> BpResult<PathBuf> {
-    Ok(base_dir()?.join("file_registry.json"))
+pub fn files_path() -> BpResult<PathBuf> {
+    Ok(base_dir()?.join("files.json"))
 }
 
 pub fn ensure_dirs() -> BpResult<()> {

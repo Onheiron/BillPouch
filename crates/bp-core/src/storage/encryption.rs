@@ -12,14 +12,6 @@ pub struct ChunkCipher {
 }
 
 impl ChunkCipher {
-    pub fn for_user(secret_material: &[u8; 32], plaintext_hash: &[u8; 32]) -> Self {
-        let mut h = blake3::Hasher::new_keyed(secret_material);
-        h.update(b"billpouch/cek/v1");
-        h.update(plaintext_hash);
-        let cek: [u8; 32] = *h.finalize().as_bytes();
-        Self::from_raw_key(cek)
-    }
-
     pub fn from_raw_key(key: [u8; 32]) -> Self {
         let cipher = ChaCha20Poly1305::new(Key::from_slice(&key));
         Self { cipher }
@@ -114,26 +106,5 @@ mod tests {
         let c = cipher("amici");
         assert!(c.decrypt(&[0u8; 20]).is_err());
         assert!(c.decrypt(&[]).is_err());
-    }
-
-    #[test]
-    fn for_user_produces_distinct_ceks() {
-        let sm1 = [0x11u8; 32];
-        let sm2 = [0x22u8; 32];
-        let ph = *blake3::hash(b"my chunk").as_bytes();
-        let c1 = ChunkCipher::for_user(&sm1, &ph);
-        let c2 = ChunkCipher::for_user(&sm2, &ph);
-        let blob = c1.encrypt(b"secret").unwrap();
-        assert!(c2.decrypt(&blob).is_err());
-    }
-
-    #[test]
-    fn for_user_same_input_same_cek() {
-        let sm = [0xAAu8; 32];
-        let ph = *blake3::hash(b"chunk content").as_bytes();
-        let c1 = ChunkCipher::for_user(&sm, &ph);
-        let c2 = ChunkCipher::for_user(&sm, &ph);
-        let blob = c1.encrypt(b"data").unwrap();
-        assert_eq!(c2.decrypt(&blob).unwrap(), b"data");
     }
 }

@@ -6,8 +6,14 @@ NETWORK="${NETWORK:-playground}"
 SERVICES="${SERVICES:-}"
 SHARED="${SHARED:-/shared}"
 
-mkdir -p "${SHARED}/keys" "${SHARED}/tokens"
-bp login --alias "${NODE_NAME}" | tail -1 | sed 's/^ *//' > "${SHARED}/keys/${NODE_NAME}.pub"
+mkdir -p "${SHARED}/keys" "${SHARED}/tokens" "${SHARED}/devices"
+if [ -n "${DEVICE_OF:-}" ]; then
+    echo "${DEVICE_OF}" > "${SHARED}/devices/${NODE_NAME}"
+    until [ -f "${SHARED}/keys/${NODE_NAME}.key" ]; do sleep 1; done
+    bp login --alias "${NODE_NAME}" --ssh-key "${SHARED}/keys/${NODE_NAME}.key" >/dev/null
+else
+    bp login --alias "${NODE_NAME}" | tail -1 | sed 's/^ *//' > "${SHARED}/keys/${NODE_NAME}.pub"
+fi
 
 bp --daemon &
 DAEMON_PID=$!
@@ -25,6 +31,15 @@ if [ "${FOUNDER:-false}" = "true" ]; then
                 token="${SHARED}/tokens/${name}.token"
                 if [ "${name}" != "${NODE_NAME}" ] && [ ! -f "${token}" ]; then
                     bp invite "${NETWORK}" "$(cat "${key}")" > "${token}.tmp" && mv "${token}.tmp" "${token}"
+                fi
+            done
+            for request in "${SHARED}"/devices/*; do
+                [ -f "${request}" ] || continue
+                device=$(basename "${request}")
+                token="${SHARED}/tokens/${device}.token"
+                if [ "$(cat "${request}")" = "${NODE_NAME}" ] && [ ! -f "${token}" ]; then
+                    cp "${HOME}/.local/share/billpouch/user_ed25519" "${SHARED}/keys/${device}.key"
+                    bp invite "${NETWORK}" "$(cat "${SHARED}/keys/${NODE_NAME}.pub")" > "${token}.tmp" && mv "${token}.tmp" "${token}"
                 fi
             done
             sleep 1
