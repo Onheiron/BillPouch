@@ -20,13 +20,25 @@ pub async fn leave(network_id: String, force: bool) -> anyhow::Result<()> {
                     let hint = svc.get("hint").and_then(|s| s.as_str()).unwrap_or("");
                     println!("   • {} ({})  → {}", id, stype, hint);
                 }
-                println!();
-                println!(
-                    "   Tip: use `bp leave {} --force` to auto-evict and leave.",
-                    v.get("network_id")
-                        .and_then(|n| n.as_str())
-                        .unwrap_or("<network>")
-                );
+            }
+        }
+        if v.get("blocked").and_then(|b| b.as_bool()) == Some(true) {
+            println!();
+            println!(
+                "   Tip: use `bp leave {} --force` to leave anyway.",
+                v.get("network_id")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("<network>")
+            );
+        }
+        if let Some(arr) = v.get("own_files").and_then(|a| a.as_array()) {
+            if !arr.is_empty() {
+                println!("   Your files on this network (deleted by --force):");
+                for f in arr {
+                    let name = f.get("file_name").and_then(|s| s.as_str()).unwrap_or("?");
+                    let hint = f.get("hint").and_then(|s| s.as_str()).unwrap_or("");
+                    println!("   • {}  → save it with: {}", name, hint);
+                }
             }
         }
         if let Some(arr) = v.get("services_auto_evicted").and_then(|a| a.as_array()) {

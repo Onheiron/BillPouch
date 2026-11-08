@@ -18,7 +18,7 @@ Alpha. Current version in the root `Cargo.toml`; history in the GitHub releases.
 - Free Pouch space is filled at once with random blobs by the other Pouches and challenged like fragments; real fragments evict filler.
 - Invite-only networks: network key wrapped per member, encrypted gossip, members-only fragment exchange.
 - Shared ledger per network, committed by weighted BFT consensus: members, devices, per-user reputation from PoS observations, epoch snapshots, capabilities, expulsion votes, network key rotation every epoch and after each expulsion.
-- `pause` / `resume`, `farewell --evict`, `leave [--force]`, `ls`, `storage`, `status`.
+- `pause` / `resume`, `farewell --evict`, `ls`, `storage`, `status`; `leave` records the departure in the ledger, deletes your files and rotates the key without you.
 - REST gateway with dashboard; Docker smoke test and playground.
 
 ## Known limitations
@@ -26,7 +26,6 @@ Alpha. Current version in the root `Cargo.toml`; history in the GitHub releases.
 | Area | Limitation |
 |------|------------|
 | Allowance | Usage and credit lag one epoch, and a user who joined today is not limited until tomorrow |
-| Leave / evict | `bp leave` does not fetch your files first |
 | Placement | Rendezvous order and stability only: storage tiers and reputation do not change where fragments go |
 | Repair | Only the owner repairs its chunks: a chunk whose owner stays offline is not repaired |
 | Available space | Comes out as 0 until enough reliable peers are known |
@@ -34,5 +33,5 @@ Alpha. Current version in the root `Cargo.toml`; history in the GitHub releases.
 
 ## Next
 
-1. Fetch your files before `bp leave`.
+1. Authentication for `bp-api`.
 

@@ -944,7 +944,7 @@ async fn dispatch_leave_rete_non_raggiunta() {
         },
     )
     .await;
-    assert!(matches!(resp, ControlResponse::Ok { .. }));
+    assert!(matches!(resp, ControlResponse::Error { .. }));
 }
 
 #[tokio::test]

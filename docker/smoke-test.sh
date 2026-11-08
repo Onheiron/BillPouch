@@ -328,6 +328,16 @@ else
     fail "carlo-pouch heard nothing after the rotation (latest announcement ${LATEST}, rotation ${ROTATED_AT})"
 fi
 
+LEAVE_OUT=$(docker exec bp-bill bp leave smoketest --force 2>&1) || true
+echo "${LEAVE_OUT}"
+sleep 5
+if echo "${LEAVE_OUT}" | grep -q "Left network" \
+    && ! grep -q "${BILL_FP}" <<< "$(docker exec bp-pouch bp members smoketest 2>&1)"; then
+    pass "marco-bill left the network and carlo's ledger no longer lists him"
+else
+    fail "marco-bill's leave did not reach the ledger"
+fi
+
 header "11. Node logs (last 20 lines each)"
 for c in "${CONTAINERS[@]}"; do
     info "--- ${c} ---"

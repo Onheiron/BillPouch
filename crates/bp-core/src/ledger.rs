@@ -52,6 +52,7 @@ pub enum Op {
     SetVotingDevice {
         device: String,
     },
+    Leave,
     RotateKey {
         epoch: u64,
         wrapped: BTreeMap<String, WrappedKey>,
@@ -202,6 +203,7 @@ pub struct Ledger {
     pub devices: BTreeMap<String, Device>,
     pub entries: Vec<Entry>,
     pub expelled: BTreeSet<String>,
+    pub left: BTreeSet<String>,
     pub expel_approvals: BTreeMap<String, BTreeSet<String>>,
     pub reported: BTreeSet<(String, u64)>,
     pub applied_ops: BTreeSet<String>,
@@ -248,6 +250,7 @@ impl Ledger {
             devices,
             entries: Vec::new(),
             expelled: BTreeSet::new(),
+            left: BTreeSet::new(),
             expel_approvals: BTreeMap::new(),
             reported: BTreeSet::new(),
             applied_ops: BTreeSet::new(),
@@ -285,13 +288,13 @@ impl Ledger {
     }
 
     pub fn is_member(&self, user: &str) -> bool {
-        self.members.contains_key(user) && !self.expelled.contains(user)
+        self.members.contains_key(user)
+            && !self.expelled.contains(user)
+            && !self.left.contains(user)
     }
 
     pub fn active_members(&self) -> impl Iterator<Item = (&String, &Member)> {
-        self.members
-            .iter()
-            .filter(|(user, _)| !self.expelled.contains(*user))
+        self.members.iter().filter(|(user, _)| self.is_member(user))
     }
 
     pub fn rotation_due(&self, now_secs: u64) -> Option<u64> {
@@ -478,6 +481,12 @@ impl Ledger {
                     .expect("checked member")
                     .voting_device = Some(device.clone());
             }
+            Op::Leave => {
+                self.left.insert(author.clone());
+                self.expel_approvals.remove(&author);
+                self.snapshot.users.remove(&author);
+                self.rekey_since.get_or_insert(block.time);
+            }
             Op::RotateKey {
                 epoch,
                 wrapped,
@@ -525,7 +534,7 @@ impl Ledger {
         let mut users: BTreeMap<String, Standing> = self
             .members
             .iter()
-            .filter(|(fp, _)| !self.expelled.contains(*fp))
+            .filter(|(fp, _)| self.is_member(fp))
             .map(|(fp, m)| {
                 let tier = tier_for(m, epoch_start);
                 (
@@ -762,6 +771,24 @@ mod tests {
         net.commit(0, t, vec![net.rotate_op(1, &[0, 1], t)])
             .unwrap();
         assert_eq!(net.ledger.rotation_due(t), None);
+    }
+
+    #[test]
+    fn a_member_who_leaves_is_out_and_the_key_rotates() {
+        let mut net = Net::everyone_joined(3);
+        let t = net.now();
+        net.commit(0, t, vec![net.rotate_op(0, &[0, 1, 2], t)])
+            .unwrap();
+        let leave = SignedOp::sign(&net.people[2], Op::Leave).unwrap();
+        net.commit(0, t, vec![leave]).unwrap();
+        assert!(!net.ledger.is_member(&net.fp(2)));
+        assert!(net.ledger.left.contains(&net.fp(2)));
+        assert_eq!(net.ledger.snapshot.weight(&net.fp(2)), 0);
+        assert_eq!(net.ledger.rotation_due(t), Some(t));
+        let again = SignedOp::sign(&net.people[2], Op::Leave).unwrap();
+        assert!(net.commit(0, t, vec![again]).is_err());
+        net.commit(0, t, vec![net.rotate_op(1, &[0, 1], t)])
+            .unwrap();
     }
 
     #[test]

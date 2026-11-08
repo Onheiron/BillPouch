@@ -237,6 +237,7 @@ signed ops from the genesis entry and the creator's device certificate:
 | `SetVotingDevice` | Picks which of your devices votes |
 | `Observations` | Adds PoS counts to other users' totals |
 | `ProposeExpel` / `ApproveExpel` | Expulsion vote |
+| `Leave` | The author leaves: no longer a member, weight removed, rotation due |
 | `RotateKey` | New network key, wrapped for every current member |
 
 **Epochs** last one day of block time. At the first block of an epoch the
