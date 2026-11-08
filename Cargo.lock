@@ -409,6 +409,7 @@ dependencies = [
  "anyhow",
  "axum",
  "base64",
+ "blake3",
  "bp-core",
  "clap",
  "hex",

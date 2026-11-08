@@ -39,6 +39,43 @@ struct Args {
 #[derive(Clone)]
 struct AppState {
     socket_path: Arc<PathBuf>,
+    token: Arc<String>,
+}
+
+fn load_or_create_token() -> anyhow::Result<String> {
+    let path = config::base_dir()?.join("api_token");
+    if let Ok(token) = std::fs::read_to_string(&path) {
+        if !token.trim().is_empty() {
+            return Ok(token.trim().to_string());
+        }
+    }
+    std::fs::create_dir_all(config::base_dir()?)?;
+    let token = hex::encode(rand::random::<[u8; 32]>());
+    std::fs::write(&path, &token)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(token)
+}
+
+async fn require_token(
+    State(state): State<AppState>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let presented = request
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .unwrap_or("");
+    if blake3::hash(presented.as_bytes()) == blake3::hash(state.token.as_bytes()) {
+        next.run(request).await
+    } else {
+        api_error(StatusCode::UNAUTHORIZED, "missing or wrong API token".into())
+    }
 }
 
 async fn call_daemon(
@@ -461,12 +498,13 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     let socket_path = config::socket_path()?;
+    let token = load_or_create_token()?;
     let state = AppState {
         socket_path: Arc::new(socket_path),
+        token: Arc::new(token.clone()),
     };
 
-    let app = Router::new()
-        .route("/", get(dashboard))
+    let api = Router::new()
         .route("/ping", get(ping))
         .route("/status", get(status))
         .route("/peers", get(peers))
@@ -485,13 +523,19 @@ async fn main() -> anyhow::Result<()> {
         .route("/files/:file_id/shares", post(share_file))
         .route("/files/:file_id/shares/:member", delete(unshare_file))
         .route("/relay/connect", post(relay_connect))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            require_token,
+        ))
         .with_state(state);
+    let app = Router::new().route("/", get(dashboard)).merge(api);
 
     let addr: SocketAddr = format!("{}:{}", args.host, args.port)
         .parse()
         .map_err(|e| anyhow::anyhow!("Invalid bind address: {e}"))?;
 
     tracing::info!("bp-api listening on http://{addr}");
+    tracing::info!("Dashboard: http://{addr}/#token={token}");
     tracing::info!(
         "Proxying requests to daemon at {:?}",
         config::socket_path()?

@@ -29,9 +29,9 @@ Alpha. Current version in the root `Cargo.toml`; history in the GitHub releases.
 | Placement | Rendezvous order and stability only: storage tiers and reputation do not change where fragments go |
 | Repair | Only the owner repairs its chunks: a chunk whose owner stays offline is not repaired |
 | Available space | Comes out as 0 until enough reliable peers are known |
-| `bp-api` | No authentication; bind to localhost only |
+| `bp-api` | A single bearer token and no TLS: keep it on localhost or behind a TLS proxy |
 
 ## Next
 
-1. Authentication for `bp-api`.
+1. Repair by other members when a chunk's owner is offline, with owner-signed repair permissions.
 
