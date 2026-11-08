@@ -666,6 +666,7 @@ async fn handle_swarm_event(
                     request_response::Message::Request {
                         request, channel, ..
                     },
+                ..
             },
         )) => {
             let requester = member_device(chains, &peer);
@@ -717,6 +718,7 @@ async fn handle_swarm_event(
                         request_id,
                         response,
                     },
+                ..
             },
         )) => {
             if let FragmentResponse::Pong { nonce } = &response {
@@ -818,7 +820,7 @@ fn publish(
             .gossipsub
             .publish(topic.clone(), payload)
         {
-            Ok(_) | Err(gossipsub::PublishError::InsufficientPeers) => {}
+            Ok(_) | Err(gossipsub::PublishError::NoPeersSubscribedToTopic) => {}
             Err(e) => tracing::warn!("Gossip publish failed: {}", e),
         },
         Err(e) => tracing::warn!("Cannot seal gossip: {e}"),

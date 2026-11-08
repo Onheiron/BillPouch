@@ -98,7 +98,6 @@ fn encode<T: Serialize>(value: &T) -> std::io::Result<Vec<u8>> {
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))
 }
 
-#[async_trait::async_trait]
 impl request_response::Codec for FragmentCodec {
     type Protocol = StreamProtocol;
     type Request = FragmentRequest;

@@ -45,7 +45,7 @@ Everything is under the XDG data dir (`~/.local/share/billpouch/` on Linux):
 
 ## Networking
 
-libp2p 0.54 over TCP with Noise and Yamux:
+libp2p 0.57 over TCP with Noise and Yamux:
 
 | Behaviour | Use |
 |-----------|-----|
