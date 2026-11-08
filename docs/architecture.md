@@ -40,7 +40,7 @@ Everything is under the XDG data dir (`~/.local/share/billpouch/` on Linux):
 | `files.json` | Local copy of your file index per network, the index heads you have seen, shares not yet acknowledged |
 | `kad_peers.json` | Known peer addresses, saved every 600 s and redialled at start |
 | `bootstrap.json` | Optional WAN bootstrap peers (`bp bootstrap`) |
-| `storage/<network>/<service_id>/` | A Pouch's `meta.json` and `fragments/<chunk_id>/<fragment_id>.frag` |
+| `storage/<network>/<service_id>/` | A Pouch's `meta.json`, `fragments/<chunk_id>/` (`<fragment_id>.frag` and the chunk's `owner`), `fillers/`, `revoked.json` |
 
 ## Networking
 
@@ -78,11 +78,14 @@ A daemon can be in several networks at once. Gossip messages are `Node` (NodeInf
 
 ## Storing a file
 
-`bp put` sends the whole file to the daemon, which treats it as one chunk:
+`bp put` passes the file's path to the daemon, which streams it in 4 MiB
+chunks; only one chunk is in memory at a time. Each file gets a random
+`file_id` and a random key.
 
-1. **Encrypt.** ChaCha20-Poly1305 with a random per-file key. The key is wrapped
-   (X25519 + ChaCha20-Poly1305, as for the network key) for your SSH key and put in
-   the file's manifest: name, size, `chunk_id`, owner, one wrap per authorized user.
+1. **Encrypt.** Each chunk is sealed with ChaCha20-Poly1305 under the file key.
+   The key is wrapped (X25519 + ChaCha20-Poly1305, as for the network key) for
+   your SSH key and put in the file's manifest: `file_id`, the ordered
+   `chunk_id`s, name, size, owner, one wrap and one grant per authorized user.
    Pouches only ever see ciphertext.
 2. **Rank the Pouches.** `chunk_id` is a 16-hex-char BLAKE3 prefix of the
    ciphertext. Every Pouch of the network (yours included) is ranked by
@@ -103,24 +106,33 @@ A daemon can be in several networks at once. Gossip messages are `Node` (NodeInf
    their Pouches with your **owner grant**. The placement is gossiped as an
    `Index` message and recorded for Proof-of-Storage.
 
-`bp get` looks the file up in your index, collects local fragments, fetches
-more from the Pouches listed in the gossiped fragment index (falling back to
-every known Pouch) until it has `k`, decodes, opens its wrap and decrypts.
+`bp get` looks the file up in your index and, chunk by chunk, collects local
+fragments, fetches more from the Pouches listed in the gossiped fragment index
+(falling back to every known Pouch) until it has `k`, decodes, checks the
+`chunk_id`, decrypts and appends to the output (written as `.bp-partial` and
+renamed at the end).
 
-**Grants.** A grant `(chunk_id, owner key, grantee fingerprint)` is signed with
+**Grants.** A grant `(file_id, owner key, grantee fingerprint)` is signed with
 the owner's SSH key. A Pouch accepts a fragment only from a device of a member
-whose own grant (grantee = owner) comes with it, and records the owner key with
-the chunk; the first owner of a chunk keeps it. It serves a chunk's fragments
-only to a device of the grantee of a grant signed by that owner: you (all your
-devices) and the members you shared the file with, whose grant travels in the
-manifest. Only the owner can share a file.
+whose own grant (grantee = owner) comes with it, and records owner key and
+`file_id` with the chunk; the first owner of a chunk keeps it. It serves a
+chunk's fragments only to a device of the grantee of a grant for that file
+signed by that owner, unless the grantee was revoked: you (all your devices)
+and the members you shared the file with, whose grant travels in the manifest.
+Only the owner can share a file.
+
+**Owner orders.** `Delete` and `Revoke{member}` are signed by the owner and
+gossiped (and re-gossiped 10 times, every 30 s). A Pouch deletes the chunks, or
+records the revocation, only for chunks whose recorded owner key matches. A
+revoked member also drops the file from their index; a copy they already
+downloaded stays with them.
 
 ## Your file index, devices and sharing
 
 - **Index**: every manifest you own or were shared, per network. It is sealed
   with `BLAKE3-derive("billpouch/index-key/v1", user secret)`, so every device
   holding your SSH key can open it and nobody else can, and stored in the network
-  like a file. A **head** `(owner key, network, version, chunk_id)` signed with
+  like a file. A **head** `(owner key, network, version, file_id, chunk_ids)` signed with
   your SSH key points at the latest version; heads are gossiped, cached by every
   node and re-gossiped by your devices every 30 s (or requested with a
   `HeadRequest` when a device has none).
@@ -128,7 +140,10 @@ manifest. Only the owner can share a file.
   another device of yours, without touching the ledger. On that device,
   `bp login --ssh-key <same key>` and `bp join <token>`: it syncs the ledger,
   registers itself, receives your head and pulls your index. Indexes merge by
-  union, so two devices adding files at the same time both keep them.
+  union, so two devices adding files at the same time both keep them; deleted
+  files and revoked members are kept as tombstones so a merge never brings them
+  back. Each new index version is stored under a new `file_id` and the previous
+  one is deleted with an owner order.
 - **Sharing**: `bp share` wraps the file key for the member's SSH key (taken
   from the ledger) and gossips the manifest to them; they add it to their index
   and acknowledge. Until the acknowledgement arrives the share is re-sent every

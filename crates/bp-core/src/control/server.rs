@@ -633,23 +633,35 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             }))
         }
         ControlRequest::PutFile {
-            chunk_data,
+            path,
             ph,
             q_target,
             network_id,
             file_name,
-        } => files::put_file(state, chunk_data, ph, q_target, network_id, file_name).await,
+        } => files::put_file(state, path, ph, q_target, network_id, file_name).await,
 
         ControlRequest::GetFile {
-            chunk_id,
+            file_id,
             network_id,
-        } => files::get_file(state, chunk_id, network_id).await,
+            output,
+        } => files::get_file(state, file_id, network_id, output).await,
+
+        ControlRequest::DeleteFile {
+            file_id,
+            network_id,
+        } => files::delete_file(state, network_id, file_id).await,
 
         ControlRequest::Share {
             network_id,
-            chunk_id,
+            file_id,
             member,
-        } => files::share_file(state, network_id, chunk_id, member).await,
+        } => files::share_file(state, network_id, file_id, member).await,
+
+        ControlRequest::Unshare {
+            network_id,
+            file_id,
+            member,
+        } => files::unshare_file(state, network_id, file_id, member).await,
 
         ControlRequest::StorageInfo { network_id } => {
             let pouches = {

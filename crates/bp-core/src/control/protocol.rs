@@ -42,7 +42,7 @@ pub enum ControlRequest {
     },
     Share {
         network_id: String,
-        chunk_id: String,
+        file_id: String,
         member: String,
     },
     Expel {
@@ -57,15 +57,25 @@ pub enum ControlRequest {
     AnnounceNow,
     Ping,
     PutFile {
-        chunk_data: Vec<u8>,
+        path: std::path::PathBuf,
         ph: Option<f64>,
         q_target: Option<f64>,
         network_id: String,
         file_name: Option<String>,
     },
     GetFile {
-        chunk_id: String,
+        file_id: String,
         network_id: String,
+        output: std::path::PathBuf,
+    },
+    DeleteFile {
+        file_id: String,
+        network_id: String,
+    },
+    Unshare {
+        network_id: String,
+        file_id: String,
+        member: String,
     },
     ConnectRelay {
         relay_addr: String,
@@ -135,10 +145,11 @@ pub struct StatusData {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PutFileData {
-    pub chunk_id: String,
+    pub file_id: String,
+    pub chunks: usize,
+    pub size_bytes: u64,
     pub k: usize,
     pub n: usize,
-    pub q: f64,
     pub ph: f64,
     pub pe: f64,
     pub fragments_stored: usize,
@@ -148,10 +159,12 @@ pub struct PutFileData {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetFileData {
-    pub chunk_id: String,
-    pub data: Vec<u8>,
-    pub fragments_used: usize,
+    pub file_id: String,
+    pub file_name: String,
+    pub size_bytes: u64,
+    pub chunks: usize,
     pub fragments_remote: usize,
+    pub output: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -220,7 +233,8 @@ pub struct StorageInfoData {
 pub struct FileEntry {
     pub file_name: String,
     pub size_bytes: u64,
-    pub chunk_id: String,
+    pub file_id: String,
+    pub chunks: usize,
     pub network_id: String,
     pub uploaded_at: u64,
     pub owner: String,
@@ -231,7 +245,7 @@ pub struct FileEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShareData {
     pub network_id: String,
-    pub chunk_id: String,
+    pub file_id: String,
     pub file_name: String,
     pub member: String,
 }

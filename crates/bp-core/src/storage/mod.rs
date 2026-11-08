@@ -16,8 +16,14 @@ use crate::{
     error::{BpError, BpResult},
 };
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChunkOwner {
+    pub owner_key: String,
+    pub file_id: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -81,8 +87,62 @@ impl StorageManager {
         })
     }
 
-    pub fn owner_of(&self, chunk_id: &str) -> Option<String> {
-        std::fs::read_to_string(self.root.join("fragments").join(chunk_id).join("owner")).ok()
+    pub fn owner_of(&self, chunk_id: &str) -> Option<ChunkOwner> {
+        let bytes = std::fs::read(self.root.join("fragments").join(chunk_id).join("owner")).ok()?;
+        serde_json::from_slice(&bytes).ok()
+    }
+
+    fn revoked(&self) -> BTreeMap<String, BTreeSet<String>> {
+        std::fs::read(self.root.join("revoked.json"))
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn is_revoked(&self, file_id: &str, member: &str) -> bool {
+        self.revoked()
+            .get(file_id)
+            .is_some_and(|members| members.contains(member))
+    }
+
+    fn chunks_of(&self, file_id: &str, owner_key: &str) -> Vec<String> {
+        self.index
+            .chunk_ids()
+            .filter(|chunk| {
+                self.owner_of(chunk)
+                    .is_some_and(|o| o.file_id == file_id && o.owner_key == owner_key)
+            })
+            .map(str::to_string)
+            .collect()
+    }
+
+    pub fn revoke(&mut self, file_id: &str, owner_key: &str, member: &str) -> BpResult<bool> {
+        if self.chunks_of(file_id, owner_key).is_empty() {
+            return Ok(false);
+        }
+        let mut revoked = self.revoked();
+        revoked
+            .entry(file_id.to_string())
+            .or_default()
+            .insert(member.to_string());
+        std::fs::write(
+            self.root.join("revoked.json"),
+            serde_json::to_vec(&revoked)?,
+        )?;
+        Ok(true)
+    }
+
+    pub fn delete_file(&mut self, file_id: &str, owner_key: &str) -> BpResult<u64> {
+        let mut freed = 0;
+        for chunk in self.chunks_of(file_id, owner_key) {
+            freed += self.index.remove_chunk(&chunk);
+            let _ = std::fs::remove_dir_all(self.root.join("fragments").join(&chunk));
+        }
+        if freed > 0 {
+            self.meta.storage_bytes_used = self.meta.storage_bytes_used.saturating_sub(freed);
+            self.save_meta()?;
+        }
+        Ok(freed)
     }
 
     pub fn filler_bytes(&self) -> u64 {
@@ -137,11 +197,11 @@ impl StorageManager {
     pub fn store_fragment(
         &mut self,
         fragment: &EncodedFragment,
-        owner_key: &str,
+        owner: &ChunkOwner,
     ) -> BpResult<Vec<String>> {
         if self
             .owner_of(&fragment.chunk_id)
-            .is_some_and(|owner| owner != owner_key)
+            .is_some_and(|known| known != *owner)
         {
             return Err(BpError::Storage(format!(
                 "chunk {} belongs to someone else",
@@ -161,7 +221,7 @@ impl StorageManager {
 
         let chunk_dir = self.root.join("fragments").join(&fragment.chunk_id);
         std::fs::create_dir_all(&chunk_dir).map_err(BpError::Io)?;
-        std::fs::write(chunk_dir.join("owner"), owner_key).map_err(BpError::Io)?;
+        std::fs::write(chunk_dir.join("owner"), serde_json::to_vec(owner)?).map_err(BpError::Io)?;
 
         let frag_path = chunk_dir.join(format!("{}.frag", fragment.id));
         std::fs::write(&frag_path, &bytes).map_err(BpError::Io)?;
@@ -276,6 +336,13 @@ mod tests {
 
     static STORAGE_TEST_LOCK: Mutex<()> = Mutex::new(());
 
+    fn owner(key: &str) -> ChunkOwner {
+        ChunkOwner {
+            owner_key: key.into(),
+            file_id: "file".into(),
+        }
+    }
+
     fn with_temp_home_storage<F: FnOnce() + std::panic::UnwindSafe>(f: F) {
         let _guard = STORAGE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp =
@@ -318,7 +385,7 @@ mod tests {
             let mut sm = StorageManager::init("net".into(), "svc".into(), 1_000_000).unwrap();
             let frags = rlnc::encode(CHUNK, 4, 6).unwrap();
 
-            sm.store_fragment(&frags[0], "owner").unwrap();
+            sm.store_fragment(&frags[0], &owner("carlo")).unwrap();
 
             let loaded = sm.load_fragment(&frags[0].chunk_id, &frags[0].id).unwrap();
             assert_eq!(loaded.coding_vector, frags[0].coding_vector);
@@ -333,11 +400,33 @@ mod tests {
         with_temp_home_storage(|| {
             let mut sm = StorageManager::init("net".into(), "svc".into(), 1_000_000).unwrap();
             let frags = rlnc::encode(CHUNK, 2, 3).unwrap();
-            sm.store_fragment(&frags[0], "carlo").unwrap();
-            assert!(sm.store_fragment(&frags[1], "mallory").is_err());
-            sm.store_fragment(&frags[1], "carlo").unwrap();
-            assert_eq!(sm.owner_of(&frags[0].chunk_id).as_deref(), Some("carlo"));
+            sm.store_fragment(&frags[0], &owner("carlo")).unwrap();
+            assert!(sm.store_fragment(&frags[1], &owner("mallory")).is_err());
+            sm.store_fragment(&frags[1], &owner("carlo")).unwrap();
+            assert_eq!(sm.owner_of(&frags[0].chunk_id), Some(owner("carlo")));
             assert_eq!(sm.index.fragment_count(), 2);
+        });
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn the_owner_can_revoke_and_delete_and_nobody_else() {
+        with_temp_home_storage(|| {
+            let mut sm = StorageManager::init("net".into(), "svc".into(), 1_000_000).unwrap();
+            let frags = rlnc::encode(CHUNK, 2, 2).unwrap();
+            sm.store_fragment(&frags[0], &owner("carlo")).unwrap();
+            sm.store_fragment(&frags[1], &owner("carlo")).unwrap();
+            assert!(!sm.revoke("file", "mallory", "marco").unwrap());
+            assert!(!sm.is_revoked("file", "marco"));
+            assert!(sm.revoke("file", "carlo", "marco").unwrap());
+            assert!(sm.is_revoked("file", "marco"));
+
+            assert_eq!(sm.delete_file("file", "mallory").unwrap(), 0);
+            let used = sm.meta.storage_bytes_used;
+            assert_eq!(sm.delete_file("file", "carlo").unwrap(), used);
+            assert_eq!(sm.meta.storage_bytes_used, 0);
+            assert_eq!(sm.index.fragment_count(), 0);
+            assert!(sm.owner_of(&frags[0].chunk_id).is_none());
         });
     }
 
@@ -358,7 +447,7 @@ mod tests {
             let blocks = merkle::block_count(filler.len());
             assert!(merkle::verify(&merkle::root(&filler), blocks, &proof));
 
-            let evicted = sm.store_fragment(&frags[0], "owner").unwrap();
+            let evicted = sm.store_fragment(&frags[0], &owner("carlo")).unwrap();
             assert_eq!(evicted, vec!["blob".to_string()]);
             assert_eq!(sm.filler_bytes(), 0);
             assert!(sm.prove(&blob, 0).is_none());
@@ -381,7 +470,7 @@ mod tests {
         with_temp_home_storage(|| {
             let mut sm = StorageManager::init("net".into(), "svc".into(), 1).unwrap();
             let frags = rlnc::encode(CHUNK, 4, 4).unwrap();
-            assert!(sm.store_fragment(&frags[0], "owner").is_err());
+            assert!(sm.store_fragment(&frags[0], &owner("carlo")).is_err());
         });
     }
 
@@ -396,8 +485,8 @@ mod tests {
             {
                 let mut sm =
                     StorageManager::init(network_id.into(), service_id.into(), 1_000_000).unwrap();
-                sm.store_fragment(&frags[0], "owner").unwrap();
-                sm.store_fragment(&frags[1], "owner").unwrap();
+                sm.store_fragment(&frags[0], &owner("carlo")).unwrap();
+                sm.store_fragment(&frags[1], &owner("carlo")).unwrap();
             }
 
             let sm2 = StorageManager::load(network_id, service_id).unwrap();

@@ -182,10 +182,10 @@ enum Cmd {
         name: Option<String>,
     },
 
-    #[command(about = "Retrieve and decode a stored chunk by its chunk_id")]
+    #[command(about = "Fetch, decrypt and write one of your files (or one shared with you)")]
     Get {
-        #[arg(help = "The chunk_id returned by `bp put` (BLAKE3 prefix)")]
-        chunk_id: String,
+        #[arg(help = "The file_id printed by `bp put` or `bp ls`")]
+        file_id: String,
 
         #[arg(help = "Where to write the recovered file")]
         output: std::path::PathBuf,
@@ -210,11 +210,40 @@ enum Cmd {
         long_about = "Share one of your files with another member.\n\nThe file key is encrypted for their SSH key and delivered to them; the file then shows up in their `bp ls`. Only the owner of a file can share it."
     )]
     Share {
-        #[arg(help = "The chunk_id of the file (see `bp ls`)")]
-        chunk_id: String,
+        #[arg(help = "The file_id of the file (see `bp ls`)")]
+        file_id: String,
 
         #[arg(help = "Fingerprint of the member, as `bp members` shows it (SHA256:...)")]
         member: String,
+
+        #[arg(help = "Network that stores the file")]
+        #[arg(long, short)]
+        network: String,
+    },
+
+    #[command(
+        about = "Stop sharing one of your files with a member",
+        long_about = "Stop sharing one of your files with a member.\n\nTheir fetch permission is withdrawn and every Pouch refuses them the file's fragments from now on. A copy they already downloaded stays with them."
+    )]
+    Unshare {
+        #[arg(help = "The file_id of the file (see `bp ls`)")]
+        file_id: String,
+
+        #[arg(help = "Fingerprint of the member (SHA256:...)")]
+        member: String,
+
+        #[arg(help = "Network that stores the file")]
+        #[arg(long, short)]
+        network: String,
+    },
+
+    #[command(
+        about = "Delete a file",
+        long_about = "Delete a file.\n\nYour own files are dropped from your index and every Pouch deletes their fragments. A file shared with you is only removed from your index."
+    )]
+    Rm {
+        #[arg(help = "The file_id of the file (see `bp ls`)")]
+        file_id: String,
 
         #[arg(help = "Network that stores the file")]
         #[arg(long, short)]
@@ -408,11 +437,11 @@ async fn main() -> anyhow::Result<()> {
         }
 
         Some(Cmd::Get {
-            chunk_id,
+            file_id,
             output,
             network,
         }) => {
-            commands::get::get(chunk_id, network, output).await?;
+            commands::get::get(file_id, network, output).await?;
         }
 
         Some(Cmd::Ls { network }) => {
@@ -420,11 +449,23 @@ async fn main() -> anyhow::Result<()> {
         }
 
         Some(Cmd::Share {
-            chunk_id,
+            file_id,
             member,
             network,
         }) => {
-            commands::ls::share(network, chunk_id, member).await?;
+            commands::ls::share(network, file_id, member).await?;
+        }
+
+        Some(Cmd::Unshare {
+            file_id,
+            member,
+            network,
+        }) => {
+            commands::ls::unshare(network, file_id, member).await?;
+        }
+
+        Some(Cmd::Rm { file_id, network }) => {
+            commands::ls::rm(network, file_id).await?;
         }
 
         Some(Cmd::Storage { network }) => {

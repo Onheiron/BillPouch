@@ -1,43 +1,34 @@
-use bp_core::{control::protocol::ControlRequest, daemon, identity::Identity};
+use bp_core::{
+    control::protocol::{ControlRequest, GetFileData},
+    daemon,
+    identity::Identity,
+};
 use std::path::PathBuf;
 
 use crate::client::ControlClient;
 
-pub async fn get(chunk_id: String, network: String, output: PathBuf) -> anyhow::Result<()> {
+pub async fn get(file_id: String, network: String, output: PathBuf) -> anyhow::Result<()> {
     if !Identity::exists()? {
         anyhow::bail!("Not logged in. Run `bp login` first.");
     }
-
     if !daemon::is_running() {
         anyhow::bail!("Daemon is not running. Start a Pouch first with: bp hatch pouch");
     }
-
-    let mut client = ControlClient::connect().await?;
-    let data = client
+    let output = std::path::absolute(&output)?;
+    let data = ControlClient::connect()
+        .await?
         .request(ControlRequest::GetFile {
-            chunk_id: chunk_id.clone(),
-            network_id: network.clone(),
+            file_id,
+            network_id: network,
+            output,
         })
-        .await?;
-
-    let d: bp_core::control::protocol::GetFileData = match data {
-        Some(v) => serde_json::from_value(v)?,
-        None => anyhow::bail!("Daemon returned no data for chunk '{}'", chunk_id),
-    };
-
-    tokio::fs::write(&output, &d.data)
-        .await
-        .map_err(|e| anyhow::anyhow!("Cannot write {:?}: {}", output, e))?;
-
-    println!("✓ Decoded {} bytes → {:?}", d.data.len(), output);
-    println!("   chunk_id        : {}", d.chunk_id);
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("empty response from daemon"))?;
+    let d: GetFileData = serde_json::from_value(data)?;
     println!(
-        "   fragments used  : {} ({} local, {} remote)",
-        d.fragments_used,
-        d.fragments_used - d.fragments_remote,
-        d.fragments_remote
+        "✓ '{}': {} bytes in {} chunk(s) → {}",
+        d.file_name, d.size_bytes, d.chunks, d.output
     );
-    println!("   network         : {}", network);
-
+    println!("   fragments from other Pouches: {}", d.fragments_remote);
     Ok(())
 }

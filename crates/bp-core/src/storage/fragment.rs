@@ -39,6 +39,15 @@ impl FragmentIndex {
         Some(removed)
     }
 
+    pub fn remove_chunk(&mut self, chunk_id: &str) -> u64 {
+        let freed: u64 = self
+            .inner
+            .remove(chunk_id)
+            .map_or(0, |m| m.iter().map(|f| f.size_bytes).sum());
+        self.total_bytes = self.total_bytes.saturating_sub(freed);
+        freed
+    }
+
     pub fn fragments_for_chunk(&self, chunk_id: &str) -> &[FragmentMeta] {
         self.inner
             .get(chunk_id)

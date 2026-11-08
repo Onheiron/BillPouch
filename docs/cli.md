@@ -41,10 +41,12 @@ started automatically when missing.
 
 | Command | Description |
 |---------|-------------|
-| `bp put <file> --network <id> [--ph <p>] [--q-target <q>] [--name <name>]` | Encrypt, encode and distribute a file; prints its `chunk_id`. `--ph` = target recovery probability (default 0.999), `--q-target` = redundancy on top of `k` (default 1.0) |
-| `bp get <chunk_id> <output> --network <id>` | Fetch, decode and decrypt one of your files or one shared with you |
+| `bp put <file> --network <id> [--ph <p>] [--q-target <q>] [--name <name>]` | Stream a file in 4 MiB chunks: encrypt, encode and distribute; prints its `file_id`. `--ph` = target recovery probability (default 0.999), `--q-target` = redundancy on top of `k` (default 1.0) |
+| `bp get <file_id> <output> --network <id>` | Fetch, decode and decrypt one of your files or one shared with you, chunk by chunk |
+| `bp rm <file_id> --network <id>` | Delete one of your files (every Pouch drops its fragments), or remove a shared file from your list |
 | `bp ls [--network <id>]` | Your files and the ones shared with you, from your index (synced across your devices) |
-| `bp share <chunk_id> <fingerprint> --network <id>` | Share one of your own files with a member: the file key is wrapped for their SSH key, a fetch grant is signed for them and both are delivered; it then shows up in their `bp ls` |
+| `bp unshare <file_id> <fingerprint> --network <id>` | Withdraw a member's access: Pouches refuse them the fragments and the file leaves their list |
+| `bp share <file_id> <fingerprint> --network <id>` | Share one of your own files with a member: the file key is wrapped for their SSH key, a fetch grant is signed for them and both are delivered; it then shows up in their `bp ls` |
 | `bp storage [--network <id>]` | Quota, used and available space per Pouch, plus upload totals |
 
 ## Connectivity
