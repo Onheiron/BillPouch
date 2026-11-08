@@ -612,6 +612,13 @@ fn apply_order(state: &DaemonState, order: &Order) {
     let Some(owner) = order.owner() else {
         return;
     };
+    if matches!(order.action, Action::Delete) && order.owner_key == state.identity.user_key {
+        let mut outgoing = state.outgoing_assignments.write().unwrap();
+        for fragments in outgoing.values_mut() {
+            fragments.retain(|f| f.grant.file_id != order.file_id);
+        }
+        outgoing.retain(|_, fragments| !fragments.is_empty());
+    }
     for sm in state.storage_managers.read().unwrap().values() {
         let mut sm = sm.write().unwrap();
         let result = match &order.action {

@@ -78,6 +78,7 @@ pub struct OutgoingFragment {
     pub grant: crate::files::Grant,
     pub root: [u8; 32],
     pub blocks: usize,
+    pub size: u64,
 }
 
 pub type OutgoingAssignments = Arc<RwLock<HashMap<String, Vec<OutgoingFragment>>>>;
@@ -309,6 +310,7 @@ pub async fn run_network_loop(
                     }) => {
                         let root = crate::storage::merkle::root(&data);
                         let blocks = crate::storage::merkle::block_count(data.len());
+                        let size = data.len() as u64;
                         let req = FragmentRequest::Store {
                             chunk_id: chunk_id.clone(),
                             fragment_id: fragment_id.clone(),
@@ -329,6 +331,7 @@ pub async fn run_network_loop(
                                     grant,
                                     root,
                                     blocks,
+                                    size,
                                 });
                         }
                         tracing::debug!(peer=%peer_id, chunk=%chunk_id, frag=%fragment_id, "PushFragment sent");

@@ -491,6 +491,11 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                         .tier(fingerprint)
                         .map_or_else(|| "new".to_string(), |t| t.to_string()),
                     weight: ledger.snapshot.weight(fingerprint),
+                    credit_bytes: ledger
+                        .snapshot
+                        .users
+                        .get(fingerprint)
+                        .map_or(0, |s| s.credit_bytes),
                     devices: ledger
                         .devices
                         .values()

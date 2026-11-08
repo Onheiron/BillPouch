@@ -746,6 +746,7 @@ mod tests {
                         user: self.people[about].fingerprint.clone(),
                         sent: 1,
                         passed: 1,
+                        bytes: 0,
                     }],
                 },
             )

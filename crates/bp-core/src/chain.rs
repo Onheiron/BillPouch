@@ -26,11 +26,12 @@ pub struct Tally {
     pub epoch: u64,
     pub sent: u32,
     pub passed: u32,
+    pub bytes: u64,
 }
 
 pub type ObservationLog = Arc<RwLock<HashMap<String, Tally>>>;
 
-pub fn observe(log: &ObservationLog, device: &str, passed: bool, now_ms: u64) {
+pub fn observe(log: &ObservationLog, device: &str, passed: bool, bytes: u64, now_ms: u64) {
     let epoch = epoch_of(now_ms);
     if let Ok(mut log) = log.write() {
         let tally = log.entry(device.to_string()).or_default();
@@ -42,6 +43,7 @@ pub fn observe(log: &ObservationLog, device: &str, passed: bool, now_ms: u64) {
         }
         tally.sent += 1;
         tally.passed += u32::from(passed);
+        tally.bytes = tally.bytes.max(bytes);
     }
 }
 
@@ -332,6 +334,9 @@ impl Chain {
                                 user: user.to_string(),
                                 sent,
                                 passed: t.passed.min(sent),
+                                bytes: (u128::from(t.bytes) * u128::from(t.passed)
+                                    / u128::from(t.sent))
+                                    as u64,
                             }
                         })
                     })
@@ -532,7 +537,7 @@ mod tests {
         let epoch_start = (epoch_of(net.now) + 1) * EPOCH_SECS * 1000;
         let device = net.people[1].peer_id.to_string();
         for i in 0..10 {
-            observe(&net.log, &device, i != 0, epoch_start + 1);
+            observe(&net.log, &device, i != 0, 1000, epoch_start + 1);
         }
         net.now = epoch_start + 1000;
         net.settle();
@@ -541,6 +546,7 @@ mod tests {
         net.settle();
         let member = &net.chains[0].ledger().members[&net.fp(1)];
         assert_eq!((member.sent, member.passed), (10, 9));
+        assert_eq!(member.verified_bytes, 900);
     }
 
     #[test]

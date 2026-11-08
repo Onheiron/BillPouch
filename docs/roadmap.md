@@ -14,6 +14,7 @@ Alpha. Current version in the root `Cargo.toml`; history in the GitHub releases.
 - Personal file index sealed with your SSH key, stored in the network and synced to all your devices; `bp share` with other members; extra devices with a self-invite.
 - Ping and Proof-of-Storage loops → QoS, fault score, rerouting of fragments
   away from suspected peers. Challenges ask for a random 4 KiB block with its Merkle path, checked against a root the challenger kept.
+- Per-user credit in verified bytes, recorded in the ledger every epoch.
 - Free Pouch space is filled at once with random blobs by the other Pouches and challenged like fragments; real fragments evict filler.
 - Invite-only networks: network key wrapped per member, encrypted gossip, members-only fragment exchange.
 - Shared ledger per network, committed by weighted BFT consensus: members, devices, per-user reputation from PoS observations, epoch snapshots, capabilities, expulsion votes, network key rotation every epoch and after each expulsion.
@@ -24,7 +25,7 @@ Alpha. Current version in the root `Cargo.toml`; history in the GitHub releases.
 
 | Area | Limitation |
 |------|------------|
-| Credit | Reputation counts passed challenges, not verified bytes |
+| Credit | Verified bytes are recorded per user but do not yet limit how much a user may store |
 | State | QoS is in memory and resets when the daemon restarts |
 | Leave / evict | Neither fetches your files nor redistributes the evicted fragments; the network relies on PoS rerouting |
 | Placement | Rendezvous order and stability only: storage tiers and reputation do not change where fragments go |
@@ -34,5 +35,5 @@ Alpha. Current version in the root `Cargo.toml`; history in the GitHub releases.
 
 ## Next
 
-1. Credit by verified bytes in the ledger.
+1. Use credit as a storage allowance: Pouches refuse new fragments from users storing far more than they host.
 
