@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub const EPOCH_SECS: u64 = 86_400;
 pub const MAX_CHALLENGES_PER_DEVICE_PER_EPOCH: u32 = 288;
 pub const MIN_CHALLENGES_FOR_PROMOTION: u64 = 100;
+pub const MAX_BYTES_PER_DEVICE: u64 = 1 << 46;
 const DAY: u64 = 86_400;
 
 const PROMOTIONS: [(ReputationTier, u64, f64); 3] = [
@@ -24,6 +25,7 @@ pub struct Observation {
     pub user: String,
     pub sent: u32,
     pub passed: u32,
+    pub bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -128,6 +130,7 @@ impl Block {
 pub struct Standing {
     pub tier: ReputationTier,
     pub weight: u64,
+    pub credit_bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -170,6 +173,7 @@ pub struct Member {
     pub sent: u64,
     pub passed: u64,
     pub voting_device: Option<String>,
+    pub verified_bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -215,6 +219,7 @@ impl Ledger {
                 sent: 0,
                 passed: 0,
                 voting_device: Some(peer.clone()),
+                verified_bytes: 0,
             },
         );
         let devices = BTreeMap::from([(
@@ -316,6 +321,9 @@ impl Ledger {
         let mut next = self.clone();
         if block.epoch() > next.snapshot.epoch {
             next.snapshot = next.compute_snapshot(block.epoch());
+            for member in next.members.values_mut() {
+                member.verified_bytes = 0;
+            }
         }
         for op in &block.ops {
             next.apply_op(op, block)?;
@@ -364,6 +372,7 @@ impl Ledger {
                         sent: 0,
                         passed: 0,
                         voting_device: None,
+                        verified_bytes: 0,
                     },
                 );
                 self.entries.push(entry.clone());
@@ -380,6 +389,7 @@ impl Ledger {
                         || !self.is_member(&o.user)
                         || o.passed > o.sent
                         || o.sent > MAX_CHALLENGES_PER_DEVICE_PER_EPOCH
+                        || o.bytes > MAX_BYTES_PER_DEVICE
                         || !devices.insert(&o.device)
                     {
                         return Err(invalid("invalid observation"));
@@ -389,6 +399,7 @@ impl Ledger {
                     let member = self.members.get_mut(&o.user).expect("checked member");
                     member.sent += u64::from(o.sent);
                     member.passed += u64::from(o.passed);
+                    member.verified_bytes = member.verified_bytes.saturating_add(o.bytes);
                 }
             }
             Op::ProposeExpel { member } => {
@@ -495,6 +506,7 @@ impl Ledger {
                     Standing {
                         tier,
                         weight: tier as u64,
+                        credit_bytes: m.verified_bytes,
                     },
                 )
             })
@@ -626,6 +638,7 @@ mod tests {
                         user: self.fp(about),
                         sent,
                         passed,
+                        bytes: 0,
                     }],
                 },
             )
@@ -791,6 +804,38 @@ mod tests {
         );
         assert!(net.ledger.has_capability(&net.fp(1), Capability::Invite));
         assert!(!net.ledger.has_capability(&net.fp(0), Capability::Invite));
+    }
+
+    #[test]
+    fn verified_bytes_become_the_next_epochs_credit() {
+        let mut net = Net::everyone_joined(3);
+        let t = net.now();
+        let mut a = net.observe(0, 1, 10, 9, t);
+        let mut b = net.observe(2, 1, 10, 10, t);
+        for (op, bytes) in [(&mut a, 600), (&mut b, 400)] {
+            let Op::Observations { results, .. } = &mut op.op else {
+                unreachable!()
+            };
+            results[0].bytes = bytes;
+            *op = SignedOp::sign(&net.people[if bytes == 600 { 0 } else { 2 }], op.op.clone())
+                .unwrap();
+        }
+        net.commit(0, t, vec![a, b]).unwrap();
+        assert_eq!(net.ledger.snapshot.users[&net.fp(1)].credit_bytes, 0);
+        net.next_epoch();
+        assert_eq!(net.ledger.snapshot.users[&net.fp(1)].credit_bytes, 1000);
+        assert_eq!(net.ledger.members[&net.fp(1)].verified_bytes, 0);
+        net.next_epoch();
+        assert_eq!(net.ledger.snapshot.users[&net.fp(1)].credit_bytes, 0);
+
+        let mut huge = net.observe(0, 1, 1, 1, net.now());
+        let Op::Observations { results, .. } = &mut huge.op else {
+            unreachable!()
+        };
+        results[0].bytes = MAX_BYTES_PER_DEVICE + 1;
+        let huge = SignedOp::sign(&net.people[0], huge.op.clone()).unwrap();
+        let t = net.now();
+        assert!(net.commit(0, t, vec![huge]).is_err());
     }
 
     #[test]

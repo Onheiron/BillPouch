@@ -198,9 +198,13 @@ a real fragment needs room the Pouch evicts filler blobs and gossips
 `FillerEvicted`; their sponsors stop challenging them and refill later. Your
 own available space counts filler as free.
 
-Every challenge result is counted per device and epoch. In the last 10 % of an
-epoch each member submits an `Observations` op with its counts (at most 288
-challenges per device per epoch) for the devices of other users.
+Every challenge result is counted per device and epoch, together with the bytes
+the observer has placed on that device (fragments and filler). In the last 10 %
+of an epoch each member submits an `Observations` op for the devices of other
+users: challenges sent and passed (at most 288 per device per epoch) and
+verified bytes = placed bytes × passed / sent. The ledger adds the verified
+bytes of all observers up per user; at the next epoch's snapshot they become
+that user's **credit** (`bp members`) and the count starts again.
 
 QoS lives in memory only; reputation lives in the ledger.
 

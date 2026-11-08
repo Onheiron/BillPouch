@@ -189,6 +189,15 @@ fn challenges(outgoing: &OutgoingAssignments, fillers: &Fillers) -> Vec<Challeng
     out
 }
 
+fn placed_bytes(outgoing: &OutgoingAssignments, fillers: &Fillers, peer: &str) -> u64 {
+    let fragments: u64 = outgoing
+        .read()
+        .map(|o| o.get(peer).map_or(0, |f| f.iter().map(|f| f.size).sum()))
+        .unwrap_or(0);
+    let filler = fillers.read().map_or(0, |b| b.bytes_for(peer));
+    fragments + filler
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_pos_round(
     outgoing_assignments: &OutgoingAssignments,
@@ -224,7 +233,8 @@ async fn run_pos_round(
                 q.entry(peer.clone()).record_pos_failure();
             }
         }
-        observe(observations, &peer, passed, crate::chain::now_ms());
+        let placed = placed_bytes(outgoing_assignments, fillers, &peer);
+        observe(observations, &peer, passed, placed, crate::chain::now_ms());
         let is_suspected = qos
             .read()
             .is_ok_and(|q| q.fault_score(&peer) >= FAULT_SUSPECTED);
