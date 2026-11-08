@@ -210,6 +210,28 @@ else
     fail "carlo-laptop's copy differs (${SUM_A} vs ${SUM_C})"
 fi
 
+docker exec bp-laptop bp hatch pouch --network smoketest --tier T1 >/dev/null 2>&1 || true
+info "Waiting up to 150s for carlo-pouch to fill the new Pouch on carlo-laptop..."
+FILLED=false
+for _ in $(seq 1 75); do
+    if grep -q "filled free space" <<< "$(docker logs bp-pouch 2>&1)"; then
+        FILLED=true
+        break
+    fi
+    sleep 2
+done
+if [ "${FILLED}" = true ]; then
+    pass "carlo-pouch filled the free space of the new Pouch with random data"
+else
+    fail "carlo-pouch never filled the new Pouch"
+fi
+FILLERS=$(docker exec bp-laptop bash -c 'ls ~/.local/share/billpouch/storage/*/*/fillers 2>/dev/null | wc -l' || echo 0)
+if [ "${FILLERS}" -gt 0 ]; then
+    pass "carlo-laptop's Pouch holds ${FILLERS} filler blob(s)"
+else
+    fail "carlo-laptop's Pouch holds no filler"
+fi
+
 header "10. Expulsion and key rotation"
 POST_FP=$(docker exec bp-post bp status 2>/dev/null | grep -oP 'fingerprint\s*:\s*\K\S+' || true)
 EXPEL_OUT=$(docker exec bp-pouch bp expel smoketest "${POST_FP}" 2>&1) || true

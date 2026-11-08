@@ -1,5 +1,7 @@
 pub mod encryption;
+pub mod filler;
 pub mod fragment;
+pub mod merkle;
 pub mod meta;
 pub mod tier;
 
@@ -13,12 +15,27 @@ use crate::{
     config,
     error::{BpError, BpResult},
 };
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PosTarget {
+    Fragment {
+        chunk_id: String,
+        fragment_id: String,
+    },
+    Filler {
+        blob_id: String,
+    },
+}
 
 pub struct StorageManager {
     root: PathBuf,
     pub meta: PouchMeta,
     pub index: FragmentIndex,
+    fillers: BTreeMap<String, u64>,
 }
 
 impl StorageManager {
@@ -34,6 +51,7 @@ impl StorageManager {
             root,
             meta,
             index: FragmentIndex::new(),
+            fillers: BTreeMap::new(),
         })
     }
 
@@ -48,15 +66,79 @@ impl StorageManager {
 
         let meta = PouchMeta::load(&meta_path)?;
         let index = Self::build_index(&root)?;
+        let fillers = std::fs::read_dir(root.join("fillers"))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| Some((e.file_name().into_string().ok()?, e.metadata().ok()?.len())))
+            .collect();
 
-        Ok(Self { root, meta, index })
+        Ok(Self {
+            root,
+            meta,
+            index,
+            fillers,
+        })
     }
 
     pub fn owner_of(&self, chunk_id: &str) -> Option<String> {
         std::fs::read_to_string(self.root.join("fragments").join(chunk_id).join("owner")).ok()
     }
 
-    pub fn store_fragment(&mut self, fragment: &EncodedFragment, owner_key: &str) -> BpResult<()> {
+    pub fn filler_bytes(&self) -> u64 {
+        self.fillers.values().sum()
+    }
+
+    pub fn store_filler(&mut self, blob_id: &str, data: &[u8]) -> BpResult<()> {
+        let size = data.len() as u64;
+        if !self.meta.has_capacity(size) || self.fillers.contains_key(blob_id) {
+            return Err(BpError::Storage("no room for filler".into()));
+        }
+        let dir = self.root.join("fillers");
+        std::fs::create_dir_all(&dir).map_err(BpError::Io)?;
+        std::fs::write(dir.join(blob_id), data).map_err(BpError::Io)?;
+        self.fillers.insert(blob_id.to_string(), size);
+        self.meta.storage_bytes_used += size;
+        self.save_meta()
+    }
+
+    fn evict_fillers(&mut self, needed: u64) -> BpResult<Vec<String>> {
+        let mut evicted = Vec::new();
+        while !self.meta.has_capacity(needed) {
+            let Some((blob_id, size)) = self.fillers.pop_first() else {
+                break;
+            };
+            let _ = std::fs::remove_file(self.root.join("fillers").join(&blob_id));
+            self.meta.storage_bytes_used = self.meta.storage_bytes_used.saturating_sub(size);
+            evicted.push(blob_id);
+        }
+        if !evicted.is_empty() {
+            self.save_meta()?;
+        }
+        Ok(evicted)
+    }
+
+    pub fn prove(&self, target: &PosTarget, index: usize) -> Option<merkle::Proof> {
+        let data = match target {
+            PosTarget::Fragment {
+                chunk_id,
+                fragment_id,
+            } => self.load_fragment(chunk_id, fragment_id).ok()?.to_bytes(),
+            PosTarget::Filler { blob_id } => {
+                if !self.fillers.contains_key(blob_id) {
+                    return None;
+                }
+                std::fs::read(self.root.join("fillers").join(blob_id)).ok()?
+            }
+        };
+        merkle::prove(&data, index)
+    }
+
+    pub fn store_fragment(
+        &mut self,
+        fragment: &EncodedFragment,
+        owner_key: &str,
+    ) -> BpResult<Vec<String>> {
         if self
             .owner_of(&fragment.chunk_id)
             .is_some_and(|owner| owner != owner_key)
@@ -68,6 +150,7 @@ impl StorageManager {
         }
         let bytes = fragment.to_bytes();
         let size = bytes.len() as u64;
+        let evicted = self.evict_fillers(size)?;
 
         if !self.meta.has_capacity(size) {
             return Err(BpError::Storage(format!(
@@ -93,7 +176,7 @@ impl StorageManager {
             size_bytes: size,
         });
 
-        Ok(())
+        Ok(evicted)
     }
 
     pub fn load_fragment(&self, chunk_id: &str, fragment_id: &str) -> BpResult<EncodedFragment> {
@@ -255,6 +338,40 @@ mod tests {
             sm.store_fragment(&frags[1], "carlo").unwrap();
             assert_eq!(sm.owner_of(&frags[0].chunk_id).as_deref(), Some("carlo"));
             assert_eq!(sm.index.fragment_count(), 2);
+        });
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn fragments_push_fillers_out_and_both_can_be_proven() {
+        with_temp_home_storage(|| {
+            let frags = rlnc::encode(CHUNK, 1, 1).unwrap();
+            let size = frags[0].to_bytes().len() as u64;
+            let mut sm = StorageManager::init("net".into(), "svc".into(), size + 10).unwrap();
+            let filler = vec![7u8; size as usize];
+            sm.store_filler("blob", &filler).unwrap();
+            assert!(sm.store_filler("more", &filler).is_err());
+            let blob = PosTarget::Filler {
+                blob_id: "blob".into(),
+            };
+            let proof = sm.prove(&blob, 0).unwrap();
+            let blocks = merkle::block_count(filler.len());
+            assert!(merkle::verify(&merkle::root(&filler), blocks, &proof));
+
+            let evicted = sm.store_fragment(&frags[0], "owner").unwrap();
+            assert_eq!(evicted, vec!["blob".to_string()]);
+            assert_eq!(sm.filler_bytes(), 0);
+            assert!(sm.prove(&blob, 0).is_none());
+            let fragment = PosTarget::Fragment {
+                chunk_id: frags[0].chunk_id.clone(),
+                fragment_id: frags[0].id.clone(),
+            };
+            let proof = sm.prove(&fragment, 0).unwrap();
+            assert!(merkle::verify(
+                &merkle::root(&frags[0].to_bytes()),
+                1,
+                &proof
+            ));
         });
     }
 

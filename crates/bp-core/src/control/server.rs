@@ -754,7 +754,8 @@ fn pouch_stats(
                 (
                     sm.meta.storage_bytes_bid,
                     sm.meta.storage_bytes_used,
-                    (sm.meta.available_bytes() as f64 * factor).round() as u64,
+                    ((sm.meta.available_bytes() + sm.filler_bytes()) as f64 * factor).round()
+                        as u64,
                 )
             });
             PouchStat {
@@ -769,6 +770,18 @@ fn pouch_stats(
         .collect()
 }
 
+fn pouch_metadata(
+    state: &DaemonState,
+    svc: &ServiceInfo,
+) -> std::collections::HashMap<String, serde_json::Value> {
+    let mut metadata = svc.metadata.clone();
+    if let Some(sm) = state.storage_managers.read().unwrap().get(&svc.id) {
+        let free = sm.read().unwrap().meta.available_bytes();
+        metadata.insert("free_bytes".into(), serde_json::Value::from(free));
+    }
+    metadata
+}
+
 async fn announce_service(state: &DaemonState, svc: &ServiceInfo) {
     let info = NodeInfo {
         peer_id: state.identity.peer_id.to_string(),
@@ -779,7 +792,7 @@ async fn announce_service(state: &DaemonState, svc: &ServiceInfo) {
         network_id: svc.network_id.clone(),
         listen_addrs: vec![],
         announced_at: chrono::Utc::now().timestamp() as u64,
-        metadata: svc.metadata.clone(),
+        metadata: pouch_metadata(state, svc),
         device_cert: state.identity.cert.clone(),
     };
     let _ = state

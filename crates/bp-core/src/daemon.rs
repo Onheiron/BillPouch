@@ -78,6 +78,9 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
     let net_identity = identity.clone();
     let net_observations = Arc::clone(&observations);
     let (file_tx, mut file_rx) = mpsc::channel(256);
+    let fillers: crate::network::Fillers =
+        Arc::new(RwLock::new(crate::storage::filler::FillerBook::load()));
+    let net_fillers = Arc::clone(&fillers);
     tokio::spawn(async move {
         if let Err(e) = network::run_network_loop(
             swarm,
@@ -91,6 +94,7 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
             net_identity,
             net_observations,
             file_tx,
+            net_fillers,
         )
         .await
         {
@@ -132,13 +136,18 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
     let monitor_tx = net_tx.clone();
     let monitor_outgoing = Arc::clone(&outgoing_assignments);
     let monitor_observations = Arc::clone(&observations);
+    let monitor_me = identity.peer_id.to_string();
+    let monitor_storage = Arc::clone(&storage_managers);
     tokio::spawn(async move {
         run_quality_monitor(
+            monitor_me,
             monitor_state,
             monitor_qos,
             monitor_observations,
             monitor_tx,
             monitor_outgoing,
+            monitor_storage,
+            fillers,
         )
         .await;
     });

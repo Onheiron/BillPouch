@@ -76,6 +76,8 @@ pub struct OutgoingFragment {
     pub chunk_id: String,
     pub fragment_id: String,
     pub grant: crate::files::Grant,
+    pub root: [u8; 32],
+    pub blocks: usize,
 }
 
 pub type OutgoingAssignments = Arc<RwLock<HashMap<String, Vec<OutgoingFragment>>>>;
@@ -102,7 +104,12 @@ pub enum Gossip {
         chunk_id: String,
         member: String,
     },
+    FillerEvicted {
+        blobs: Vec<String>,
+    },
 }
+
+pub type Fillers = Arc<RwLock<crate::storage::filler::FillerBook>>;
 
 pub type FileGossip = mpsc::Sender<(String, Gossip)>;
 
@@ -145,12 +152,25 @@ pub enum NetworkCommand {
     },
     ProofOfStorage {
         peer_id: PeerId,
-        chunk_id: String,
-        fragment_id: String,
-        nonce: u64,
+        target: crate::storage::PosTarget,
+        index: usize,
+        resp_tx: tokio::sync::oneshot::Sender<Option<crate::storage::merkle::Proof>>,
+    },
+    Fill {
+        peer_id: PeerId,
+        network: String,
+        blob_id: String,
+        data: Vec<u8>,
         resp_tx: tokio::sync::oneshot::Sender<bool>,
     },
 }
+
+type PendingProofs = HashMap<
+    request_response::OutboundRequestId,
+    tokio::sync::oneshot::Sender<Option<crate::storage::merkle::Proof>>,
+>;
+type PendingFills =
+    HashMap<request_response::OutboundRequestId, tokio::sync::oneshot::Sender<bool>>;
 
 pub fn build_swarm(
     keypair: libp2p::identity::Keypair,
@@ -187,6 +207,7 @@ pub async fn run_network_loop(
     identity: crate::identity::Identity,
     observations: ObservationLog,
     file_gossip: FileGossip,
+    fillers: Fillers,
 ) -> BpResult<()> {
     swarm
         .listen_on(listen_addr.clone())
@@ -207,10 +228,8 @@ pub async fn run_network_loop(
         (u64, tokio::sync::oneshot::Sender<u64>),
     > = HashMap::new();
 
-    let mut pending_pos: HashMap<
-        request_response::OutboundRequestId,
-        tokio::sync::oneshot::Sender<bool>,
-    > = HashMap::new();
+    let mut pending_pos: PendingProofs = HashMap::new();
+    let mut pending_fills: PendingFills = HashMap::new();
 
     let mut pending_syncs: HashMap<request_response::OutboundRequestId, String> = HashMap::new();
 
@@ -245,7 +264,7 @@ pub async fn run_network_loop(
     loop {
         tokio::select! {
             event = swarm.select_next_some() => {
-                handle_swarm_event(event, &mut swarm, &state, &networks, &topics, &chains, &identity, &file_gossip, &storage_managers, &mut pending_fetches, &mut pending_pings, &mut pending_pos, &mut pending_syncs, &remote_fragment_index, &mut local_kad_peers).await;
+                handle_swarm_event(event, &mut swarm, &state, &networks, &topics, &chains, &identity, &file_gossip, &storage_managers, &mut pending_fetches, &mut pending_pings, &mut pending_pos, &mut pending_fills, &fillers, &mut pending_syncs, &remote_fragment_index, &mut local_kad_peers).await;
             }
             cmd = cmd_rx.recv() => {
                 match cmd {
@@ -285,6 +304,8 @@ pub async fn run_network_loop(
                         data,
                         grant,
                     }) => {
+                        let root = crate::storage::merkle::root(&data);
+                        let blocks = crate::storage::merkle::block_count(data.len());
                         let req = FragmentRequest::Store {
                             chunk_id: chunk_id.clone(),
                             fragment_id: fragment_id.clone(),
@@ -303,6 +324,8 @@ pub async fn run_network_loop(
                                     chunk_id: chunk_id.clone(),
                                     fragment_id: fragment_id.clone(),
                                     grant,
+                                    root,
+                                    blocks,
                                 });
                         }
                         tracing::debug!(peer=%peer_id, chunk=%chunk_id, frag=%fragment_id, "PushFragment sent");
@@ -347,28 +370,28 @@ pub async fn run_network_loop(
                     }
                     Some(NetworkCommand::ProofOfStorage {
                         peer_id,
-                        chunk_id,
-                        fragment_id,
-                        nonce,
+                        target,
+                        index,
                         resp_tx,
                     }) => {
-                        let req = FragmentRequest::ProofOfStorage {
-                            chunk_id: chunk_id.clone(),
-                            fragment_id: fragment_id.clone(),
-                            nonce,
-                        };
                         let req_id = swarm
                             .behaviour_mut()
                             .fragment_exchange
-                            .send_request(&peer_id, req);
+                            .send_request(&peer_id, FragmentRequest::ProofOfStorage { target, index });
                         pending_pos.insert(req_id, resp_tx);
-                        tracing::debug!(
-                            peer = %peer_id,
-                            chunk = %chunk_id,
-                            frag = %fragment_id,
-                            nonce = %nonce,
-                            "ProofOfStorage challenge sent"
-                        );
+                    }
+                    Some(NetworkCommand::Fill {
+                        peer_id,
+                        network,
+                        blob_id,
+                        data,
+                        resp_tx,
+                    }) => {
+                        let req_id = swarm
+                            .behaviour_mut()
+                            .fragment_exchange
+                            .send_request(&peer_id, FragmentRequest::Fill { network, blob_id, data });
+                        pending_fills.insert(req_id, resp_tx);
                     }
                 }
             }
@@ -460,10 +483,9 @@ async fn handle_swarm_event(
         request_response::OutboundRequestId,
         (u64, tokio::sync::oneshot::Sender<u64>),
     >,
-    pending_pos: &mut HashMap<
-        request_response::OutboundRequestId,
-        tokio::sync::oneshot::Sender<bool>,
-    >,
+    pending_pos: &mut PendingProofs,
+    pending_fills: &mut PendingFills,
+    fillers: &Fillers,
     pending_syncs: &mut HashMap<request_response::OutboundRequestId, String>,
     remote_fragment_index: &Arc<RwLock<fragment_gossip::RemoteFragmentIndex>>,
     known_peers: &mut kad_store::KadPeers,
@@ -511,6 +533,7 @@ async fn handle_swarm_event(
                 networks,
                 state,
                 chains,
+                fillers,
                 remote_fragment_index,
             );
             if let Some(from) = behind {
@@ -624,7 +647,11 @@ async fn handle_swarm_event(
             {
                 serve_commits(chains, &peer, network, *from, cert)
             } else if let Some(user) = requester {
-                serve_fragment_request(&request, storage_managers, &user)
+                let (response, evicted) = serve_fragment_request(&request, storage_managers, &user);
+                for (network, blobs) in evicted {
+                    publish(swarm, networks, &network, &Gossip::FillerEvicted { blobs });
+                }
+                response
             } else {
                 tracing::warn!(peer=%peer, "Refused fragment request from a non-member");
                 FragmentResponse::NotFound
@@ -660,19 +687,17 @@ async fn handle_swarm_event(
                     return;
                 }
             }
-            if let FragmentResponse::ProofOfStorageOk { .. } = &response {
-                if let Some(tx) = pending_pos.remove(&request_id) {
-                    tracing::debug!(peer = %peer, "ProofOfStorage: proof received");
-                    let _ = tx.send(true);
-                    return;
-                }
+            if let Some(tx) = pending_pos.remove(&request_id) {
+                let proof = match response {
+                    FragmentResponse::ProofOfStorageOk { proof } => Some(proof),
+                    _ => None,
+                };
+                let _ = tx.send(proof);
+                return;
             }
-            if let FragmentResponse::NotFound = &response {
-                if let Some(tx) = pending_pos.remove(&request_id) {
-                    tracing::debug!(peer = %peer, "ProofOfStorage: fragment not found");
-                    let _ = tx.send(false);
-                    return;
-                }
+            if let Some(tx) = pending_fills.remove(&request_id) {
+                let _ = tx.send(matches!(response, FragmentResponse::Stored));
+                return;
             }
             if let Some(network) = pending_syncs.remove(&request_id) {
                 if let FragmentResponse::Commits { commits } = response {
@@ -708,6 +733,9 @@ async fn handle_swarm_event(
             pending_pings.remove(&request_id);
             pending_syncs.remove(&request_id);
             if let Some(tx) = pending_pos.remove(&request_id) {
+                let _ = tx.send(None);
+            }
+            if let Some(tx) = pending_fills.remove(&request_id) {
                 let _ = tx.send(false);
             }
         }
@@ -751,6 +779,7 @@ fn handle_gossip(
     networks: &HashMap<String, ([u8; 32], gossipsub::IdentTopic)>,
     state: &Arc<RwLock<NetworkState>>,
     chains: &Chains,
+    fillers: &Fillers,
     remote_fragment_index: &Arc<RwLock<fragment_gossip::RemoteFragmentIndex>>,
 ) -> Option<(String, u64)> {
     match gossip {
@@ -793,6 +822,12 @@ fn handle_gossip(
                 publish(swarm, networks, network_id, &Gossip::Consensus { msg });
             }
             behind
+        }
+        Gossip::FillerEvicted { blobs } => {
+            if let (Some(pouch), Ok(mut book)) = (publisher, fillers.write()) {
+                book.forget(&pouch.to_string(), &blobs);
+            }
+            None
         }
         Gossip::Head { .. }
         | Gossip::HeadRequest { .. }
@@ -838,13 +873,16 @@ fn serve_commits(
     }
 }
 
+type Evictions = Vec<(String, Vec<String>)>;
+
 fn serve_fragment_request(
     req: &FragmentRequest,
     storage_managers: &StorageManagerMap,
     requester: &str,
-) -> FragmentResponse {
+) -> (FragmentResponse, Evictions) {
     let managers = storage_managers.read().unwrap();
-    match req {
+    let mut evictions = Vec::new();
+    let response = match req {
         FragmentRequest::FetchChunkFragments { chunk_id, grant } => {
             let mut fragments = Vec::new();
             for sm_arc in managers.values() {
@@ -875,27 +913,33 @@ fn serve_fragment_request(
             grant,
         } => {
             use crate::coding::rlnc::EncodedFragment;
-            if !grant.is_owner_claim(chunk_id) || grant.grantee != requester {
-                return FragmentResponse::StoreFailed {
-                    reason: "a fragment can only be stored by a device of its owner".into(),
-                };
-            }
             match EncodedFragment::from_bytes(fragment_id.clone(), chunk_id.clone(), data) {
+                _ if !grant.is_owner_claim(chunk_id) || grant.grantee != requester => {
+                    FragmentResponse::StoreFailed {
+                        reason: "a fragment can only be stored by a device of its owner".into(),
+                    }
+                }
                 Ok(fragment) => {
-                    for sm_arc in managers.values() {
+                    let stored = managers.values().find_map(|sm_arc| {
                         let mut sm = sm_arc.write().unwrap();
                         match sm.store_fragment(&fragment, &grant.owner_key) {
-                            Ok(()) => {
-                                tracing::debug!(chunk=%chunk_id, frag=%fragment_id, "Remote fragment stored");
-                                return FragmentResponse::Stored;
-                            }
+                            Ok(evicted) => Some((sm.meta.network_id.clone(), evicted)),
                             Err(e) => {
                                 tracing::debug!("Store attempt failed: {e}");
+                                None
                             }
                         }
-                    }
-                    FragmentResponse::StoreFailed {
-                        reason: "No storage manager with capacity".into(),
+                    });
+                    match stored {
+                        Some((network, evicted)) => {
+                            if !evicted.is_empty() {
+                                evictions.push((network, evicted));
+                            }
+                            FragmentResponse::Stored
+                        }
+                        None => FragmentResponse::StoreFailed {
+                            reason: "No storage manager with capacity".into(),
+                        },
                     }
                 }
                 Err(e) => FragmentResponse::StoreFailed {
@@ -903,43 +947,33 @@ fn serve_fragment_request(
                 },
             }
         }
-        FragmentRequest::Ping { nonce } => FragmentResponse::Pong { nonce: *nonce },
-        FragmentRequest::Commits { .. } => FragmentResponse::NotFound,
-        FragmentRequest::ProofOfStorage {
-            chunk_id,
-            fragment_id,
-            nonce,
+        FragmentRequest::Fill {
+            network,
+            blob_id,
+            data,
         } => {
-            for sm_arc in managers.values() {
-                let sm = sm_arc.read().unwrap();
-                if sm
-                    .index
-                    .fragments_for_chunk(chunk_id)
-                    .iter()
-                    .any(|m| m.fragment_id == *fragment_id)
-                {
-                    match sm.load_fragment(chunk_id, fragment_id) {
-                        Ok(fragment) => {
-                            let data = fragment.to_bytes();
-                            let mut hasher = blake3::Hasher::new();
-                            hasher.update(&data);
-                            hasher.update(&nonce.to_le_bytes());
-                            let proof: [u8; 32] = hasher.finalize().into();
-                            return FragmentResponse::ProofOfStorageOk { proof };
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                chunk = %chunk_id,
-                                frag = %fragment_id,
-                                "serve_fragment PoS load error: {e}"
-                            );
-                        }
-                    }
+            let stored = managers.values().any(|sm_arc| {
+                let mut sm = sm_arc.write().unwrap();
+                sm.meta.network_id == *network && sm.store_filler(blob_id, data).is_ok()
+            });
+            if stored {
+                FragmentResponse::Stored
+            } else {
+                FragmentResponse::StoreFailed {
+                    reason: "no room for filler".into(),
                 }
             }
-            FragmentResponse::NotFound
         }
-    }
+        FragmentRequest::Ping { nonce } => FragmentResponse::Pong { nonce: *nonce },
+        FragmentRequest::Commits { .. } => FragmentResponse::NotFound,
+        FragmentRequest::ProofOfStorage { target, index } => managers
+            .values()
+            .find_map(|sm| sm.read().unwrap().prove(target, *index))
+            .map_or(FragmentResponse::NotFound, |proof| {
+                FragmentResponse::ProofOfStorageOk { proof }
+            }),
+    };
+    (response, evictions)
 }
 
 #[cfg(test)]

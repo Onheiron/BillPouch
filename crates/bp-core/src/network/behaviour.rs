@@ -1,3 +1,4 @@
+use futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use libp2p::{
     autonat, gossipsub, identify, identity::Keypair, kad, mdns, relay, request_response,
     swarm::NetworkBehaviour, PeerId, StreamProtocol,
@@ -21,9 +22,13 @@ pub enum FragmentRequest {
         nonce: u64,
     },
     ProofOfStorage {
-        chunk_id: String,
-        fragment_id: String,
-        nonce: u64,
+        target: crate::storage::PosTarget,
+        index: usize,
+    },
+    Fill {
+        network: String,
+        blob_id: String,
+        data: Vec<u8>,
     },
     Commits {
         network: String,
@@ -46,11 +51,88 @@ pub enum FragmentResponse {
         nonce: u64,
     },
     ProofOfStorageOk {
-        proof: [u8; 32],
+        proof: crate::storage::merkle::Proof,
     },
     Commits {
         commits: Vec<crate::consensus::Commit>,
     },
+}
+
+pub const REQUEST_SIZE_MAXIMUM: u64 = 16 * 1024 * 1024;
+pub const RESPONSE_SIZE_MAXIMUM: u64 = 64 * 1024 * 1024;
+
+#[derive(Debug, Clone, Default)]
+pub struct FragmentCodec;
+
+fn decode<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> std::io::Result<T> {
+    cbor4ii::serde::from_slice(bytes)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))
+}
+
+fn encode<T: Serialize>(value: &T) -> std::io::Result<Vec<u8>> {
+    cbor4ii::serde::to_vec(Vec::new(), value)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))
+}
+
+#[async_trait::async_trait]
+impl request_response::Codec for FragmentCodec {
+    type Protocol = StreamProtocol;
+    type Request = FragmentRequest;
+    type Response = FragmentResponse;
+
+    async fn read_request<T>(
+        &mut self,
+        _: &StreamProtocol,
+        io: &mut T,
+    ) -> std::io::Result<FragmentRequest>
+    where
+        T: AsyncRead + Unpin + Send,
+    {
+        let mut bytes = Vec::new();
+        io.take(REQUEST_SIZE_MAXIMUM)
+            .read_to_end(&mut bytes)
+            .await?;
+        decode(&bytes)
+    }
+
+    async fn read_response<T>(
+        &mut self,
+        _: &StreamProtocol,
+        io: &mut T,
+    ) -> std::io::Result<FragmentResponse>
+    where
+        T: AsyncRead + Unpin + Send,
+    {
+        let mut bytes = Vec::new();
+        io.take(RESPONSE_SIZE_MAXIMUM)
+            .read_to_end(&mut bytes)
+            .await?;
+        decode(&bytes)
+    }
+
+    async fn write_request<T>(
+        &mut self,
+        _: &StreamProtocol,
+        io: &mut T,
+        request: FragmentRequest,
+    ) -> std::io::Result<()>
+    where
+        T: AsyncWrite + Unpin + Send,
+    {
+        io.write_all(&encode(&request)?).await
+    }
+
+    async fn write_response<T>(
+        &mut self,
+        _: &StreamProtocol,
+        io: &mut T,
+        response: FragmentResponse,
+    ) -> std::io::Result<()>
+    where
+        T: AsyncWrite + Unpin + Send,
+    {
+        io.write_all(&encode(&response)?).await
+    }
 }
 
 #[derive(NetworkBehaviour)]
@@ -59,7 +141,7 @@ pub struct BillPouchBehaviour {
     pub kad: kad::Behaviour<kad::store::MemoryStore>,
     pub identify: identify::Behaviour,
     pub mdns: mdns::tokio::Behaviour,
-    pub fragment_exchange: request_response::cbor::Behaviour<FragmentRequest, FragmentResponse>,
+    pub fragment_exchange: request_response::Behaviour<FragmentCodec>,
     pub autonat: autonat::Behaviour,
     pub relay: relay::client::Behaviour,
 }
@@ -92,7 +174,8 @@ impl BillPouchBehaviour {
 
         let mdns = mdns::tokio::Behaviour::new(mdns::Config::default(), peer_id)?;
 
-        let fragment_exchange = request_response::cbor::Behaviour::new(
+        let fragment_exchange = request_response::Behaviour::with_codec(
+            FragmentCodec,
             [(
                 StreamProtocol::new("/billpouch/fragment/1.1.0"),
                 request_response::ProtocolSupport::Full,
@@ -111,5 +194,25 @@ impl BillPouchBehaviour {
             autonat,
             relay: relay_client,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn requests_larger_than_a_mebibyte_round_trip() {
+        let request = FragmentRequest::Fill {
+            network: "amici".into(),
+            blob_id: "b".into(),
+            data: vec![7; 2 * 1024 * 1024],
+        };
+        let bytes = encode(&request).unwrap();
+        assert!((bytes.len() as u64) < REQUEST_SIZE_MAXIMUM);
+        match decode::<FragmentRequest>(&bytes).unwrap() {
+            FragmentRequest::Fill { data, .. } => assert_eq!(data.len(), 2 * 1024 * 1024),
+            other => panic!("unexpected {other:?}"),
+        }
     }
 }

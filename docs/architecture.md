@@ -166,8 +166,22 @@ For every peer the daemon keeps a QoS record (`network/qos.rs`):
   At 90 (*suspected*) the fragments it holds are recoded and pushed to a peer
   below 70 (*degraded*).
 
-**Proof-of-Storage**: every 300 s the daemon picks one fragment it placed on
-each peer and asks for `BLAKE3(fragment ‖ nonce)`. A reply within 10 s passes.
+**Proof-of-Storage** (`storage/merkle.rs`): data is split into 4 KiB blocks
+and committed with a BLAKE3 Merkle tree. Every 300 s the daemon picks, for each
+Pouch, one fragment it placed there and one filler blob it sent there, and asks
+for a random block with its Merkle path. The challenger keeps only the root
+(computed when it pushed the fragment); a reply within 10 s passes if the path
+leads to that root, so anyone holding the root can check it.
+
+**Filling** (`storage/filler.rs`): a Pouch announces its free space
+(`free_bytes`) and the other Pouches of the network fill it at once, each an
+equal share, in 1 MiB blobs of random data (at most 256 per sponsor per minute).
+A blob's 4 KiB blocks are generated from a secret seed only the sponsor knows,
+so the Pouch cannot compress them or rebuild them on demand; the sponsor keeps
+only the seed and the Merkle root and challenges the blobs like fragments. When
+a real fragment needs room the Pouch evicts filler blobs and gossips
+`FillerEvicted`; their sponsors stop challenging them and refill later. Your
+own available space counts filler as free.
 
 Every challenge result is counted per device and epoch. In the last 10 % of an
 epoch each member submits an `Observations` op with its counts (at most 288
