@@ -201,6 +201,7 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             }
 
             let mut metadata = metadata;
+            let mut pouch = None;
             if service_type == ServiceType::Pouch {
                 let Some(tier) = metadata
                     .get("tier")
@@ -209,7 +210,22 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 else {
                     return ControlResponse::err("a Pouch needs a storage tier: T1 … T5");
                 };
-                metadata.insert("storage_bytes".into(), tier.quota_bytes().into());
+                let quota = match metadata.get("size_bytes").map(|v| v.as_u64()) {
+                    None => tier.quota_bytes(),
+                    Some(Some(size)) if (MIN_POUCH_BYTES..=tier.quota_bytes()).contains(&size) => {
+                        size
+                    }
+                    Some(_) => {
+                        return ControlResponse::err(format!(
+                            "a {tier:?} Pouch offers between {} MiB and {} MiB",
+                            MIN_POUCH_BYTES >> 20,
+                            tier.quota_bytes() >> 20
+                        ))
+                    }
+                };
+                metadata.remove("size_bytes");
+                metadata.insert("storage_bytes".into(), quota.into());
+                pouch = Some((tier, quota));
             }
 
             let info = ServiceInfo::new(service_type, network_id.clone(), metadata.clone());
@@ -217,13 +233,8 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
 
             state.services.write().unwrap().register(info);
 
-            if service_type == ServiceType::Pouch {
-                let quota = metadata
-                    .get("storage_bytes")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0);
-
-                match StorageManager::init(network_id.clone(), service_id.clone(), quota) {
+            if let Some((tier, quota)) = pouch {
+                match StorageManager::init(network_id.clone(), service_id.clone(), tier, quota) {
                     Ok(sm) => {
                         state
                             .storage_managers
@@ -773,6 +784,8 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
 }
 
 const MEMBERSHIP_WAIT_SECS: u64 = 90;
+
+const MIN_POUCH_BYTES: u64 = 64 << 20;
 
 async fn wait_until(state: &DaemonState, network_id: &str, done: impl Fn(&Chain) -> bool) -> bool {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(MEMBERSHIP_WAIT_SECS);

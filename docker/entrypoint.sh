@@ -57,7 +57,7 @@ if [ -n "${SERVICES}" ]; then
     IFS=',' read -ra SVC_LIST <<< "${SERVICES}"
     for svc in "${SVC_LIST[@]}"; do
         if [ "${svc}" = "pouch" ]; then
-            bp hatch pouch --network "${NETWORK}" --tier "${STORAGE_TIER:-T1}" || true
+            bp hatch pouch --network "${NETWORK}" --tier "${STORAGE_TIER:-T1}" ${STORAGE_SIZE:+--size "${STORAGE_SIZE}"} || true
         else
             bp hatch "${svc}" --network "${NETWORK}" || true
         fi

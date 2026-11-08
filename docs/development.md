@@ -45,7 +45,7 @@ docker compose -f docker-compose.smoke.yml down -v
 ./playground.sh down
 ```
 
-Every `./playground.sh up` starts from a clean network.
+Every `./playground.sh up` starts from a clean network. Its Pouches offer 512 MiB each (`STORAGE_SIZE`), so the network fills them in about a minute without eating your disk; start yours with `bp hatch pouch --network playground --tier T1 --size 512MiB`.
 
 ## CI and releases (`.github/workflows/`)
 

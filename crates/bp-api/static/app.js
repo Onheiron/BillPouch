@@ -404,6 +404,14 @@ const TIERS = [
   ["T5", "5 TiB"],
 ];
 
+const SIZES = [
+  ["", "Offer the whole tier"],
+  [String(512 * MIB), "Offer 512 MiB"],
+  [String(1024 * MIB), "Offer 1 GiB"],
+  [String(2048 * MIB), "Offer 2 GiB"],
+  [String(5120 * MIB), "Offer 5 GiB"],
+];
+
 function renderMenu() {
   const menu = $("service-menu");
   if (!state.data) return;
@@ -416,7 +424,8 @@ function renderMenu() {
   const pouch = running("pouch")
     ? `<div class="option"><strong>Pouch</strong><span class="running">Running on this node</span></div>`
     : `<div class="option"><strong>Pouch</strong><p>Offer disk space to the network. It is filled and challenged before it counts as credit.</p>
-        <div class="row"><select id="tier">${TIERS.map(([t, size]) => `<option value="${t}">${t} · ${size}</option>`).join("")}</select>
+        <div class="row"><select id="tier">${TIERS.map(([t, size]) => `<option value="${t}">${t} · ${size}</option>`).join("")}</select></div>
+        <div class="row"><select id="size">${SIZES.map(([bytes, label]) => `<option value="${bytes}">${label}</option>`).join("")}</select>
         <button class="button accent small" data-hatch="pouch">Start</button></div></div>`;
   const bill = running("bill")
     ? `<div class="option"><strong>Bill</strong><span class="running">Running on this node</span></div>`
@@ -427,7 +436,11 @@ function renderMenu() {
 
 async function hatch(kind) {
   const network = uploadNetwork();
-  const metadata = kind === "pouch" ? { tier: $("tier").value } : {};
+  const metadata = {};
+  if (kind === "pouch") {
+    metadata.tier = $("tier").value;
+    if ($("size").value) metadata.size_bytes = Number($("size").value);
+  }
   try {
     await api("/services", {
       method: "POST",

@@ -59,6 +59,12 @@ enum Cmd {
         )]
         #[arg(long)]
         tier: Option<String>,
+
+        #[arg(
+            help = "For pouch: offer less than the whole tier, e.g. 512MiB or 2GiB (at least 64MiB)"
+        )]
+        #[arg(long, value_parser = parse_size)]
+        size: Option<u64>,
     },
 
     #[command(about = "Show all known peers and network info")]
@@ -332,6 +338,28 @@ enum NetworkAction {
     },
 }
 
+fn parse_size(text: &str) -> Result<u64, String> {
+    let text = text.trim();
+    let split = text
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(text.len());
+    let (number, unit) = text.split_at(split);
+    let number: u64 = number
+        .parse()
+        .map_err(|_| format!("'{text}' is not a size like 512MiB or 2GiB"))?;
+    let shift = match unit.trim().to_ascii_lowercase().as_str() {
+        "" | "b" => 0,
+        "k" | "kib" => 10,
+        "m" | "mib" => 20,
+        "g" | "gib" => 30,
+        "t" | "tib" => 40,
+        _ => return Err(format!("'{text}' is not a size like 512MiB or 2GiB")),
+    };
+    number
+        .checked_mul(1 << shift)
+        .ok_or_else(|| format!("'{text}' is too large"))
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
@@ -370,11 +398,15 @@ async fn main() -> anyhow::Result<()> {
             service_type,
             network,
             tier,
+            size,
         }) => {
             let svc_type: bp_core::service::ServiceType = service_type.parse()?;
             let mut metadata: HashMap<String, serde_json::Value> = HashMap::new();
             if let Some(tier) = tier {
                 metadata.insert("tier".into(), serde_json::Value::from(tier));
+            }
+            if let Some(size) = size {
+                metadata.insert("size_bytes".into(), serde_json::Value::from(size));
             }
             commands::hatch::hatch(svc_type, network, metadata).await?;
         }
@@ -510,6 +542,15 @@ async fn main() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use clap::CommandFactory;
+
+    #[test]
+    fn sizes_parse_with_binary_units() {
+        assert_eq!(super::parse_size("512MiB"), Ok(512 << 20));
+        assert_eq!(super::parse_size("2G"), Ok(2 << 30));
+        assert_eq!(super::parse_size("4096"), Ok(4096));
+        assert!(super::parse_size("big").is_err());
+        assert!(super::parse_size("5XB").is_err());
+    }
 
     #[test]
     fn cli_definition_is_valid() {
