@@ -116,6 +116,7 @@ main { max-width: 1240px; margin: 0 auto; padding: 22px 28px 60px; display: grid
 .bar .filler { background: var(--sky); opacity: .55; }
 .bar .used { background: var(--yellow); }
 .bar .left { background: var(--sky); }
+.bar .pending, .legend .pending-dot { background: repeating-linear-gradient(45deg, var(--sky) 0 3px, #9fcaf3 3px 6px); opacity: .55; }
 .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); }
 .legend i { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
 

@@ -67,31 +67,42 @@ pub fn print_pouch(p: &PouchStat) {
 }
 
 fn print_credit(c: &CreditStat) {
-    let scale = c.offered_bytes.max(c.credit_bytes);
-    let left = c.credit_bytes.saturating_sub(c.used_bytes);
-    println!("💳 Credit on {}", c.network_id);
+    println!("📦 Quota on {}", c.network_id);
+    let Some((k, n)) = c.rate else {
+        println!("   not known yet: it depends on how many Pouches the network has");
+        return;
+    };
+    let scale = c.offered_bytes.max(c.quota_bytes).max(1);
+    let left = c.quota_verified_bytes.saturating_sub(c.quota_used_bytes);
+    let pending = c.quota_bytes.saturating_sub(c.quota_verified_bytes);
+    let redundancy = c.offered_bytes.saturating_sub(c.quota_bytes);
     println!(
         "   {}",
         bar(
             scale,
-            &[(c.used_bytes.min(c.credit_bytes), YELLOW), (left, GREEN)]
+            &[
+                (c.quota_used_bytes.min(c.quota_verified_bytes), YELLOW),
+                (left, GREEN),
+                (pending, CYAN),
+            ]
         )
     );
     println!(
-        "   {} used {}   {} you can still store {}   {} not verified yet {}",
+        "   {} used {}   {} free {}   {} not verified yet {}   {} redundancy {}",
         paint("■", YELLOW),
-        fmt_bytes(c.used_bytes),
+        fmt_bytes(c.quota_used_bytes),
         paint("■", GREEN),
         fmt_bytes(left),
+        paint("■", CYAN),
+        fmt_bytes(pending),
         paint("■", GREY),
-        fmt_bytes(scale.saturating_sub(c.credit_bytes)),
+        fmt_bytes(redundancy),
     );
     println!(
-        "   usable {} of the {} you offer ({}), {} of it used",
-        fmt_bytes(c.credit_bytes),
+        "   quota {} of the {} you offer (k/n = {k}/{n}), {} verified so far",
+        fmt_bytes(c.quota_bytes),
         fmt_bytes(c.offered_bytes),
-        pct(c.credit_bytes, c.offered_bytes),
-        pct(c.used_bytes, c.credit_bytes),
+        fmt_bytes(c.quota_verified_bytes),
     );
 }
 
@@ -113,7 +124,7 @@ fn paint(text: &str, color: &str) -> String {
 }
 
 fn bar(total: u64, segments: &[(u64, &str)]) -> String {
-    let glyphs = ["█", "▓"];
+    let glyphs = ["█", "▓", "▒"];
     let mut out = String::new();
     let mut used = 0;
     for (i, (bytes, color)) in segments.iter().enumerate() {
@@ -123,7 +134,7 @@ fn bar(total: u64, segments: &[(u64, &str)]) -> String {
             ((*bytes as f64 / total as f64) * BAR as f64).round() as usize
         }
         .min(BAR - used);
-        out.push_str(&paint(&glyphs[i % 2].repeat(cells), color));
+        out.push_str(&paint(&glyphs[i % glyphs.len()].repeat(cells), color));
         used += cells;
     }
     out.push_str(&paint(&"░".repeat(BAR - used), GREY));

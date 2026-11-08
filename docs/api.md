@@ -35,7 +35,7 @@ Types: `bp_core::control::protocol`; client helper: `bp_core::control::client::s
 | `share` | `network_id`, `file_id`, `member` (fingerprint) | Wraps the file key for a member and delivers it |
 | `unshare` | `network_id`, `file_id`, `member` | Revokes a member's access |
 | `list_files` | `network_id` (`""` = all) | Your index: your files and those shared with you (`owner`, `mine`, `shared_with`) |
-| `storage_info` | `network_id` (`""` = all) | Per Pouch: quota, others' fragments, filler; per network: what you offer, your credit and usage; your upload totals |
+| `storage_info` | `network_id` (`""` = all) | Per Pouch: quota, others' fragments, filler; per network: what you offer, your credit and usage, the network's k/n and your quota (offered, verified and used × k/n); your upload totals |
 | `connect_relay` | `relay_addr` | Dials a relay and reserves a circuit |
 
 ## REST API (`bp-api`)

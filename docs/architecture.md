@@ -175,9 +175,9 @@ redundancy therefore come in steps, one per layer; files fill T1 first.
 | T4 | Rock | 1 TiB |
 | T5 | Monolith | 5 TiB |
 
-`bp storage` draws each Pouch as a bar of others' fragments, filler and free
-space (setup = the filled share), and each network's credit as a bar of what
-you have used and what you can still store out of what you offer.
+`bp storage` and the web app draw two bars on the scale of what you offer:
+the Pouch's setup (others' fragments, filler, free space) and your **quota**
+(used, free, not verified yet, and the share that goes to redundancy).
 
 ## Quality, Proof-of-Storage, reputation
 
@@ -243,6 +243,16 @@ that would exceed it and a Pouch refuses fragments from a user over it; your
 own devices' Pouches are not counted. With no credit you store nothing on the
 others. A new Pouch is filled with filler at once and challenged within a
 minute, so its credit shows up within a few minutes.
+
+**Quota.** Credit counts raw bytes, but a file costs more than its size: its
+chunks go out as `n` fragments of which any `k` rebuild it, so a file of `s`
+bytes takes `s·n/k` of credit on the others. Your **quota**, the size of the
+files you can store, is therefore your credit × k/n, with k and n those the
+network would use for a new file right now (`n` = the fragments that land on
+other users' Pouches of the layer). Offering 10 GiB with k/n = 3/4 gives a
+7.5 GiB quota once all of it is verified, and never the whole offer: the rest
+pays for your files' redundancy. `bp put` checks the file against the quota
+left, and k/n moves with the number and stability of the layer's Pouches.
 
 QoS is local to each node (`qos.json`); reputation lives in the ledger.
 
