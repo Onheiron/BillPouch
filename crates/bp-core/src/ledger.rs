@@ -11,6 +11,7 @@ pub const EPOCH_SECS: u64 = 86_400;
 pub const MAX_CHALLENGES_PER_DEVICE_PER_EPOCH: u32 = 288;
 pub const MIN_CHALLENGES_FOR_PROMOTION: u64 = 100;
 pub const MAX_BYTES_PER_DEVICE: u64 = 1 << 46;
+pub const FREE_ALLOWANCE_BYTES: u64 = 1 << 30;
 const DAY: u64 = 86_400;
 
 const PROMOTIONS: [(ReputationTier, u64, f64); 3] = [
@@ -37,6 +38,7 @@ pub enum Op {
     Observations {
         epoch: u64,
         results: Vec<Observation>,
+        held: BTreeMap<String, u64>,
     },
     ProposeExpel {
         member: String,
@@ -131,6 +133,7 @@ pub struct Standing {
     pub tier: ReputationTier,
     pub weight: u64,
     pub credit_bytes: u64,
+    pub used_bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -150,6 +153,12 @@ impl Snapshot {
 
     pub fn tier(&self, user: &str) -> Option<ReputationTier> {
         self.users.get(user).map(|s| s.tier)
+    }
+
+    pub fn may_store(&self, user: &str) -> bool {
+        self.users
+            .get(user)
+            .is_none_or(|s| s.used_bytes <= s.credit_bytes.saturating_add(FREE_ALLOWANCE_BYTES))
     }
 
     pub fn is_quorum<'a>(&self, voters: impl IntoIterator<Item = &'a String>) -> bool {
@@ -174,6 +183,7 @@ pub struct Member {
     pub passed: u64,
     pub voting_device: Option<String>,
     pub verified_bytes: u64,
+    pub held_bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -220,6 +230,7 @@ impl Ledger {
                 passed: 0,
                 voting_device: Some(peer.clone()),
                 verified_bytes: 0,
+                held_bytes: 0,
             },
         );
         let devices = BTreeMap::from([(
@@ -323,6 +334,7 @@ impl Ledger {
             next.snapshot = next.compute_snapshot(block.epoch());
             for member in next.members.values_mut() {
                 member.verified_bytes = 0;
+                member.held_bytes = 0;
             }
         }
         for op in &block.ops {
@@ -373,11 +385,16 @@ impl Ledger {
                         passed: 0,
                         voting_device: None,
                         verified_bytes: 0,
+                        held_bytes: 0,
                     },
                 );
                 self.entries.push(entry.clone());
             }
-            Op::Observations { epoch, results } => {
+            Op::Observations {
+                epoch,
+                results,
+                held,
+            } => {
                 if *epoch != block.epoch() || !self.reported.insert((author.clone(), *epoch)) {
                     return Err(invalid(
                         "observations for a wrong or already reported epoch",
@@ -394,6 +411,16 @@ impl Ledger {
                     {
                         return Err(invalid("invalid observation"));
                     }
+                }
+                if held
+                    .iter()
+                    .any(|(owner, &bytes)| !self.is_member(owner) || bytes > MAX_BYTES_PER_DEVICE)
+                {
+                    return Err(invalid("invalid holdings"));
+                }
+                for (owner, bytes) in held {
+                    let member = self.members.get_mut(owner).expect("checked member");
+                    member.held_bytes = member.held_bytes.saturating_add(*bytes);
                 }
                 for o in results {
                     let member = self.members.get_mut(&o.user).expect("checked member");
@@ -507,6 +534,7 @@ impl Ledger {
                         tier,
                         weight: tier as u64,
                         credit_bytes: m.verified_bytes,
+                        used_bytes: m.held_bytes,
                     },
                 )
             })
@@ -632,6 +660,7 @@ mod tests {
             SignedOp::sign(
                 &self.people[by],
                 Op::Observations {
+                    held: BTreeMap::new(),
                     epoch: time / EPOCH_SECS,
                     results: vec![Observation {
                         device: self.people[about].peer_id.to_string(),
@@ -836,6 +865,34 @@ mod tests {
         let huge = SignedOp::sign(&net.people[0], huge.op.clone()).unwrap();
         let t = net.now();
         assert!(net.commit(0, t, vec![huge]).is_err());
+    }
+
+    #[test]
+    fn users_storing_more_than_they_host_lose_the_right_to_store() {
+        let mut net = Net::everyone_joined(3);
+        let marco = net.fp(1);
+        assert!(net.ledger.snapshot.may_store(&marco));
+        assert!(net.ledger.snapshot.may_store("someone who joined today"));
+        let t = net.now();
+        let held = SignedOp::sign(
+            &net.people[2],
+            Op::Observations {
+                epoch: t / EPOCH_SECS,
+                results: vec![],
+                held: BTreeMap::from([(marco.clone(), FREE_ALLOWANCE_BYTES + 1)]),
+            },
+        )
+        .unwrap();
+        net.commit(0, t, vec![held]).unwrap();
+        net.next_epoch();
+        assert_eq!(
+            net.ledger.snapshot.users[&marco].used_bytes,
+            FREE_ALLOWANCE_BYTES + 1
+        );
+        assert!(!net.ledger.snapshot.may_store(&marco));
+        assert!(net.ledger.snapshot.may_store(&net.fp(0)));
+        net.next_epoch();
+        assert!(net.ledger.snapshot.may_store(&marco));
     }
 
     #[test]

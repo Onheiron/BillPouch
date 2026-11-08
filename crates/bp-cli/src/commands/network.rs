@@ -80,11 +80,12 @@ pub async fn members(network_id: String, passphrase: Option<String>) -> anyhow::
             String::new()
         };
         println!(
-            "   {}  {:<10} weight {}  credit {:.1} MiB  devices {}{}",
+            "   {}  {:<10} weight {}  hosts {:.1} MiB  stores {:.1} MiB  devices {}{}",
             member.fingerprint,
             member.tier,
             member.weight,
             member.credit_bytes as f64 / 1_048_576.0,
+            member.used_bytes as f64 / 1_048_576.0,
             member.devices,
             expel
         );

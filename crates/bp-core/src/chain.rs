@@ -211,9 +211,9 @@ impl Chain {
         behind && self.want_sync(now_ms)
     }
 
-    pub fn tick(&mut self, log: &ObservationLog, now_ms: u64) {
+    pub fn tick(&mut self, log: &ObservationLog, held: &BTreeMap<String, u64>, now_ms: u64) {
         self.register_device(now_ms);
-        self.report(log, now_ms);
+        self.report(log, held, now_ms);
         self.rotate(now_ms);
         self.engine.tick(now_ms);
         self.record();
@@ -307,7 +307,7 @@ impl Chain {
         self.submit(Op::RegisterDevice { cert }, now_ms, "register this device");
     }
 
-    fn report(&mut self, log: &ObservationLog, now_ms: u64) {
+    fn report(&mut self, log: &ObservationLog, held: &BTreeMap<String, u64>, now_ms: u64) {
         let epoch = epoch_of(now_ms);
         let into_epoch = (now_ms / 1000 % EPOCH_SECS) as f64 / EPOCH_SECS as f64;
         let ledger = &self.engine.ledger;
@@ -343,9 +343,18 @@ impl Chain {
                     .collect()
             })
             .unwrap_or_default();
-        if !results.is_empty() {
+        let held: BTreeMap<String, u64> = held
+            .iter()
+            .filter(|(owner, &bytes)| bytes > 0 && ledger.is_member(owner))
+            .map(|(owner, &bytes)| (owner.clone(), bytes))
+            .collect();
+        if !results.is_empty() || !held.is_empty() {
             self.submit(
-                Op::Observations { epoch, results },
+                Op::Observations {
+                    epoch,
+                    results,
+                    held,
+                },
                 now_ms,
                 "report observations",
             );
@@ -498,7 +507,7 @@ mod tests {
         fn settle(&mut self) {
             for _ in 0..10 {
                 for i in 0..self.chains.len() {
-                    self.chains[i].tick(&self.log, self.now);
+                    self.chains[i].tick(&self.log, &BTreeMap::new(), self.now);
                     let msgs = self.chains[i].outbox();
                     for j in 0..self.chains.len() {
                         if i != j {
