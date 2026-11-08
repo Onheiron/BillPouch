@@ -97,7 +97,7 @@ impl PeerQos {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct QosRegistry {
     peers: HashMap<String, PeerQos>,
 }
@@ -105,6 +105,24 @@ pub struct QosRegistry {
 impl QosRegistry {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn load() -> Self {
+        crate::config::qos_path()
+            .ok()
+            .and_then(|p| std::fs::read(p).ok())
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save(&self) {
+        let result = crate::config::qos_path().and_then(|p| {
+            std::fs::write(p, serde_json::to_vec(self)?)?;
+            Ok(())
+        });
+        if let Err(e) = result {
+            tracing::warn!("cannot save QoS: {e}");
+        }
     }
 
     pub fn entry(&mut self, peer_id: impl Into<String>) -> &mut PeerQos {

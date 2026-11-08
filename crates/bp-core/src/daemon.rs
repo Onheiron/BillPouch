@@ -36,7 +36,7 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
 
     let storage_managers: StorageManagerMap = Arc::new(RwLock::new(HashMap::new()));
 
-    let qos = Arc::new(RwLock::new(crate::network::QosRegistry::new()));
+    let qos = Arc::new(RwLock::new(crate::network::QosRegistry::load()));
     let outgoing_assignments: OutgoingAssignments = network::load_outgoing();
     let remote_fragment_index = Arc::new(RwLock::new(RemoteFragmentIndex::new()));
     let chains = Arc::new(RwLock::new(crate::chain::Chain::load_all(

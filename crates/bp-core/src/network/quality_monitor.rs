@@ -63,6 +63,9 @@ pub async fn run_quality_monitor(
                 run_ping_round(&network_state, &qos, &net_tx).await;
                 repair_evicting(&me, &outgoing_assignments, &network_state, &qos, &storage_managers, &net_tx).await;
                 crate::network::save_outgoing(&outgoing_assignments);
+                if let Ok(q) = qos.read() {
+                    q.save();
+                }
             }
             _ = pos_interval.tick() => {
                 run_pos_round(&outgoing_assignments, &fillers, &network_state, &qos, &observations, &storage_managers, &net_tx, &me).await;

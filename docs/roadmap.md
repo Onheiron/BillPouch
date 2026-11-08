@@ -26,7 +26,6 @@ Alpha. Current version in the root `Cargo.toml`; history in the GitHub releases.
 | Area | Limitation |
 |------|------------|
 | Allowance | Usage and credit lag one epoch, and a user who joined today is not limited until tomorrow |
-| State | QoS is in memory and resets when the daemon restarts |
 | Leave / evict | `bp leave` does not fetch your files first |
 | Placement | Rendezvous order and stability only: storage tiers and reputation do not change where fragments go |
 | Repair | Only the owner repairs its chunks: a chunk whose owner stays offline is not repaired |
@@ -35,5 +34,5 @@ Alpha. Current version in the root `Cargo.toml`; history in the GitHub releases.
 
 ## Next
 
-1. Persist QoS across restarts.
+1. Fetch your files before `bp leave`.
 

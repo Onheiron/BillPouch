@@ -38,6 +38,7 @@ Everything is under the XDG data dir (`~/.local/share/billpouch/` on Linux):
 | `control.sock`, `daemon.pid` | Daemon socket and PID |
 | `networks/<name>.json` | Genesis, your key entry and the committed ledger blocks of each network you belong to |
 | `placements.json`, `fillers.json` | Where your fragments and filler blobs went: what you challenge and repair |
+| `qos.json` | Per-peer QoS (RTT, success rate, fault score), saved every 60 s |
 | `files.json` | Local copy of your file index per network, the index heads you have seen, shares not yet acknowledged |
 | `kad_peers.json` | Known peer addresses, saved every 600 s and redialled at start |
 | `bootstrap.json` | Optional WAN bootstrap peers (`bp bootstrap`) |
@@ -222,7 +223,7 @@ during the epoch is not limited until the next snapshot). Raw bytes count on
 both sides, so with `q_target = 1` a user can store about half of what they
 host.
 
-QoS lives in memory only; reputation lives in the ledger.
+QoS is local to each node (`qos.json`); reputation lives in the ledger.
 
 ## Shared ledger and consensus
 
