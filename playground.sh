@@ -13,9 +13,12 @@ port_of() {
 }
 
 case "${1:-help}" in
-    up)     docker build -t billpouch:local . && $COMPOSE up -d
+    up)     mkdir -p playground/data
+            docker build -t billpouch:local . && $COMPOSE up -d
             echo "Started. Wait ~30 s for discovery, then: ./playground.sh enter" ;;
-    down)   $COMPOSE down -v ;;
+    down)   $COMPOSE down ;;
+    reset)  $COMPOSE down
+            docker run --rm --entrypoint sh -v "$PWD/playground:/playground" billpouch:local -c 'rm -rf /playground/data' ;;
     enter)  docker exec -it "bp-${2:-me}" bash ;;
     exec)   node="$2"; shift 2; docker exec "bp-${node}" "$@" ;;
     logs)   if [ -n "${2:-}" ]; then docker logs "bp-$2" 2>&1 | tail -50; else $COMPOSE logs --tail 10; fi ;;
@@ -36,7 +39,8 @@ case "${1:-help}" in
     *)      cat <<USAGE
 Usage: ./playground.sh <command>
   up                 build the image from this checkout and start the network
-  down               stop and remove everything
+  down               stop the nodes; their data stays in playground/data
+  reset              stop the nodes and delete their data
   enter [node]       shell into a node (default: me)
   exec <node> <cmd>  run a command on a node, e.g. exec carlo bp flock
   logs [node]        show logs (default: all nodes)

@@ -632,6 +632,29 @@ fn identity_config_ensure_dirs_crea_directory() {
 
 #[test]
 #[cfg(unix)]
+fn i_servizi_sopravvivono_al_riavvio_del_daemon() {
+    with_temp_home(|| {
+        bp_core::config::ensure_dirs().unwrap();
+        let mut reg = ServiceRegistry::load();
+        let pouch = ServiceInfo::new(ServiceType::Pouch, "amici".into(), HashMap::new());
+        let bill = ServiceInfo::new(ServiceType::Bill, "amici".into(), HashMap::new());
+        let (pouch_id, bill_id) = (pouch.id.clone(), bill.id.clone());
+        reg.register(pouch);
+        reg.register(bill);
+        reg.update(&pouch_id, |s| {
+            s.metadata.insert("tier".into(), serde_json::json!("T1"));
+        });
+        reg.remove(&bill_id);
+
+        let again = ServiceRegistry::load();
+        assert_eq!(again.all().len(), 1);
+        assert_eq!(again.get(&pouch_id).unwrap().metadata["tier"], "T1");
+        assert!(again.get(&bill_id).is_none());
+    });
+}
+
+#[test]
+#[cfg(unix)]
 fn daemon_is_running_solo_se_il_socket_risponde() {
     with_temp_home(|| {
         bp_core::config::ensure_dirs().unwrap();

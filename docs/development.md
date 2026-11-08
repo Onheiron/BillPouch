@@ -42,10 +42,13 @@ docker compose -f docker-compose.smoke.yml down -v
 ./playground.sh status        # bp status on every node
 ./playground.sh app [node]    # a node's web app: carlo 3001 … paolo 3005, me 3006
 ./playground.sh app all       # every node's address
-./playground.sh down
+./playground.sh down          # stop; data stays in playground/data
+./playground.sh reset         # stop and delete every node's data
 ```
 
-Every `./playground.sh up` starts from a clean network. Its Pouches offer 512 MiB each (`STORAGE_SIZE`), so the network fills them in about a minute without eating your disk; start yours with `bp hatch pouch --network playground --tier T1 --size 512MiB`.
+Every node keeps its data in `playground/data/<node>/` on your disk, so a
+`down` and `up` brings the same network back with its Pouches, files and
+credit; `reset` starts over. Its Pouches offer 512 MiB each (`STORAGE_SIZE`), so the network fills them in about a minute without eating your disk; start yours with `bp hatch pouch --network playground --tier T1 --size 512MiB`.
 
 ## CI and releases (`.github/workflows/`)
 

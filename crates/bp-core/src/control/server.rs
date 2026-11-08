@@ -299,30 +299,30 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
 
             {
                 let mut reg = state.services.write().unwrap();
-                match reg.get_mut(&service_id) {
-                    Some(info) => {
-                        if matches!(info.status, ServiceStatus::Paused { .. }) {
-                            return ControlResponse::err(format!(
-                                "Service '{}' is already paused",
-                                service_id
-                            ));
-                        }
-                        info.status = crate::service::ServiceStatus::Paused {
-                            eta_minutes,
-                            paused_at: now_secs,
-                        };
-                        info.metadata
-                            .insert("maintenance".into(), serde_json::Value::Bool(true));
-                        info.metadata
-                            .insert("eta_minutes".into(), serde_json::Value::from(eta_minutes));
-                    }
+                match reg
+                    .get(&service_id)
+                    .map(|info| matches!(info.status, ServiceStatus::Paused { .. }))
+                {
                     None => {
-                        return ControlResponse::err(format!(
-                            "No service with id '{}'",
-                            service_id
-                        ));
+                        return ControlResponse::err(format!("No service with id '{service_id}'"))
                     }
+                    Some(true) => {
+                        return ControlResponse::err(format!(
+                            "Service '{service_id}' is already paused"
+                        ))
+                    }
+                    Some(false) => {}
                 }
+                reg.update(&service_id, |info| {
+                    info.status = ServiceStatus::Paused {
+                        eta_minutes,
+                        paused_at: now_secs,
+                    };
+                    info.metadata
+                        .insert("maintenance".into(), serde_json::Value::Bool(true));
+                    info.metadata
+                        .insert("eta_minutes".into(), serde_json::Value::from(eta_minutes));
+                });
             };
 
             announce_service_id(state, &service_id).await;
@@ -341,25 +341,25 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
         ControlRequest::Resume { service_id } => {
             {
                 let mut reg = state.services.write().unwrap();
-                match reg.get_mut(&service_id) {
-                    Some(info) => {
-                        if !matches!(info.status, crate::service::ServiceStatus::Paused { .. }) {
-                            return ControlResponse::err(format!(
-                                "Service '{}' is not paused",
-                                service_id
-                            ));
-                        }
-                        info.status = crate::service::ServiceStatus::Running;
-                        info.metadata.remove("maintenance");
-                        info.metadata.remove("eta_minutes");
-                    }
+                match reg
+                    .get(&service_id)
+                    .map(|info| matches!(info.status, ServiceStatus::Paused { .. }))
+                {
                     None => {
-                        return ControlResponse::err(format!(
-                            "No service with id '{}'",
-                            service_id
-                        ));
+                        return ControlResponse::err(format!("No service with id '{service_id}'"))
                     }
+                    Some(false) => {
+                        return ControlResponse::err(format!(
+                            "Service '{service_id}' is not paused"
+                        ))
+                    }
+                    Some(true) => {}
                 }
+                reg.update(&service_id, |info| {
+                    info.status = ServiceStatus::Running;
+                    info.metadata.remove("maintenance");
+                    info.metadata.remove("eta_minutes");
+                });
             };
 
             announce_service_id(state, &service_id).await;

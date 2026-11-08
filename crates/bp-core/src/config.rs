@@ -48,6 +48,10 @@ pub fn qos_path() -> BpResult<PathBuf> {
     Ok(base_dir()?.join("qos.json"))
 }
 
+pub fn services_path() -> BpResult<PathBuf> {
+    Ok(base_dir()?.join("services.json"))
+}
+
 pub fn files_path() -> BpResult<PathBuf> {
     Ok(base_dir()?.join("files.json"))
 }
