@@ -1,7 +1,7 @@
 services:
 
   carlo:
-    image: onheirongithub/billpouch:latest
+    image: billpouch:local
     volumes:
       - ./docker/entrypoint.sh:/entrypoint.sh:ro
       - shared:/shared
@@ -20,7 +20,7 @@ services:
       - bp-playground
 
   marco:
-    image: onheirongithub/billpouch:latest
+    image: billpouch:local
     volumes:
       - ./docker/entrypoint.sh:/entrypoint.sh:ro
       - shared:/shared
@@ -38,7 +38,7 @@ services:
       - bp-playground
 
   lucia:
-    image: onheirongithub/billpouch:latest
+    image: billpouch:local
     volumes:
       - ./docker/entrypoint.sh:/entrypoint.sh:ro
       - shared:/shared
@@ -55,7 +55,7 @@ services:
       - bp-playground
 
   elena:
-    image: onheirongithub/billpouch:latest
+    image: billpouch:local
     volumes:
       - ./docker/entrypoint.sh:/entrypoint.sh:ro
       - shared:/shared
@@ -73,7 +73,7 @@ services:
       - bp-playground
 
   paolo:
-    image: onheirongithub/billpouch:latest
+    image: billpouch:local
     volumes:
       - ./docker/entrypoint.sh:/entrypoint.sh:ro
       - shared:/shared
@@ -90,7 +90,7 @@ services:
       - bp-playground
 
   me:
-    image: onheirongithub/billpouch:latest
+    image: billpouch:local
     volumes:
       - ./docker/entrypoint.sh:/entrypoint.sh:ro
       - shared:/shared

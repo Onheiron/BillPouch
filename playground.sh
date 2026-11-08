@@ -5,7 +5,7 @@ COMPOSE="docker compose -f docker-compose.playground.yml"
 NODES=(carlo marco lucia elena paolo me)
 
 case "${1:-help}" in
-    up)     $COMPOSE pull && $COMPOSE up -d
+    up)     docker build -t billpouch:local . && $COMPOSE up -d
             echo "Started. Wait ~30 s for discovery, then: ./playground.sh enter" ;;
     down)   $COMPOSE down -v ;;
     enter)  docker exec -it "bp-${2:-me}" bash ;;
@@ -17,7 +17,7 @@ case "${1:-help}" in
             done ;;
     *)      cat <<USAGE
 Usage: ./playground.sh <command>
-  up                 pull the image and start the network
+  up                 build the image from this checkout and start the network
   down               stop and remove everything
   enter [node]       shell into a node (default: me)
   exec <node> <cmd>  run a command on a node, e.g. exec carlo bp flock
