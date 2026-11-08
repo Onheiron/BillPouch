@@ -549,6 +549,11 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
         }
 
         ControlRequest::Leave { network_id, force } => {
+            if !state.chains.read().unwrap().contains_key(&network_id) {
+                return ControlResponse::err(format!(
+                    "you are not in a network named '{network_id}'"
+                ));
+            }
             let blocking: Vec<ServiceInfo> = {
                 let reg = state.services.read().unwrap();
                 reg.all()
@@ -557,8 +562,13 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                     .map(|s| (*s).clone())
                     .collect()
             };
+            let own_files: Vec<FileEntry> = files::list_files(state, &network_id)
+                .files
+                .into_iter()
+                .filter(|f| f.mine)
+                .collect();
 
-            if !blocking.is_empty() && !force {
+            if (!blocking.is_empty() || !own_files.is_empty()) && !force {
                 let blocking_json: Vec<serde_json::Value> = blocking
                     .iter()
                     .map(|s| {
@@ -574,15 +584,28 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                         })
                     })
                     .collect();
+                let files_json: Vec<serde_json::Value> = own_files
+                    .iter()
+                    .map(|f| {
+                        serde_json::json!({
+                            "file_id": f.file_id,
+                            "file_name": f.file_name,
+                            "hint": format!("bp get {} <output> --network {}", f.file_id, network_id),
+                        })
+                    })
+                    .collect();
                 return ControlResponse::ok(serde_json::json!({
                     "network_id": network_id,
                     "blocked": true,
                     "blocking_services": blocking_json,
+                    "own_files": files_json,
                     "message": format!(
-                        "Cannot leave '{}': {} active service(s) must be stopped first \
-                         (see 'blocking_services' for commands, or use --force to auto-evict)",
+                        "Cannot leave '{}': {} active service(s) and {} file(s) of yours. \
+                         Save the files you need, then use --force: services are evicted \
+                         and your files deleted from the network",
                         network_id,
-                        blocking.len()
+                        blocking.len(),
+                        own_files.len()
                     ),
                 }));
             }
@@ -602,6 +625,28 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 }));
             }
 
+            for file in &own_files {
+                files::delete_file(state, network_id.clone(), file.file_id.clone()).await;
+            }
+            let me = state.identity.fingerprint.clone();
+            let submitted = state
+                .chains
+                .write()
+                .unwrap()
+                .get_mut(&network_id)
+                .map(|c| c.leave(now_ms()));
+            if let Some(Err(e)) = submitted {
+                tracing::warn!(network = %network_id, "cannot announce leaving: {e}");
+            } else if !wait_until(state, &network_id, |c| !c.is_member(&me)).await {
+                tracing::warn!(network = %network_id, "leaving was not committed in time");
+            }
+            if let Some(chain) = state.chains.write().unwrap().remove(&network_id) {
+                if let Err(e) = chain.forget() {
+                    tracing::warn!(network = %network_id, "cannot remove the ledger: {e}");
+                }
+            }
+            state.files.write().unwrap().forget_network(&network_id);
+
             let _ = state
                 .net_tx
                 .send(NetworkCommand::LeaveNetwork {
@@ -610,15 +655,12 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 .await;
             state.networks.write().unwrap().retain(|n| n != &network_id);
 
-            let msg = if evicted.is_empty() {
-                format!("Left network '{}'", network_id)
-            } else {
-                format!(
-                    "Left network '{}' — {} service(s) auto-evicted",
-                    network_id,
-                    evicted.len()
-                )
-            };
+            let msg = format!(
+                "Left network '{}' — {} service(s) evicted, {} file(s) deleted",
+                network_id,
+                evicted.len(),
+                own_files.len()
+            );
             ControlResponse::ok(serde_json::json!({
                 "network_id": network_id,
                 "services_auto_evicted": evicted,

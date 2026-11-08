@@ -403,6 +403,14 @@ impl FileStore {
         Some(owner)
     }
 
+    pub fn forget_network(&mut self, network: &str) {
+        self.indexes.remove(network);
+        self.heads.remove(network);
+        self.outbox.retain(|s| s.network != network);
+        self.orders.retain(|o| o.network != network);
+        self.save();
+    }
+
     pub fn queue_order(&mut self, network: &str, order: Order) {
         self.orders.push(PendingOrder {
             network: network.to_string(),

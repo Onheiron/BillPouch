@@ -34,8 +34,8 @@ started automatically when missing.
 | `bp expel <network> <fingerprint>` | Propose an expulsion (R3+, or the creator while nobody is R3) or approve one (R1+). It passes with > 2/3 of the other members' weight and at least half of them; the network key is then rotated without the expelled member |
 | `bp invite <network> "<your own public key>"` | Token for another device of yours: log in there with the same SSH key and `bp join` it |
 | `bp join <token>` | Join with a token (it only works for the key it was made for) and wait until the ledger is synced from a member |
-| `bp leave <network_id>` | Leave a network; refuses while services are running on it and prints the commands to stop them |
-| `bp leave <network_id> --force` | Evict Pouches and stop other services on the network, then leave. Files are not fetched first: `bp get` anything you need before |
+| `bp leave <network_id>` | Leave a network; refuses while services run on it or you own files there, and prints how to stop them and save the files |
+| `bp leave <network_id> --force` | Evict Pouches, stop other services, delete your files from the network, record the departure in the ledger (the key rotates without you) and forget the network |
 
 ## Files
 

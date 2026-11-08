@@ -174,6 +174,21 @@ impl Chain {
         key_commitment(&self.key) == self.engine.ledger.commitment
     }
 
+    pub fn leave(&mut self, now_ms: u64) -> BpResult<()> {
+        let op = SignedOp::sign(&self.me, Op::Leave)?;
+        self.engine.submit(op, now_ms)?;
+        self.record();
+        Ok(())
+    }
+
+    pub fn forget(&self) -> BpResult<()> {
+        let path = config::networks_dir()?.join(format!("{}.json", self.name));
+        if path.exists() {
+            std::fs::remove_file(path)?;
+        }
+        Ok(())
+    }
+
     pub fn expel(&mut self, member: &str, now_ms: u64) -> BpResult<()> {
         let op = if self.engine.ledger.expel_approvals.contains_key(member) {
             Op::ApproveExpel {
