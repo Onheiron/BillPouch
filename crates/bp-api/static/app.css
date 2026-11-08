@@ -54,7 +54,30 @@ body {
   background: var(--white);
 }
 
-.me { margin-left: auto; text-align: right; font-size: 13px; line-height: 1.3; }
+.service-menu { position: relative; margin-left: auto; }
+.menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 10px);
+  width: 320px;
+  background: var(--white);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 36px rgba(11, 58, 102, 0.22);
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+  z-index: 30;
+}
+.menu h4 { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.menu .option { display: grid; gap: 8px; padding: 12px; border-radius: 11px; background: var(--sky-mist); border: 1px solid var(--line); }
+.menu .option strong { color: var(--sky-ink); }
+.menu .option p { margin: 0; font-size: 13px; color: var(--muted); }
+.menu .option .row { display: flex; gap: 8px; }
+.menu .option select { flex: 1; font: inherit; font-size: 13px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); color: var(--sky-ink); }
+.menu .running { font-size: 13px; color: var(--green); font-weight: 600; }
+.me { text-align: right; font-size: 13px; line-height: 1.3; }
 .me strong { font-size: 15px; }
 .me code { opacity: .8; }
 
@@ -183,7 +206,9 @@ main { max-width: 1240px; margin: 0 auto; padding: 22px 28px 60px; display: grid
 
 @media (max-width: 720px) {
   .topbar { flex-wrap: wrap; padding: 10px 16px; gap: 10px; }
-  .me { margin-left: 0; text-align: left; }
+  .service-menu { margin-left: 0; }
+  .menu { position: fixed; left: 16px; right: 16px; top: 70px; width: auto; }
+  .me { text-align: left; }
   .me br, .me code { display: none; }
   main { padding: 16px; }
   .files th:nth-child(3), .files td:nth-child(3), .files th:nth-child(4), .files td:nth-child(4) { display: none; }

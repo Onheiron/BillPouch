@@ -18,7 +18,7 @@ Types: `bp_core::control::protocol`; client helper: `bp_core::control::client::s
 | `status` | — | Identity, services, networks, reputation, Pouch stats, QoS summary |
 | `announce_now` | — | Re-gossips every service, waits 2 s |
 | `flock` | — | Local services, networks, known peers and the challenge record of each peer |
-| `hatch` | `service_type`, `network_id`, `metadata` | Starts a service (joins the network if needed) |
+| `hatch` | `service_type`, `network_id`, `metadata` (a Pouch needs `tier`, the daemon sets its quota) | Starts a service; one of each type per network on a node |
 | `farewell` | `service_id` | Stops a service |
 | `farewell_evict` | `service_id` | Evicts a service (see [cli.md](cli.md)) |
 | `pause` | `service_id`, `eta_minutes` | Maintenance mode |

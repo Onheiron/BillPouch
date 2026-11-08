@@ -129,10 +129,7 @@ async fn full_user_journey() {
             network_id: "amici".to_string(),
             metadata: {
                 let mut m = HashMap::new();
-                m.insert(
-                    "storage_bytes".to_string(),
-                    serde_json::json!(10_737_418_240u64),
-                );
+                m.insert("tier".to_string(), serde_json::json!("T1"));
                 m
             },
         },
@@ -278,7 +275,7 @@ async fn put_file_get_file_roundtrip() {
             network_id: "test-net".to_string(),
             metadata: {
                 let mut m = HashMap::new();
-                m.insert("storage_bytes".to_string(), serde_json::json!(64u64 << 20));
+                m.insert("tier".to_string(), serde_json::json!("T1"));
                 m
             },
         },
@@ -426,7 +423,7 @@ async fn get_file_unknown_chunk_returns_error() {
             network_id: "test-net".to_string(),
             metadata: {
                 let mut m = HashMap::new();
-                m.insert("storage_bytes".to_string(), serde_json::json!(64u64 << 20));
+                m.insert("tier".to_string(), serde_json::json!("T1"));
                 m
             },
         },
@@ -472,7 +469,7 @@ async fn get_file_outside_your_index_returns_error() {
             network_id: "test-net".to_string(),
             metadata: {
                 let mut m = HashMap::new();
-                m.insert("storage_bytes".to_string(), serde_json::json!(64u64 << 20));
+                m.insert("tier".to_string(), serde_json::json!("T1"));
                 m
             },
         },
@@ -532,7 +529,7 @@ async fn pause_resume_roundtrip() {
             network_id: "test-net".to_string(),
             metadata: {
                 let mut m = HashMap::new();
-                m.insert("storage_bytes".to_string(), serde_json::json!(64u64 << 20));
+                m.insert("tier".to_string(), serde_json::json!("T1"));
                 m
             },
         },
@@ -623,7 +620,7 @@ async fn farewell_evict_removes_service() {
             network_id: "evict-net".to_string(),
             metadata: {
                 let mut m = HashMap::new();
-                m.insert("storage_bytes".to_string(), serde_json::json!(64u64 << 20));
+                m.insert("tier".to_string(), serde_json::json!("T1"));
                 m
             },
         },
@@ -676,7 +673,7 @@ async fn leave_blocked_by_active_service() {
             network_id: "block-net".to_string(),
             metadata: {
                 let mut m = HashMap::new();
-                m.insert("storage_bytes".to_string(), serde_json::json!(64u64 << 20));
+                m.insert("tier".to_string(), serde_json::json!("T1"));
                 m
             },
         },
@@ -732,7 +729,7 @@ async fn hatch_second_pouch_same_network_rejected() {
         network_id: "dup-net".to_string(),
         metadata: {
             let mut m = HashMap::new();
-            m.insert("storage_bytes".to_string(), serde_json::json!(64u64 << 20));
+            m.insert("tier".to_string(), serde_json::json!("T1"));
             m
         },
     };

@@ -187,18 +187,29 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 ));
             }
 
+            let already_exists = state
+                .services
+                .read()
+                .unwrap()
+                .all()
+                .iter()
+                .any(|s| s.service_type == service_type && s.network_id == network_id);
+            if already_exists {
+                return ControlResponse::err(format!(
+                    "this node already runs a {service_type} in '{network_id}'"
+                ));
+            }
+
+            let mut metadata = metadata;
             if service_type == ServiceType::Pouch {
-                let already_exists =
-                    state.services.read().unwrap().all().iter().any(|s| {
-                        s.service_type == ServiceType::Pouch && s.network_id == network_id
-                    });
-                if already_exists {
-                    return ControlResponse::err(format!(
-                        "a Pouch for network '{}' already exists on this node; \
-                         two correlated Pouches defeat distributed redundancy",
-                        network_id
-                    ));
-                }
+                let Some(tier) = metadata
+                    .get("tier")
+                    .and_then(|t| t.as_str())
+                    .and_then(|t| StorageTier::parse(t).ok())
+                else {
+                    return ControlResponse::err("a Pouch needs a storage tier: T1 … T5");
+                };
+                metadata.insert("storage_bytes".into(), tier.quota_bytes().into());
             }
 
             let info = ServiceInfo::new(service_type, network_id.clone(), metadata.clone());
