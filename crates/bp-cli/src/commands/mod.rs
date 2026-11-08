@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod bootstrap;
+pub mod dashboard;
 pub mod farewell;
 pub mod flock;
 pub mod get;

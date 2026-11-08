@@ -119,6 +119,16 @@ enum Cmd {
         member_key: String,
     },
 
+    #[command(
+        about = "Open the local dashboard with a session signed by your SSH key",
+        long_about = "Open the local dashboard with a session signed by your SSH key.\n\nbp-api must be running on this machine. The session lasts 12 hours; bp-api only accepts sessions signed by the key of this device's user."
+    )]
+    Dashboard {
+        #[arg(help = "Port bp-api listens on")]
+        #[arg(long, default_value_t = 3000)]
+        port: u16,
+    },
+
     #[command(about = "Join a network with the token you were sent")]
     Join {
         #[arg(help = "The token printed by `bp invite`")]
@@ -324,7 +334,8 @@ async fn main() -> anyhow::Result<()> {
         .with_target(false)
         .init();
 
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
+    cli.passphrase = cli.passphrase.filter(|p| !p.is_empty());
 
     if cli.daemon {
         bp_core::daemon::run_daemon(cli.passphrase).await?;
@@ -402,6 +413,10 @@ async fn main() -> anyhow::Result<()> {
             member_key,
         }) => {
             commands::network::invite(network_id, member_key, cli.passphrase.clone()).await?;
+        }
+
+        Some(Cmd::Dashboard { port }) => {
+            commands::dashboard::dashboard(port, cli.passphrase.as_deref())?;
         }
 
         Some(Cmd::Join { token }) => {

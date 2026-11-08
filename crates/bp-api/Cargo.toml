@@ -16,9 +16,11 @@ anyhow     = { workspace = true }
 tracing    = { workspace = true }
 
 axum               = "0.7"
+axum-server        = { version = "0.7", features = ["tls-rustls"] }
+rcgen              = "0.13"
 base64             = "0.22"
-blake3             = "1"
 hex                = "0.4"
 rand               = "0.8"
+sha2               = "0.10"
 clap               = { version = "4", features = ["derive"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

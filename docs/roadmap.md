@@ -19,7 +19,7 @@ Alpha. Current version in the root `Cargo.toml`; history in the GitHub releases.
 - Invite-only networks: network key wrapped per member, encrypted gossip, members-only fragment exchange.
 - Shared ledger per network, committed by weighted BFT consensus: members, devices, per-user reputation from PoS observations, epoch snapshots, capabilities, expulsion votes, network key rotation every epoch and after each expulsion.
 - `pause` / `resume`, `farewell --evict`, `ls`, `storage`, `status`; `leave` records the departure in the ledger, deletes your files and rotates the key without you.
-- REST gateway with dashboard; Docker smoke test and playground.
+- Local REST gateway and dashboard over HTTPS, with sessions signed by your SSH key (`bp dashboard`); Docker smoke test and playground.
 
 ## Known limitations
 
@@ -27,9 +27,8 @@ Alpha. Current version in the root `Cargo.toml`; history in the GitHub releases.
 |------|------------|
 | Repair | Recoded fragments are not challenged by the owner, who does not know their Merkle root; a lost Pouch only lowers every chunk's margin until a new one joins |
 | Available space | Comes out as 0 until enough reliable peers are known |
-| `bp-api` | A single bearer token and no TLS: keep it on localhost or behind a TLS proxy |
 
 ## Next
 
-1. TLS and SSH-key sessions for `bp-api`.
+1. Owner challenges for recoded fragments (today only the fragments the owner pushed are challenged).
 

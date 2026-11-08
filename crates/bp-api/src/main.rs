@@ -39,28 +39,43 @@ struct Args {
 #[derive(Clone)]
 struct AppState {
     socket_path: Arc<PathBuf>,
-    token: Arc<String>,
+    user_key: Arc<String>,
 }
 
-fn load_or_create_token() -> anyhow::Result<String> {
-    let path = config::base_dir()?.join("api_token");
-    if let Ok(token) = std::fs::read_to_string(&path) {
-        if !token.trim().is_empty() {
-            return Ok(token.trim().to_string());
+fn daemon_user_key() -> anyhow::Result<String> {
+    let cert: bp_core::identity::DeviceCert =
+        serde_json::from_slice(&std::fs::read(config::device_cert_path()?)?)?;
+    Ok(cert.user_key)
+}
+
+fn load_or_create_tls() -> anyhow::Result<(PathBuf, PathBuf, String)> {
+    let dir = config::base_dir()?;
+    let (cert_path, key_path) = (dir.join("api_cert.pem"), dir.join("api_key.pem"));
+    if !cert_path.exists() || !key_path.exists() {
+        std::fs::create_dir_all(&dir)?;
+        let generated =
+            rcgen::generate_simple_self_signed(vec!["localhost".into(), "127.0.0.1".into()])?;
+        std::fs::write(&cert_path, generated.cert.pem())?;
+        std::fs::write(&key_path, generated.key_pair.serialize_pem())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600))?;
         }
     }
-    std::fs::create_dir_all(config::base_dir()?)?;
-    let token = hex::encode(rand::random::<[u8; 32]>());
-    std::fs::write(&path, &token)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
-    }
-    Ok(token)
+    let pem = std::fs::read_to_string(&cert_path)?;
+    let der: String = pem.lines().filter(|l| !l.starts_with("-----")).collect();
+    let der = base64::engine::general_purpose::STANDARD.decode(der)?;
+    let digest = <sha2::Sha256 as sha2::Digest>::digest(&der);
+    let fingerprint = digest
+        .iter()
+        .map(|b| format!("{b:02X}"))
+        .collect::<Vec<_>>()
+        .join(":");
+    Ok((cert_path, key_path, fingerprint))
 }
 
-async fn require_token(
+async fn require_session(
     State(state): State<AppState>,
     request: axum::extract::Request,
     next: axum::middleware::Next,
@@ -69,16 +84,23 @@ async fn require_token(
         .headers()
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
+        .and_then(|v| v.strip_prefix("Session "))
         .unwrap_or("");
-    if blake3::hash(presented.as_bytes()) == blake3::hash(state.token.as_bytes()) {
-        next.run(request).await
-    } else {
-        api_error(
+    let now = chrono_now();
+    match bp_core::session::verify(presented, &state.user_key, now) {
+        Ok(()) => next.run(request).await,
+        Err(e) => api_error(
             StatusCode::UNAUTHORIZED,
-            "missing or wrong API token".into(),
-        )
+            format!("{e} — open the dashboard with `bp dashboard`"),
+        ),
     }
+}
+
+fn chrono_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 async fn call_daemon(
@@ -499,11 +521,13 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     let socket_path = config::socket_path()?;
-    let token = load_or_create_token()?;
     let state = AppState {
         socket_path: Arc::new(socket_path),
-        token: Arc::new(token.clone()),
+        user_key: Arc::new(daemon_user_key().map_err(|e| {
+            anyhow::anyhow!("cannot read this device's identity ({e}): run `bp login` first")
+        })?),
     };
+    let (cert_path, key_path, fingerprint) = load_or_create_tls()?;
 
     let api = Router::new()
         .route("/ping", get(ping))
@@ -526,7 +550,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/relay/connect", post(relay_connect))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
-            require_token,
+            require_session,
         ))
         .with_state(state);
     let app = Router::new().route("/", get(dashboard)).merge(api);
@@ -535,14 +559,17 @@ async fn main() -> anyhow::Result<()> {
         .parse()
         .map_err(|e| anyhow::anyhow!("Invalid bind address: {e}"))?;
 
-    tracing::info!("bp-api listening on http://{addr}");
-    tracing::info!("Dashboard: http://{addr}/#token={token}");
+    tracing::info!("bp-api listening on https://{addr}");
+    tracing::info!("TLS certificate SHA-256 fingerprint: {fingerprint}");
+    tracing::info!("Open the dashboard with: bp dashboard --port {}", args.port);
     tracing::info!(
         "Proxying requests to daemon at {:?}",
         config::socket_path()?
     );
 
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    let tls = axum_server::tls_rustls::RustlsConfig::from_pem_file(cert_path, key_path).await?;
+    axum_server::bind_rustls(addr, tls)
+        .serve(app.into_make_service())
+        .await?;
     Ok(())
 }
