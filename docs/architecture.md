@@ -215,6 +215,13 @@ verified bytes = placed bytes × passed / sent. The ledger adds the verified
 bytes of all observers up per user; at the next epoch's snapshot they become
 that user's **credit** (`bp members`) and the count starts again.
 
+In the same op every Pouch reports the bytes it holds for each owner; the
+snapshot sums them into each user's **usage**. A Pouch refuses new fragments
+from a user whose usage exceeds their credit plus 1 GiB (a user who joined
+during the epoch is not limited until the next snapshot). Raw bytes count on
+both sides, so with `q_target = 1` a user can store about half of what they
+host.
+
 QoS lives in memory only; reputation lives in the ledger.
 
 ## Shared ledger and consensus

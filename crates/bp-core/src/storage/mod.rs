@@ -92,6 +92,22 @@ impl StorageManager {
         serde_json::from_slice(&bytes).ok()
     }
 
+    pub fn bytes_by_owner(&self) -> BTreeMap<String, u64> {
+        let mut by_owner = BTreeMap::new();
+        for chunk in self.index.chunk_ids() {
+            if let Some(owner) = self.owner_of(chunk) {
+                let bytes: u64 = self
+                    .index
+                    .fragments_for_chunk(chunk)
+                    .iter()
+                    .map(|f| f.size_bytes)
+                    .sum();
+                *by_owner.entry(owner.owner_key).or_default() += bytes;
+            }
+        }
+        by_owner
+    }
+
     fn revoked(&self) -> BTreeMap<String, BTreeSet<String>> {
         std::fs::read(self.root.join("revoked.json"))
             .ok()

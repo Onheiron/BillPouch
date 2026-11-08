@@ -431,7 +431,8 @@ pub async fn run_network_loop(
                         .keys()
                         .filter_map(|name| {
                             let chain = all.get_mut(name)?;
-                            chain.tick(&observations, now);
+                            let held = holdings(&storage_managers, name);
+                            chain.tick(&observations, &held, now);
                             Some((name.clone(), chain.key, chain.outbox()))
                         })
                         .collect(),
@@ -674,7 +675,8 @@ async fn handle_swarm_event(
             {
                 serve_commits(chains, &peer, network, *from, cert)
             } else if let Some(user) = requester {
-                let (response, evicted) = serve_fragment_request(&request, storage_managers, &user);
+                let (response, evicted) =
+                    serve_fragment_request(&request, storage_managers, chains, &user);
                 for (network, blobs) in evicted {
                     publish(swarm, networks, &network, &Gossip::FillerEvicted { blobs });
                 }
@@ -864,6 +866,26 @@ fn handle_gossip(
     }
 }
 
+fn holdings(
+    storage_managers: &StorageManagerMap,
+    network: &str,
+) -> std::collections::BTreeMap<String, u64> {
+    let mut held = std::collections::BTreeMap::new();
+    if let Ok(managers) = storage_managers.read() {
+        for sm in managers.values() {
+            let sm = sm.read().unwrap();
+            if sm.meta.network_id == network {
+                for (owner_key, bytes) in sm.bytes_by_owner() {
+                    if let Ok((_, owner)) = crate::identity::parse_user_key(&owner_key) {
+                        *held.entry(owner).or_default() += bytes;
+                    }
+                }
+            }
+        }
+    }
+    held
+}
+
 fn member_device(chains: &Chains, peer: &PeerId) -> Option<String> {
     let peer = peer.to_string();
     let all = chains.read().ok()?;
@@ -906,8 +928,15 @@ type Evictions = Vec<(String, Vec<String>)>;
 fn serve_fragment_request(
     req: &FragmentRequest,
     storage_managers: &StorageManagerMap,
+    chains: &Chains,
     requester: &str,
 ) -> (FragmentResponse, Evictions) {
+    let may_store = |network: &str| {
+        chains.read().is_ok_and(|all| {
+            all.get(network)
+                .is_some_and(|c| c.ledger().snapshot.may_store(requester))
+        })
+    };
     let managers = storage_managers.read().unwrap();
     let mut evictions = Vec::new();
     let response = match req {
@@ -955,6 +984,10 @@ fn serve_fragment_request(
                     };
                     let stored = managers.values().find_map(|sm_arc| {
                         let mut sm = sm_arc.write().unwrap();
+                        if !may_store(&sm.meta.network_id) {
+                            tracing::info!(owner = %requester, "refused a fragment: storage above credit");
+                            return None;
+                        }
                         match sm.store_fragment(&fragment, &owner) {
                             Ok(evicted) => Some((sm.meta.network_id.clone(), evicted)),
                             Err(e) => {

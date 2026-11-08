@@ -496,6 +496,11 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                         .users
                         .get(fingerprint)
                         .map_or(0, |s| s.credit_bytes),
+                    used_bytes: ledger
+                        .snapshot
+                        .users
+                        .get(fingerprint)
+                        .map_or(0, |s| s.used_bytes),
                     devices: ledger
                         .devices
                         .values()

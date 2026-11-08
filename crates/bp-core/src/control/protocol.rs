@@ -181,6 +181,7 @@ pub struct MemberInfo {
     pub tier: String,
     pub weight: u64,
     pub credit_bytes: u64,
+    pub used_bytes: u64,
     pub devices: usize,
     pub joined_at: u64,
     pub expel_approvals: usize,
