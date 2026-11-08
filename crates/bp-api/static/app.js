@@ -168,9 +168,9 @@ function verification(node, data) {
   if (node.evicting) return ["bad", "Leaving the network"];
   if (node.paused) return ["wait", "In maintenance"];
   if (node.mine && node.peer === data.status.peer_id) {
-    const credit = (data.storage.credits.find((c) => c.network_id === node.network) || {}).credit_bytes || 0;
-    if (credit === 0) return ["wait", "Waiting for the network to verify it"];
-    return ["ok", `Verified by the network: ${bytes(credit)}`];
+    const c = data.storage.credits.find((c) => c.network_id === node.network) || {};
+    if (!c.credit_bytes) return ["wait", "Waiting for the network to verify it"];
+    return ["ok", `Verified ${bytes(c.credit_bytes)} · your quota ${bytes(c.quota_verified_bytes)}`];
   }
   if (node.mine) return ["idle", "Your other device: others challenge it"];
   const q = node.qos;
@@ -185,8 +185,11 @@ function verification(node, data) {
 function renderSummary(data) {
   const credits = data.storage.credits.filter((c) => inNetwork(c.network_id));
   const offered = credits.reduce((a, c) => a + c.offered_bytes, 0);
-  const credit = credits.reduce((a, c) => a + c.credit_bytes, 0);
-  const used = credits.reduce((a, c) => a + c.used_bytes, 0);
+  const quota = credits.reduce((a, c) => a + c.quota_bytes, 0);
+  const verified = credits.reduce((a, c) => a + c.quota_verified_bytes, 0);
+  const used = credits.reduce((a, c) => a + c.quota_used_bytes, 0);
+  const free = Math.max(0, verified - used);
+  const rates = [...new Set(credits.filter((c) => c.rate).map((c) => c.rate.join("/")))];
   const mine = data.storage.pouches.filter((p) => inNetwork(p.network_id));
   const filled = mine.reduce((a, p) => a + p.fragment_bytes + p.filler_bytes, 0);
   const all = nodes(data);
@@ -197,10 +200,11 @@ function renderSummary(data) {
 
   $("summary").innerHTML = `
     <div class="card">
-      <h3>You can store</h3>
-      <div class="big">${bytes(Math.max(0, credit - used))}</div>
-      ${bar(Math.max(credit, offered), [[used, "used"], [Math.max(0, credit - used), "left"]])}
-      <div class="legend"><span><i style="background:var(--yellow)"></i>used ${bytes(used)}</span><span><i style="background:var(--sky)"></i>credit ${bytes(credit)}</span><span><i style="background:var(--sky-soft)"></i>offered ${bytes(offered)}</span></div>
+      <h3>Your quota</h3>
+      <div class="big">${rates.length ? bytes(free) : "—"}</div>
+      ${bar(offered, [[Math.min(used, verified), "used"], [free, "left"], [Math.max(0, quota - verified), "pending"]])}
+      <div class="legend"><span><i style="background:var(--yellow)"></i>used ${bytes(used)}</span><span><i style="background:var(--sky)"></i>free ${bytes(free)}</span><span><i class="pending-dot"></i>not verified ${bytes(Math.max(0, quota - verified))}</span><span><i style="background:var(--sky-soft)"></i>redundancy ${bytes(Math.max(0, offered - quota))}</span></div>
+      <div class="sub">${rates.length ? `quota ${bytes(quota)} of the ${bytes(offered)} you offer · k/n ${rates.join(", ")}` : offered ? "Waiting for enough Pouches to set k/n" : "Offer space with <code>＋ Service</code>"}</div>
     </div>
     <div class="card">
       <h3>Your Pouch setup</h3>

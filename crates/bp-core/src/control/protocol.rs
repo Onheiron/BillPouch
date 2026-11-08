@@ -222,6 +222,10 @@ pub struct CreditStat {
     pub offered_bytes: u64,
     pub credit_bytes: u64,
     pub used_bytes: u64,
+    pub rate: Option<(u64, u64)>,
+    pub quota_bytes: u64,
+    pub quota_verified_bytes: u64,
+    pub quota_used_bytes: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -136,12 +136,32 @@ pub fn choose_layer(
     Err("every layer of the network is full".into())
 }
 
-fn check_allowance(
+pub struct Rate {
+    pub k: u64,
+    pub n: u64,
+    pub others: u64,
+}
+
+impl Rate {
+    pub fn quota(&self, offered: u64) -> u64 {
+        (offered as u128 * self.k as u128 / self.n.max(1) as u128) as u64
+    }
+
+    pub fn used(&self, usage: u64) -> u64 {
+        (usage as u128 * self.k as u128 / self.others.max(1) as u128) as u64
+    }
+
+    pub fn on_others(&self, size: u64) -> u64 {
+        size.div_ceil(self.k.max(1)) * self.others
+    }
+}
+
+pub fn quota_rate(
     state: &DaemonState,
     network_id: &str,
     size: u64,
     ph: f64,
-) -> Result<(), String> {
+) -> Result<Rate, String> {
     let nodes = layer_nodes(state, network_id);
     let sample = (size as usize).clamp(1, CHUNK_BYTES);
     let (_, peers, plan) = choose_layer(&nodes, |p| stabilities(state, p), sample, ph)?;
@@ -155,13 +175,39 @@ fn check_allowance(
         .iter()
         .filter(|p| ledger.device_owner(p) != Some(me.as_str()))
         .count() as u64;
-    let needed = size.div_ceil(plan.k as u64) * others;
-    if ledger.may_store(me, needed) {
+    Ok(Rate {
+        k: plan.k as u64,
+        n: peers.len() as u64,
+        others,
+    })
+}
+
+pub fn default_rate(state: &DaemonState, network_id: &str) -> Option<Rate> {
+    quota_rate(state, network_id, CHUNK_BYTES as u64, DEFAULT_PH).ok()
+}
+
+fn check_allowance(
+    state: &DaemonState,
+    network_id: &str,
+    size: u64,
+    ph: f64,
+) -> Result<(), String> {
+    let rate = quota_rate(state, network_id, size, ph)?;
+    let chains = state.chains.read().unwrap();
+    let ledger = chains
+        .get(network_id)
+        .map(|c| c.ledger())
+        .ok_or_else(|| format!("you are not in a network named '{network_id}'"))?;
+    let me = &state.identity.fingerprint;
+    let left = rate
+        .quota(ledger.credit(me))
+        .saturating_sub(rate.used(ledger.usage(me)));
+    if size <= left && ledger.may_store(me, rate.on_others(size)) {
         return Ok(());
     }
-    let room = ledger.credit(me).saturating_sub(ledger.usage(me));
     Err(format!(
-        "not enough credit: this file needs {needed} bytes on other members' Pouches and you can use {room}. You earn credit by hosting: hatch a Pouch (or a bigger tier) and let the others fill and verify it"
+        "not enough quota: this file is {size} bytes and your quota has {left} bytes left (k/n = {}/{}). Your quota is the space the others verified on your Pouch times k/n: hatch a Pouch (or a bigger one) and let them fill and verify it",
+        rate.k, rate.n
     ))
 }
 
@@ -1018,6 +1064,22 @@ pub async fn sync_cycle(state: &DaemonState) {
 
 #[cfg(test)]
 mod tests {
+    use super::Rate;
+
+    #[test]
+    fn the_quota_is_the_offer_times_k_over_n() {
+        let rate = Rate {
+            k: 3,
+            n: 4,
+            others: 3,
+        };
+        assert_eq!(rate.quota(10 << 30), (10u64 << 30) / 4 * 3);
+        let file = 3_000_000;
+        let on_others = rate.on_others(file);
+        assert_eq!(on_others, 3_000_000);
+        assert_eq!(rate.used(on_others), file);
+    }
+
     use super::*;
     use std::collections::BTreeMap;
 

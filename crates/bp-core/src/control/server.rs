@@ -748,27 +748,39 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 .into_iter()
                 .filter(|f| f.mine)
                 .collect();
-            let credits = {
-                let chains = state.chains.read().unwrap();
-                chains
-                    .iter()
-                    .filter(|(name, _)| network_id.is_empty() || **name == network_id)
-                    .map(|(name, chain)| {
-                        let ledger = chain.ledger();
-                        let me = &state.identity.fingerprint;
-                        CreditStat {
-                            network_id: name.clone(),
-                            offered_bytes: pouches
-                                .iter()
-                                .filter(|p| &p.network_id == name)
-                                .map(|p| p.quota_bytes)
-                                .sum(),
-                            credit_bytes: ledger.credit(me),
-                            used_bytes: ledger.usage(me),
-                        }
+            let names: Vec<String> = state
+                .chains
+                .read()
+                .unwrap()
+                .keys()
+                .filter(|name| network_id.is_empty() || **name == network_id)
+                .cloned()
+                .collect();
+            let credits = names
+                .into_iter()
+                .filter_map(|name| {
+                    let rate = files::default_rate(state, &name);
+                    let chains = state.chains.read().unwrap();
+                    let ledger = chains.get(&name)?.ledger();
+                    let me = &state.identity.fingerprint;
+                    let offered: u64 = pouches
+                        .iter()
+                        .filter(|p| p.network_id == name)
+                        .map(|p| p.quota_bytes)
+                        .sum();
+                    let (credit, used) = (ledger.credit(me), ledger.usage(me));
+                    Some(CreditStat {
+                        network_id: name.clone(),
+                        offered_bytes: offered,
+                        credit_bytes: credit,
+                        used_bytes: used,
+                        rate: rate.as_ref().map(|r| (r.k, r.n)),
+                        quota_bytes: rate.as_ref().map_or(0, |r| r.quota(offered)),
+                        quota_verified_bytes: rate.as_ref().map_or(0, |r| r.quota(credit)),
+                        quota_used_bytes: rate.as_ref().map_or(0, |r| r.used(used)),
                     })
-                    .collect()
-            };
+                })
+                .collect();
             ControlResponse::ok(StorageInfoData {
                 files_uploaded: own.len(),
                 uploaded_bytes: own.iter().map(|f| f.size_bytes).sum(),
