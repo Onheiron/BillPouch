@@ -189,6 +189,7 @@ pub struct MemberInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MembersData {
     pub network_id: String,
+    pub me: String,
     pub height: u64,
     pub epoch: u64,
     pub total_weight: u64,
