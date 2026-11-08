@@ -5,6 +5,24 @@ All notable changes to BillPouch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3](https://github.com/Onheiron/BillPouch/compare/billpouch-v0.3.2...billpouch-v0.3.3) (2026-11-07)
+
+
+### Features
+
+* **chain:** run the ledger and consensus inside the daemon ([046eea8](https://github.com/Onheiron/BillPouch/commit/046eea8837877b0699dfb6378ef302a65cb7fd3b))
+* **consensus:** weighted Tendermint-style BFT engine over the ledger ([654393e](https://github.com/Onheiron/BillPouch/commit/654393eb48ceeac5c4ce5a815f084c6747ef655a))
+* **identity:** ssh user key, per-device keys and signed device certificates; announcements are verified against the certificate ([2b8f60d](https://github.com/Onheiron/BillPouch/commit/2b8f60d57a9b563d2533947afc812161c120a55d))
+* **ledger:** rotate the network key every epoch and after each expulsion ([414b7a4](https://github.com/Onheiron/BillPouch/commit/414b7a416274130f3facdadc5b6369311c722ca7))
+* **ledger:** shared ledger state with per-user reputation and epoch snapshots ([7417db5](https://github.com/Onheiron/BillPouch/commit/7417db5c7197bd19f397631bfff7be14cc72ee8a))
+* **network:** invite-only networks with a signed member registry, keys wrapped per member and encrypted members-only gossip ([1ccfd8c](https://github.com/Onheiron/BillPouch/commit/1ccfd8c8e454d3f9f392894daa058b07c5a19a22))
+
+
+### Bug Fixes
+
+* **coding:** decode uses any k independent fragments instead of failing on dependent ones ([fc2c45d](https://github.com/Onheiron/BillPouch/commit/fc2c45d9f40dbab2c467b8f3e6b3876b24c33463))
+* **coding:** retrieval failed when k &gt; 1 because decoded chunks kept the RLNC zero padding ([fc2c45d](https://github.com/Onheiron/BillPouch/commit/fc2c45d9f40dbab2c467b8f3e6b3876b24c33463))
+
 ## [0.3.2](https://github.com/Onheiron/BillPouch/compare/billpouch-v0.3.1...billpouch-v0.3.2) (2026-11-07)
 
 
