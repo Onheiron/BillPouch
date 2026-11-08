@@ -85,6 +85,7 @@ impl ServiceInfo {
 #[derive(Default)]
 pub struct ServiceRegistry {
     services: HashMap<String, ServiceInfo>,
+    path: Option<std::path::PathBuf>,
 }
 
 impl ServiceRegistry {
@@ -92,20 +93,51 @@ impl ServiceRegistry {
         Self::default()
     }
 
+    pub fn load() -> Self {
+        let path = crate::config::services_path().ok();
+        let services = path
+            .as_ref()
+            .and_then(|p| std::fs::read(p).ok())
+            .and_then(|bytes| serde_json::from_slice::<Vec<ServiceInfo>>(&bytes).ok())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|s| (s.id.clone(), s))
+            .collect();
+        Self { services, path }
+    }
+
+    fn save(&self) {
+        let Some(path) = &self.path else {
+            return;
+        };
+        let all: Vec<&ServiceInfo> = self.services.values().collect();
+        let written = serde_json::to_vec_pretty(&all)
+            .map_err(std::io::Error::other)
+            .and_then(|json| std::fs::write(path, json));
+        if let Err(e) = written {
+            tracing::warn!("cannot save services: {e}");
+        }
+    }
+
     pub fn register(&mut self, info: ServiceInfo) {
         self.services.insert(info.id.clone(), info);
+        self.save();
     }
 
     pub fn get(&self, id: &str) -> Option<&ServiceInfo> {
         self.services.get(id)
     }
 
-    pub fn get_mut(&mut self, id: &str) -> Option<&mut ServiceInfo> {
-        self.services.get_mut(id)
+    pub fn update<R>(&mut self, id: &str, change: impl FnOnce(&mut ServiceInfo) -> R) -> Option<R> {
+        let result = change(self.services.get_mut(id)?);
+        self.save();
+        Some(result)
     }
 
     pub fn remove(&mut self, id: &str) -> Option<ServiceInfo> {
-        self.services.remove(id)
+        let removed = self.services.remove(id);
+        self.save();
+        removed
     }
 
     pub fn all(&self) -> Vec<&ServiceInfo> {

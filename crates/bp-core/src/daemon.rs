@@ -4,12 +4,10 @@ use crate::{
     error::{BpError, BpResult},
     identity::Identity,
     network::{self, run_quality_monitor, NetworkState, RemoteFragmentIndex, StorageManagerMap},
-    service::ServiceRegistry,
+    service::{ServiceRegistry, ServiceType},
+    storage::StorageManager,
 };
-use std::{
-    collections::HashMap,
-    sync::{Arc, RwLock},
-};
+use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
 
 pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
@@ -32,7 +30,22 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
     let network_state = Arc::new(RwLock::new(NetworkState::new()));
     let (net_tx, net_rx) = mpsc::channel::<crate::network::NetworkCommand>(64);
 
-    let storage_managers: StorageManagerMap = Arc::new(RwLock::new(HashMap::new()));
+    let services = ServiceRegistry::load();
+    let storage_managers: StorageManagerMap = Arc::new(RwLock::new(
+        services
+            .all()
+            .into_iter()
+            .filter(|s| s.service_type == ServiceType::Pouch)
+            .filter_map(|s| match StorageManager::load(&s.network_id, &s.id) {
+                Ok(sm) => Some((s.id.clone(), Arc::new(RwLock::new(sm)))),
+                Err(e) => {
+                    tracing::warn!(service_id = %s.id, "cannot reopen a Pouch: {e}");
+                    None
+                }
+            })
+            .collect(),
+    ));
+    tracing::info!(services = services.all().len(), "services restored");
 
     let qos = Arc::new(RwLock::new(crate::network::QosRegistry::load()));
     let remote_fragment_index = Arc::new(RwLock::new(RemoteFragmentIndex::new()));
@@ -44,7 +57,7 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
 
     let daemon_state = Arc::new(DaemonState {
         identity: identity.clone(),
-        services: RwLock::new(ServiceRegistry::new()),
+        services: RwLock::new(services),
         network_state: Arc::clone(&network_state),
         networks: RwLock::new(Vec::new()),
         chains: Arc::clone(&chains),

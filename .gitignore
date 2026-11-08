@@ -4,4 +4,4 @@
 *.sock
 
 .vscode/
-
+/playground/data

@@ -45,7 +45,7 @@ if [ "${FOUNDER:-false}" = "true" ]; then
             sleep 1
         done
     ) &
-else
+elif ! bp members "${NETWORK}" >/dev/null 2>&1; then
     until [ -f "${SHARED}/tokens/${NODE_NAME}.token" ]; do sleep 1; done
     bp join "$(cat "${SHARED}/tokens/${NODE_NAME}.token")"
 fi
