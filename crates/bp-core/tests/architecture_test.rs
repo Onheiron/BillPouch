@@ -533,7 +533,8 @@ static IDENTITY_FS_LOCK: Mutex<()> = Mutex::new(());
 fn with_temp_home<F: FnOnce() + std::panic::UnwindSafe>(f: F) {
     let _guard = IDENTITY_FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
-    let tmp = std::env::temp_dir().join(format!("bp_test_{}", uuid::Uuid::new_v4().simple()));
+    let short = &uuid::Uuid::new_v4().simple().to_string()[..12];
+    let tmp = std::path::Path::new("/tmp").join(format!("bp{short}"));
     std::fs::create_dir_all(&tmp).unwrap();
 
     let saved: Vec<_> = ["HOME", "XDG_RUNTIME_DIR"]
