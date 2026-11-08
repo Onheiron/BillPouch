@@ -1046,6 +1046,7 @@ async fn network_loop_accetta_e_processa_comandi() {
         bp_core::identity::Identity::in_memory(None).unwrap(),
         bp_core::chain::ObservationLog::default(),
         tokio::sync::mpsc::channel(8).0,
+        Default::default(),
     ));
 
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;

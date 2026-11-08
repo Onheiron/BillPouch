@@ -96,12 +96,18 @@ pub async fn store_blob(
         for fragment in fragments.by_ref().take(count) {
             if *node == me {
                 let Some(sm) = &local else { continue };
-                match sm
+                let result = sm
                     .write()
                     .unwrap()
-                    .store_fragment(fragment, &state.identity.user_key)
-                {
-                    Ok(()) => stored += 1,
+                    .store_fragment(fragment, &state.identity.user_key);
+                match result {
+                    Ok(evicted) => {
+                        stored += 1;
+                        if !evicted.is_empty() {
+                            publish(state, network_id, Gossip::FillerEvicted { blobs: evicted })
+                                .await;
+                        }
+                    }
                     Err(e) => tracing::warn!(chunk_id=%chunk_id, "store_fragment failed: {e}"),
                 }
                 continue;
