@@ -37,7 +37,7 @@ docker compose -f docker-compose.smoke.yml up --build -d
 docker compose -f docker-compose.smoke.yml down -v
 
 # Playground: carlo, marco, lucia, elena, paolo + you ("me")
-./playground.sh up            # pulls onheirongithub/billpouch:latest
+./playground.sh up            # builds billpouch:local from this checkout
 ./playground.sh enter         # shell on your node; try bp status, bp put …
 ./playground.sh status        # bp status on every node
 ./playground.sh down
@@ -63,5 +63,4 @@ git tag v0.4.0
 git push origin main v0.4.0
 ```
 
-For an ad-hoc image (e.g. to refresh the playground) run the Docker workflow
-manually from the Actions tab.
+To publish an ad-hoc image run the Docker workflow manually from the Actions tab.
