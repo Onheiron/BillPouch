@@ -30,7 +30,7 @@ impl NodeInfo {
 
 #[derive(Default)]
 pub struct NetworkState {
-    nodes: HashMap<String, NodeInfo>,
+    nodes: HashMap<(String, String, ServiceType), NodeInfo>,
 }
 
 impl NetworkState {
@@ -41,15 +41,15 @@ impl NetworkState {
     pub fn upsert(&mut self, info: NodeInfo) {
         let entry = self
             .nodes
-            .entry(info.peer_id.clone())
+            .entry((
+                info.peer_id.clone(),
+                info.network_id.clone(),
+                info.service_type,
+            ))
             .or_insert_with(|| info.clone());
         if info.announced_at >= entry.announced_at {
             *entry = info;
         }
-    }
-
-    pub fn remove(&mut self, peer_id: &str) {
-        self.nodes.remove(peer_id);
     }
 
     pub fn all(&self) -> Vec<&NodeInfo> {

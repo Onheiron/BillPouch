@@ -161,11 +161,11 @@ impl Challenge {
 }
 
 fn challenges(
-    me_user: &str,
-    me: &str,
+    identity: &Identity,
     network_state: &Arc<RwLock<NetworkState>>,
     storage_managers: &StorageManagerMap,
 ) -> Vec<Challenge> {
+    let me = identity.peer_id.to_string();
     let pouches: Vec<(String, StorageTier, Vec<String>)> = storage_managers
         .read()
         .map(|m| {
@@ -177,6 +177,7 @@ fn challenges(
                         .tier
                         .layers()
                         .flat_map(|l| sm.catalog(l))
+                        .filter(|e| e.owner.owner_key != identity.user_key)
                         .map(|e| e.chunk_id)
                         .collect();
                     (sm.meta.network_id.clone(), sm.meta.tier, chunks)
@@ -194,7 +195,7 @@ fn challenges(
             .in_network(&network)
             .into_iter()
             .filter(|n| n.service_type == ServiceType::Pouch && n.peer_id != me)
-            .filter(|n| n.user_fingerprint != me_user)
+            .filter(|n| n.user_fingerprint != identity.fingerprint)
             .collect();
         peers.shuffle(&mut rng);
         for node in peers.into_iter().take(MAX_CHALLENGES_PER_ROUND) {
@@ -241,9 +242,8 @@ async fn run_pos_round(
     observations: &ObservationLog,
     net_tx: &mpsc::Sender<NetworkCommand>,
 ) {
-    let me = identity.peer_id.to_string();
     let mut handles = Vec::new();
-    for challenge in challenges(&identity.fingerprint, &me, network_state, storage_managers) {
+    for challenge in challenges(identity, network_state, storage_managers) {
         let net_tx = net_tx.clone();
         handles.push(tokio::spawn(async move {
             let proven = prove_one(&challenge, net_tx).await;
