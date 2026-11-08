@@ -276,6 +276,14 @@ else
     fail "bp rm failed: ${RM_OUT}"
 fi
 
+docker exec bp-post bash -c 'head -c 100000 /dev/urandom > /tmp/free.bin'
+FREE_OUT=$(docker exec bp-post bp put /tmp/free.bin --network smoketest 2>&1) || true
+if echo "${FREE_OUT}" | grep -q "not enough credit"; then
+    pass "lucia-post, who hosts nothing, cannot store on the others' Pouches"
+else
+    fail "lucia-post stored without credit: ${FREE_OUT}"
+fi
+
 header "10. Expulsion and key rotation"
 POST_FP=$(docker exec bp-post bp status 2>/dev/null | grep -oP 'fingerprint\s*:\s*\K\S+' || true)
 EXPEL_OUT=$(docker exec bp-pouch bp expel smoketest "${POST_FP}" 2>&1) || true

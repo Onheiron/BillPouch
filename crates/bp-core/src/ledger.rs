@@ -8,10 +8,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const EPOCH_SECS: u64 = 86_400;
-pub const MAX_CHALLENGES_PER_DEVICE_PER_EPOCH: u32 = 288;
+pub const MAX_CHALLENGES_PER_DEVICE_PER_EPOCH: u32 = 2880;
 pub const MIN_CHALLENGES_FOR_PROMOTION: u64 = 100;
 pub const MAX_BYTES_PER_DEVICE: u64 = 1 << 46;
-pub const FREE_ALLOWANCE_BYTES: u64 = 1 << 30;
+pub const USAGE_INTERVAL_SECS: u64 = 120;
 const DAY: u64 = 86_400;
 
 const PROMOTIONS: [(ReputationTier, u64, f64); 3] = [
@@ -26,7 +26,6 @@ pub struct Observation {
     pub user: String,
     pub sent: u32,
     pub passed: u32,
-    pub bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,6 +37,9 @@ pub enum Op {
     Observations {
         epoch: u64,
         results: Vec<Observation>,
+    },
+    Usage {
+        verified: BTreeMap<String, u64>,
         held: BTreeMap<String, u64>,
     },
     ProposeExpel {
@@ -133,8 +135,6 @@ impl Block {
 pub struct Standing {
     pub tier: ReputationTier,
     pub weight: u64,
-    pub credit_bytes: u64,
-    pub used_bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -154,12 +154,6 @@ impl Snapshot {
 
     pub fn tier(&self, user: &str) -> Option<ReputationTier> {
         self.users.get(user).map(|s| s.tier)
-    }
-
-    pub fn may_store(&self, user: &str) -> bool {
-        self.users
-            .get(user)
-            .is_none_or(|s| s.used_bytes <= s.credit_bytes.saturating_add(FREE_ALLOWANCE_BYTES))
     }
 
     pub fn is_quorum<'a>(&self, voters: impl IntoIterator<Item = &'a String>) -> bool {
@@ -183,8 +177,6 @@ pub struct Member {
     pub sent: u64,
     pub passed: u64,
     pub voting_device: Option<String>,
-    pub verified_bytes: u64,
-    pub held_bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -212,6 +204,9 @@ pub struct Ledger {
     pub key_wraps: BTreeMap<String, WrappedKey>,
     pub rotated_epoch: u64,
     pub rekey_since: Option<u64>,
+    pub verified: BTreeMap<String, BTreeMap<String, u64>>,
+    pub held: BTreeMap<String, BTreeMap<String, u64>>,
+    pub usage_at: BTreeMap<String, u64>,
 }
 
 impl Ledger {
@@ -231,8 +226,6 @@ impl Ledger {
                 sent: 0,
                 passed: 0,
                 voting_device: Some(peer.clone()),
-                verified_bytes: 0,
-                held_bytes: 0,
             },
         );
         let devices = BTreeMap::from([(
@@ -262,6 +255,9 @@ impl Ledger {
             key_wraps: BTreeMap::new(),
             rotated_epoch: genesis.body.at / EPOCH_SECS,
             rekey_since: None,
+            verified: BTreeMap::new(),
+            held: BTreeMap::new(),
+            usage_at: BTreeMap::new(),
             genesis,
         };
         ledger.snapshot = ledger.compute_snapshot(ledger.snapshot.epoch);
@@ -295,6 +291,28 @@ impl Ledger {
 
     pub fn active_members(&self) -> impl Iterator<Item = (&String, &Member)> {
         self.members.iter().filter(|(user, _)| self.is_member(user))
+    }
+
+    pub fn credit(&self, user: &str) -> u64 {
+        self.verified
+            .iter()
+            .filter(|(observer, _)| self.is_member(observer))
+            .flat_map(|(_, devices)| devices.iter())
+            .filter(|(device, _)| self.device_owner(device) == Some(user))
+            .map(|(_, &bytes)| bytes)
+            .fold(0u64, u64::saturating_add)
+    }
+
+    pub fn usage(&self, user: &str) -> u64 {
+        self.held
+            .iter()
+            .filter(|(reporter, _)| self.is_member(reporter))
+            .filter_map(|(_, owners)| owners.get(user))
+            .fold(0u64, |a, &b| a.saturating_add(b))
+    }
+
+    pub fn may_store(&self, user: &str, more: u64) -> bool {
+        self.usage(user).saturating_add(more) <= self.credit(user)
     }
 
     pub fn rotation_due(&self, now_secs: u64) -> Option<u64> {
@@ -335,10 +353,6 @@ impl Ledger {
         let mut next = self.clone();
         if block.epoch() > next.snapshot.epoch {
             next.snapshot = next.compute_snapshot(block.epoch());
-            for member in next.members.values_mut() {
-                member.verified_bytes = 0;
-                member.held_bytes = 0;
-            }
         }
         for op in &block.ops {
             next.apply_op(op, block)?;
@@ -387,17 +401,11 @@ impl Ledger {
                         sent: 0,
                         passed: 0,
                         voting_device: None,
-                        verified_bytes: 0,
-                        held_bytes: 0,
                     },
                 );
                 self.entries.push(entry.clone());
             }
-            Op::Observations {
-                epoch,
-                results,
-                held,
-            } => {
+            Op::Observations { epoch, results } => {
                 if *epoch != block.epoch() || !self.reported.insert((author.clone(), *epoch)) {
                     return Err(invalid(
                         "observations for a wrong or already reported epoch",
@@ -409,28 +417,40 @@ impl Ledger {
                         || !self.is_member(&o.user)
                         || o.passed > o.sent
                         || o.sent > MAX_CHALLENGES_PER_DEVICE_PER_EPOCH
-                        || o.bytes > MAX_BYTES_PER_DEVICE
                         || !devices.insert(&o.device)
                     {
                         return Err(invalid("invalid observation"));
                     }
                 }
-                if held
-                    .iter()
-                    .any(|(owner, &bytes)| !self.is_member(owner) || bytes > MAX_BYTES_PER_DEVICE)
-                {
-                    return Err(invalid("invalid holdings"));
-                }
-                for (owner, bytes) in held {
-                    let member = self.members.get_mut(owner).expect("checked member");
-                    member.held_bytes = member.held_bytes.saturating_add(*bytes);
-                }
                 for o in results {
                     let member = self.members.get_mut(&o.user).expect("checked member");
                     member.sent += u64::from(o.sent);
                     member.passed += u64::from(o.passed);
-                    member.verified_bytes = member.verified_bytes.saturating_add(o.bytes);
                 }
+            }
+            Op::Usage { verified, held } => {
+                if self
+                    .usage_at
+                    .get(&author)
+                    .is_some_and(|&at| block.time < at + USAGE_INTERVAL_SECS)
+                {
+                    return Err(invalid("usage reported too often"));
+                }
+                let bad_device = verified.iter().any(|(device, &bytes)| {
+                    bytes > MAX_BYTES_PER_DEVICE
+                        || self
+                            .device_owner(device)
+                            .is_none_or(|owner| owner == author || !self.is_member(owner))
+                });
+                let bad_owner = held.iter().any(|(owner, &bytes)| {
+                    bytes > MAX_BYTES_PER_DEVICE || *owner == author || !self.is_member(owner)
+                });
+                if bad_device || bad_owner {
+                    return Err(invalid("invalid usage report"));
+                }
+                self.usage_at.insert(author.clone(), block.time);
+                self.verified.insert(author.clone(), verified.clone());
+                self.held.insert(author.clone(), held.clone());
             }
             Op::ProposeExpel { member } => {
                 if !self.has_capability(&author, Capability::ProposeExpel)
@@ -542,8 +562,6 @@ impl Ledger {
                     Standing {
                         tier,
                         weight: tier as u64,
-                        credit_bytes: m.verified_bytes,
-                        used_bytes: m.held_bytes,
                     },
                 )
             })
@@ -669,14 +687,12 @@ mod tests {
             SignedOp::sign(
                 &self.people[by],
                 Op::Observations {
-                    held: BTreeMap::new(),
                     epoch: time / EPOCH_SECS,
                     results: vec![Observation {
                         device: self.people[about].peer_id.to_string(),
                         user: self.fp(about),
                         sent,
                         passed,
-                        bytes: 0,
                     }],
                 },
             )
@@ -862,64 +878,71 @@ mod tests {
         assert!(!net.ledger.has_capability(&net.fp(0), Capability::Invite));
     }
 
-    #[test]
-    fn verified_bytes_become_the_next_epochs_credit() {
-        let mut net = Net::everyone_joined(3);
-        let t = net.now();
-        let mut a = net.observe(0, 1, 10, 9, t);
-        let mut b = net.observe(2, 1, 10, 10, t);
-        for (op, bytes) in [(&mut a, 600), (&mut b, 400)] {
-            let Op::Observations { results, .. } = &mut op.op else {
-                unreachable!()
-            };
-            results[0].bytes = bytes;
-            *op = SignedOp::sign(&net.people[if bytes == 600 { 0 } else { 2 }], op.op.clone())
-                .unwrap();
-        }
-        net.commit(0, t, vec![a, b]).unwrap();
-        assert_eq!(net.ledger.snapshot.users[&net.fp(1)].credit_bytes, 0);
-        net.next_epoch();
-        assert_eq!(net.ledger.snapshot.users[&net.fp(1)].credit_bytes, 1000);
-        assert_eq!(net.ledger.members[&net.fp(1)].verified_bytes, 0);
-        net.next_epoch();
-        assert_eq!(net.ledger.snapshot.users[&net.fp(1)].credit_bytes, 0);
-
-        let mut huge = net.observe(0, 1, 1, 1, net.now());
-        let Op::Observations { results, .. } = &mut huge.op else {
-            unreachable!()
-        };
-        results[0].bytes = MAX_BYTES_PER_DEVICE + 1;
-        let huge = SignedOp::sign(&net.people[0], huge.op.clone()).unwrap();
-        let t = net.now();
-        assert!(net.commit(0, t, vec![huge]).is_err());
+    fn usage(net: &Net, by: usize, verified: &[(usize, u64)], held: &[(usize, u64)]) -> SignedOp {
+        SignedOp::sign(
+            &net.people[by],
+            Op::Usage {
+                verified: verified
+                    .iter()
+                    .map(|&(i, b)| (net.people[i].peer_id.to_string(), b))
+                    .collect(),
+                held: held.iter().map(|&(i, b)| (net.fp(i), b)).collect(),
+            },
+        )
+        .unwrap()
     }
 
     #[test]
-    fn users_storing_more_than_they_host_lose_the_right_to_store() {
+    fn credit_and_usage_are_the_latest_reports_of_the_others() {
         let mut net = Net::everyone_joined(3);
+        let mut t = net.now();
+        for i in 1..3 {
+            let op = SignedOp::sign(
+                &net.people[i],
+                Op::RegisterDevice {
+                    cert: net.people[i].cert.clone(),
+                },
+            )
+            .unwrap();
+            net.commit(0, t, vec![op]).unwrap();
+        }
         let marco = net.fp(1);
-        assert!(net.ledger.snapshot.may_store(&marco));
-        assert!(net.ledger.snapshot.may_store("someone who joined today"));
-        let t = net.now();
-        let held = SignedOp::sign(
-            &net.people[2],
-            Op::Observations {
-                epoch: t / EPOCH_SECS,
-                results: vec![],
-                held: BTreeMap::from([(marco.clone(), FREE_ALLOWANCE_BYTES + 1)]),
-            },
-        )
-        .unwrap();
-        net.commit(0, t, vec![held]).unwrap();
-        net.next_epoch();
         assert_eq!(
-            net.ledger.snapshot.users[&marco].used_bytes,
-            FREE_ALLOWANCE_BYTES + 1
+            (net.ledger.credit(&marco), net.ledger.usage(&marco)),
+            (0, 0)
         );
-        assert!(!net.ledger.snapshot.may_store(&marco));
-        assert!(net.ledger.snapshot.may_store(&net.fp(0)));
-        net.next_epoch();
-        assert!(net.ledger.snapshot.may_store(&marco));
+        assert!(!net.ledger.may_store(&marco, 1));
+        assert!(net.ledger.may_store(&marco, 0));
+
+        let a = usage(&net, 0, &[(1, 600)], &[(1, 100)]);
+        let b = usage(&net, 2, &[(1, 400)], &[(1, 200)]);
+        net.commit(0, t, vec![a, b]).unwrap();
+        assert_eq!(net.ledger.credit(&marco), 1000);
+        assert_eq!(net.ledger.usage(&marco), 300);
+        assert!(net.ledger.may_store(&marco, 700));
+        assert!(!net.ledger.may_store(&marco, 701));
+
+        let too_soon = usage(&net, 0, &[(1, 50)], &[]);
+        assert!(net.commit(0, t + 1, vec![too_soon]).is_err());
+        t += USAGE_INTERVAL_SECS;
+        let replaced = usage(&net, 0, &[(1, 50)], &[]);
+        net.commit(0, t, vec![replaced]).unwrap();
+        assert_eq!(net.ledger.credit(&marco), 450);
+        assert_eq!(net.ledger.usage(&marco), 200);
+
+        t += USAGE_INTERVAL_SECS;
+        for bad in [
+            usage(&net, 1, &[(1, 10)], &[]),
+            usage(&net, 1, &[], &[(1, 10)]),
+            usage(&net, 0, &[(2, MAX_BYTES_PER_DEVICE + 1)], &[]),
+        ] {
+            assert!(net.commit(0, t, vec![bad]).is_err());
+        }
+
+        let leave = SignedOp::sign(&net.people[2], Op::Leave).unwrap();
+        net.commit(0, t, vec![leave]).unwrap();
+        assert_eq!(net.ledger.credit(&marco), 50);
+        assert_eq!(net.ledger.usage(&marco), 0);
     }
 
     #[test]

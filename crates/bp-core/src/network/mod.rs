@@ -745,8 +745,13 @@ async fn handle_swarm_event(
             {
                 serve_commits(chains, &peer, network, *from, cert)
             } else if let Some(user) = requester {
-                let (response, evicted) =
-                    serve_fragment_request(&request, storage_managers, chains, &user);
+                let (response, evicted) = serve_fragment_request(
+                    &request,
+                    storage_managers,
+                    chains,
+                    &user,
+                    &identity.fingerprint,
+                );
                 for (network, blobs) in evicted {
                     publish(swarm, networks, &network, &Gossip::FillerEvicted { blobs });
                 }
@@ -1120,12 +1125,14 @@ fn serve_fragment_request(
     storage_managers: &StorageManagerMap,
     chains: &Chains,
     requester: &str,
+    me: &str,
 ) -> (FragmentResponse, Evictions) {
-    let may_store = |network: &str| {
-        chains.read().is_ok_and(|all| {
-            all.get(network)
-                .is_some_and(|c| c.ledger().snapshot.may_store(requester))
-        })
+    let may_store = |network: &str, bytes: u64| {
+        requester == me
+            || chains.read().is_ok_and(|all| {
+                all.get(network)
+                    .is_some_and(|c| c.ledger().may_store(requester, bytes))
+            })
     };
     let managers = storage_managers.read().unwrap();
     let mut evictions = Vec::new();
@@ -1176,7 +1183,7 @@ fn serve_fragment_request(
                     };
                     let stored = managers.values().find_map(|sm_arc| {
                         let mut sm = sm_arc.write().unwrap();
-                        if !may_store(&sm.meta.network_id) {
+                        if !may_store(&sm.meta.network_id, data.len() as u64) {
                             tracing::info!(owner = %requester, "refused a fragment: storage above credit");
                             return None;
                         }

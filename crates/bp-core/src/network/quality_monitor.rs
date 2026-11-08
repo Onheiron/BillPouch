@@ -21,7 +21,7 @@ const PING_INTERVAL_SECS: u64 = 60;
 
 const PING_TIMEOUT_SECS: u64 = 5;
 
-const POS_INTERVAL_SECS: u64 = 300;
+const POS_INTERVAL_SECS: u64 = 60;
 
 const POS_TIMEOUT_SECS: u64 = 10;
 
@@ -230,11 +230,20 @@ async fn run_pos_round(
             continue;
         };
         tracing::debug!(peer = %peer, passed, "PoS challenge result");
-        if let Ok(mut q) = qos.write() {
-            q.entry(peer.clone()).record_challenge(passed);
-        }
+        let success = qos.write().map_or(0.0, |mut q| {
+            let entry = q.entry(peer.clone());
+            entry.record_challenge(passed);
+            entry.challenge_success_ewma
+        });
         let placed = placed_bytes(outgoing_assignments, fillers, &peer);
-        observe(observations, &peer, passed, placed, crate::chain::now_ms());
+        let verified = (placed as f64 * success) as u64;
+        observe(
+            observations,
+            &peer,
+            passed,
+            verified,
+            crate::chain::now_ms(),
+        );
     }
 }
 

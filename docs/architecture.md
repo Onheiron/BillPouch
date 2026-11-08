@@ -200,7 +200,7 @@ challenges survive a restart. Fragment index announcements list every holder,
 the owner's Pouch included, and `bp get` falls back to every known Pouch.
 
 **Proof-of-Storage** (`storage/merkle.rs`): data is split into 4 KiB blocks
-and committed with a BLAKE3 Merkle tree. Every 300 s the daemon picks, for each
+and committed with a BLAKE3 Merkle tree. Every 60 s the daemon picks, for each
 Pouch, one fragment it placed there and one filler blob it sent there, and asks
 for a random block with its Merkle path. The challenger keeps only the root
 (computed when it pushed the fragment); a reply within 10 s passes if the path
@@ -216,19 +216,23 @@ a real fragment needs room the Pouch evicts filler blobs and gossips
 `FillerEvicted`; their sponsors stop challenging them and refill later. Your
 own available space counts filler as free.
 
-Every challenge result is counted per device and epoch, together with the bytes
-the observer has placed on that device (fragments and filler). In the last 10 %
-of an epoch each member submits an `Observations` op for the devices of other
-users: challenges sent and passed (at most 288 per device per epoch) and
-verified bytes = placed bytes × passed / sent. The ledger adds the verified
-bytes of all observers up per user; at the next epoch's snapshot they become
-that user's **credit** (`bp members`) and the count starts again.
+**Reputation.** Every challenge result is counted per device and epoch. In
+the last 10 % of an epoch each member submits an `Observations` op for the
+devices of other users: challenges sent and passed (at most 2880 per device
+per epoch, scaled down proportionally beyond that).
 
-In the same op every Pouch reports the bytes it holds for each owner; the
-snapshot sums them into each user's **usage**. A Pouch refuses new fragments
-from a user whose usage exceeds their credit plus 1 GiB (a user who joined
-during the epoch is not limited until the next snapshot). Raw bytes count on
-both sides, so a user stores `k/n` of what they host in user data.
+**Allowance.** Credit and usage are current values in the ledger, not daily
+ones. At most every 120 s each member submits a `Usage` op that replaces its
+previous one: for every device of another user, the **verified bytes** (bytes
+it placed there, fragments and filler, × that device's challenge success rate),
+and, for every other owner, the bytes its own Pouches hold for them. A user's
+**credit** is the sum of what the others verified on their devices; their
+**usage** is the sum of what the others hold for them (`bp members`). You may
+store on other users' Pouches only up to your credit: `bp put` refuses a file
+that would exceed it and a Pouch refuses fragments from a user over it; your
+own devices' Pouches are not counted. With no credit you store nothing on the
+others. A new Pouch is filled with filler at once and challenged within a
+minute, so its credit shows up within a few minutes.
 
 QoS is local to each node (`qos.json`); reputation lives in the ledger.
 
