@@ -2,6 +2,8 @@
 name    = "bp-api"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+authors.workspace = true
 
 [[bin]]
 name = "bp-api"

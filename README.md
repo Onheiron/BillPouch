@@ -59,4 +59,4 @@ To try a whole network on one machine: `./playground.sh up` (Docker, 6 nodes).
 
 ## License
 
-MIT OR Apache-2.0
+Licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
