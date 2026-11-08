@@ -51,8 +51,9 @@ key. `bp dashboard` starts `bp-api` when it is not running, signs a session and
 opens `https://127.0.0.1:<port>/#session=<session>`; the app keeps it in the
 browser until it expires.
 
-The web app is a progressive web app: your identity and network, what you can
-store, your Pouch's setup, the network's space, every node (Pouches, Bills and
+The web app is a progressive web app: your identity and network, your quota
+(used, free, not verified yet and lost to redundancy, on the scale of what you
+offer), your Pouch's setup, your files and how many Pouches they survive losing, every node (Pouches, Bills and
 Roosts) with its setup and challenge results, and your files, which you can
 download, delete or upload by picking or dropping them. Browsers only register
 its service worker over a trusted certificate, so with the self-signed one it

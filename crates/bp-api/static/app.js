@@ -85,8 +85,17 @@ function banner(html) {
 
 function bar(total, parts) {
   return `<div class="bar">${parts
-    .map(([value, cls]) => `<span class="${cls}" style="width:${total > 0 ? Math.min(100, (value / total) * 100) : 0}%"></span>`)
+    .filter(([value]) => value > 0 && total > 0)
+    .map(([value, cls]) => `<span class="${cls}" style="width:max(4px, ${Math.min(100, (value / total) * 100)}%)"></span>`)
     .join("")}</div>`;
+}
+
+function plural(n, one, many) {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+function legend(items) {
+  return `<div class="legend">${items.map(([cls, text]) => `<span><i class="${cls}"></i>${text}</span>`).join("")}</div>`;
 }
 
 async function load() {
@@ -187,41 +196,60 @@ function renderSummary(data) {
   const offered = credits.reduce((a, c) => a + c.offered_bytes, 0);
   const quota = credits.reduce((a, c) => a + c.quota_bytes, 0);
   const verified = credits.reduce((a, c) => a + c.quota_verified_bytes, 0);
-  const used = credits.reduce((a, c) => a + c.quota_used_bytes, 0);
+  const used = Math.min(verified, credits.reduce((a, c) => a + c.quota_used_bytes, 0));
   const free = Math.max(0, verified - used);
-  const rates = [...new Set(credits.filter((c) => c.rate).map((c) => c.rate.join("/")))];
+  const pending = Math.max(0, quota - verified);
+  const lost = Math.max(0, offered - quota);
+  const rated = credits.filter((c) => c.rate);
+  const rates = [...new Set(rated.map((c) => c.rate.join("/")))];
   const mine = data.storage.pouches.filter((p) => inNetwork(p.network_id));
   const filled = mine.reduce((a, p) => a + p.fragment_bytes + p.filler_bytes, 0);
+  const files = data.files.files.filter((f) => f.mine && inNetwork(f.network_id));
+  const fileBytes = files.reduce((a, f) => a + f.size_bytes, 0);
   const all = nodes(data);
-  const pouches = all.filter((n) => n.kind === "pouch");
-  const capacity = pouches.reduce((a, n) => a + n.quota, 0);
-  const held = pouches.reduce((a, n) => a + n.stored, 0);
   const count = (kind) => all.filter((n) => n.kind === kind).length;
+  const survive = rated
+    .map((c) => {
+      const spare = c.rate[1] - c.rate[0];
+      const text = spare === 1 ? "1 Pouch" : `${spare} Pouches`;
+      return `${rated.length > 1 ? esc(c.network_id) + ": " : ""}they survive ${text} going offline (k/n ${c.rate.join("/")})`;
+    })
+    .join("<br>");
+
+  const quotaCard = !offered
+    ? `<div class="big">—</div>${bar(1, [])}<div class="sub">Offer space with <b>＋ Service</b> to get a quota.</div>`
+    : !rates.length
+      ? `<div class="big">—</div>${bar(offered, [[offered, "pending"]])}<div class="sub">Waiting for enough Pouches to set k/n.</div>`
+      : `<div class="big">${bytes(free)} <small>free</small></div>
+         ${bar(offered, [[used, "used"], [free, "left"], [pending, "pending"], [lost, "lost"]])}
+         ${legend([
+           ["used", `used ${bytes(used)}`],
+           ["left", `free ${bytes(free)}`],
+           ["pending", `not verified yet ${bytes(pending)}`],
+           ["lost", `lost to redundancy ${bytes(lost)} (${pct(lost, offered)}%)`],
+         ])}
+         <div class="sub">Quota ${bytes(quota)} of the ${bytes(offered)} you offer · k/n ${rates.join(", ")}</div>`;
 
   $("summary").innerHTML = `
     <div class="card">
       <h3>Your quota</h3>
-      <div class="big">${rates.length ? bytes(free) : "—"}</div>
-      ${bar(offered, [[Math.min(used, verified), "used"], [free, "left"], [Math.max(0, quota - verified), "pending"]])}
-      <div class="legend"><span><i style="background:var(--yellow)"></i>used ${bytes(used)}</span><span><i style="background:var(--sky)"></i>free ${bytes(free)}</span><span><i class="pending-dot"></i>not verified ${bytes(Math.max(0, quota - verified))}</span><span><i style="background:var(--sky-soft)"></i>redundancy ${bytes(Math.max(0, offered - quota))}</span></div>
-      <div class="sub">${rates.length ? `quota ${bytes(quota)} of the ${bytes(offered)} you offer · k/n ${rates.join(", ")}` : offered ? "Waiting for enough Pouches to set k/n" : "Offer space with <code>＋ Service</code>"}</div>
+      ${quotaCard}
     </div>
     <div class="card">
       <h3>Your Pouch setup</h3>
       <div class="big">${mine.length ? pct(filled, offered) + "%" : "—"}</div>
       ${bar(offered, [[filled, "filler"]])}
-      <div class="sub">${mine.length ? `${bytes(filled)} of ${bytes(offered)} filled and challenged by the network` : "Offer space with <code>bp hatch pouch</code>"}</div>
+      <div class="sub">${mine.length ? `${bytes(filled)} of ${bytes(offered)} filled and challenged by the network` : "No Pouch on this node yet."}</div>
     </div>
     <div class="card">
-      <h3>Network space</h3>
-      <div class="big">${bytes(capacity)}</div>
-      ${bar(capacity, [[held, "data"]])}
-      <div class="sub">${pouches.length} Pouches · ${bytes(held)} filled</div>
+      <h3>Your files</h3>
+      <div class="big">${files.length}</div>
+      <div class="sub">${bytes(fileBytes)} stored${survive ? "<br>" + survive : ""}</div>
     </div>
     <div class="card">
       <h3>Nodes</h3>
       <div class="big">${all.length}</div>
-      <div class="sub">${count("pouch")} Pouches · ${count("bill")} Bills · ${count("post")} Roosts</div>
+      <div class="sub">${plural(count("pouch"), "Pouch", "Pouches")} · ${plural(count("bill"), "Bill", "Bills")} · ${plural(count("post"), "Roost", "Roosts")}</div>
     </div>`;
 }
 
@@ -331,7 +359,7 @@ function upload(file) {
   }
   const row = document.createElement("div");
   row.className = "upload";
-  row.innerHTML = `<span>${esc(file.name)}</span><span class="status">${bytes(file.size)}</span>${bar(1, [[0, "used"]])}`;
+  row.innerHTML = `<span>${esc(file.name)}</span><span class="status">${bytes(file.size)}</span><div class="bar"><span class="used" style="width:0%"></span></div>`;
   $("uploads").append(row);
   const fill = row.querySelector(".bar span");
   const label = row.querySelector(".status");
