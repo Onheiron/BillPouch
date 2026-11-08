@@ -48,16 +48,6 @@ pub fn plan(stabilities: &[f64], ph: f64) -> BpResult<Plan> {
     })
 }
 
-pub fn storage_factor(stabilities: &[f64], ph: f64) -> f64 {
-    plan(stabilities, ph).map_or(0.0, |p| {
-        if p.pe >= ph {
-            p.k as f64 / p.n as f64
-        } else {
-            0.0
-        }
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,13 +104,5 @@ mod tests {
     fn invalid_inputs_are_rejected() {
         assert!(plan(&[], 0.99).is_err());
         assert!(plan(&[0.9], 1.0).is_err());
-    }
-
-    #[test]
-    fn storage_factor_is_the_usable_share_of_the_raw_space() {
-        assert!(close(storage_factor(&[1.0; 4], 0.999), 1.0));
-        assert!(close(storage_factor(&[0.5; 4], 0.999), 0.0));
-        let f = storage_factor(&[0.9; 10], 0.99);
-        assert!(f > 0.5 && f < 0.9, "{f}");
     }
 }

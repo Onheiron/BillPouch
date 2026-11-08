@@ -20,16 +20,6 @@ impl ReputationTier {
             Self::R4 => "Pillar",
         }
     }
-
-    pub fn qos_target_ph(self) -> f64 {
-        match self {
-            Self::R0 => 0.0,
-            Self::R1 => 0.70,
-            Self::R2 => 0.85,
-            Self::R3 => 0.95,
-            Self::R4 => 0.999,
-        }
-    }
 }
 
 impl std::fmt::Display for ReputationTier {

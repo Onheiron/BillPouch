@@ -27,5 +27,4 @@ Alpha. Current version in the root `Cargo.toml`; history in the GitHub releases.
 |------|------------|
 | Repair | A lost Pouch lowers every chunk's margin until a new one joins its layer |
 | Credit | A Pouch's announced `stored_bytes` is trusted up to its challenge success rate: one that holds half and lies about the rest fails about half the filler challenges |
-| Available space | Comes out as 0 until enough reliable peers are known |
 

@@ -48,7 +48,7 @@ started automatically when missing.
 | `bp ls [--network <id>]` | Your files and the ones shared with you, from your index (synced across your devices) |
 | `bp unshare <file_id> <fingerprint> --network <id>` | Withdraw a member's access: Pouches refuse them the fragments and the file leaves their list |
 | `bp share <file_id> <fingerprint> --network <id>` | Share one of your own files with a member: the file key is wrapped for their SSH key, a fetch grant is signed for them and both are delivered; it then shows up in their `bp ls` |
-| `bp storage [--network <id>]` | Quota, used and available space per Pouch, plus upload totals |
+| `bp storage [--network <id>]` | Colored bars: per Pouch others' data, filler and free space (setup %); per network the credit you can still store and what you used; your upload totals |
 
 ## Connectivity
 

@@ -1,10 +1,10 @@
 use super::files;
 use crate::{
     chain::{now_ms, Chain, Chains},
-    coding::params as coding_params,
     control::protocol::{
-        ControlRequest, ControlResponse, ExpelData, FileEntry, FlockData, HatchData, InviteData,
-        MemberInfo, MembersData, NetworkQosSummary, PouchStat, StatusData, StorageInfoData,
+        ControlRequest, ControlResponse, CreditStat, ExpelData, FileEntry, FlockData, HatchData,
+        InviteData, MemberInfo, MembersData, NetworkQosSummary, PouchStat, StatusData,
+        StorageInfoData,
     },
     error::BpResult,
     identity::Identity,
@@ -722,13 +722,32 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 .into_iter()
                 .filter(|f| f.mine)
                 .collect();
+            let credits = {
+                let chains = state.chains.read().unwrap();
+                chains
+                    .iter()
+                    .filter(|(name, _)| network_id.is_empty() || **name == network_id)
+                    .map(|(name, chain)| {
+                        let ledger = chain.ledger();
+                        let me = &state.identity.fingerprint;
+                        CreditStat {
+                            network_id: name.clone(),
+                            offered_bytes: pouches
+                                .iter()
+                                .filter(|p| &p.network_id == name)
+                                .map(|p| p.quota_bytes)
+                                .sum(),
+                            credit_bytes: ledger.credit(me),
+                            used_bytes: ledger.usage(me),
+                        }
+                    })
+                    .collect()
+            };
             ControlResponse::ok(StorageInfoData {
-                total_bid_bytes: pouches.iter().map(|p| p.storage_bid_bytes).sum(),
-                total_used_bytes: pouches.iter().map(|p| p.storage_used_bytes).sum(),
-                total_available_bytes: pouches.iter().map(|p| p.available_bytes).sum(),
-                total_files_uploaded: own.len(),
-                total_uploaded_bytes: own.iter().map(|f| f.size_bytes).sum(),
+                files_uploaded: own.len(),
+                uploaded_bytes: own.iter().map(|f| f.size_bytes).sum(),
                 pouches,
+                credits,
             })
         }
 
@@ -779,22 +798,11 @@ fn own_tier(state: &DaemonState) -> ReputationTier {
         .unwrap_or(ReputationTier::R1)
 }
 
-fn availability_factor(state: &DaemonState) -> f64 {
-    let own_peer = state.identity.peer_id.to_string();
-    let tier = own_tier(state);
-    let qos = state.qos.read().unwrap();
-    let own_score = qos.get(&own_peer).map_or(0.4, |q| q.stability_score());
-    let mut stabilities = qos.all_stability_scores();
-    stabilities.push(own_score);
-    coding_params::storage_factor(&stabilities, tier.qos_target_ph())
-}
-
 fn pouch_stats(
     state: &DaemonState,
     services: &ServiceRegistry,
     network_id: &str,
 ) -> Vec<PouchStat> {
-    let factor = availability_factor(state);
     let managers = state.storage_managers.read().unwrap();
     services
         .all()
@@ -803,30 +811,17 @@ fn pouch_stats(
             s.service_type == ServiceType::Pouch
                 && (network_id.is_empty() || s.network_id == network_id)
         })
-        .map(|s| {
-            let storage_tier = s
-                .metadata
-                .get("tier")
-                .and_then(|v| v.as_str())
-                .and_then(|t| StorageTier::parse(t).ok())
-                .map(|t| format!("{t:?} — {}", t.name()));
-            let (bid, used, avail) = managers.get(&s.id).map_or((0, 0, 0), |sm| {
-                let sm = sm.read().unwrap();
-                (
-                    sm.meta.storage_bytes_bid,
-                    sm.meta.storage_bytes_used,
-                    ((sm.meta.available_bytes() + sm.filler_bytes()) as f64 * factor).round()
-                        as u64,
-                )
-            });
-            PouchStat {
+        .filter_map(|s| {
+            let sm = managers.get(&s.id)?.read().unwrap();
+            let filler_bytes = sm.filler_bytes();
+            Some(PouchStat {
                 service_id: s.id.clone(),
                 network_id: s.network_id.clone(),
-                storage_tier,
-                storage_bid_bytes: bid,
-                storage_used_bytes: used,
-                available_bytes: avail,
-            }
+                tier: format!("{:?}", sm.meta.tier),
+                quota_bytes: sm.meta.storage_bytes_bid,
+                fragment_bytes: sm.meta.storage_bytes_used.saturating_sub(filler_bytes),
+                filler_bytes,
+            })
         })
         .collect()
 }
