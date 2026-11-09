@@ -6,7 +6,7 @@ Alpha. Current version in the root `Cargo.toml`; history in the GitHub releases.
 
 - Identity: SSH ed25519 user key, per-device keys with signed certificates, verified announcements.
 - Services `pouch` / `bill` / `post`; storage tiers T1–T5; one Pouch per network per node.
-- Discovery (mDNS, Kademlia, bootstrap list, saved peers), gossip, NAT relay client.
+- Discovery through invite tokens, addresses in announcements, Kademlia, bootstrap list and saved peers; gossip; NAT relay client.
 - `bp put` / `bp get`: files streamed in 4 MiB chunks, random per-file key wrapped per authorized user, RLNC coding with adaptive k/n,
   distribution to remote Pouches, targeted fetch via the gossiped fragment index.
 - Tiers as nested layers: a chunk gets one fragment on every Pouch of the lowest layer with room, `k` from the exact recovery probability `P(Σ X_i ≥ k)`; fragments stored and served only with grants signed by the file's owner.

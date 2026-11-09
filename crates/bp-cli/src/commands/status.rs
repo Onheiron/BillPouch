@@ -103,6 +103,16 @@ fn print_status(s: &StatusData) {
         println!("🌐 Networks  {}", s.networks.join(", "));
     }
     println!("📡 Known peers  {}", s.known_peers);
+    if s.addresses.is_empty() {
+        println!("📍 Addresses    (not listening yet)");
+    } else {
+        println!(
+            "📍 Addresses    (give one to `bp bootstrap add` on a node that cannot find this one)"
+        );
+        for addr in &s.addresses {
+            println!("   {addr}");
+        }
+    }
 
     if let Some(qos) = &s.network_qos {
         println!();
