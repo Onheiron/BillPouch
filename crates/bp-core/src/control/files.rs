@@ -500,7 +500,7 @@ pub async fn put_file(
         Err(e) => return ControlResponse::err(e.to_string()),
     };
     let largest_chunk = (size_on_disk as usize).clamp(1, CHUNK_BYTES);
-    let file = match plan_file(state, &network_id, &file_id, largest_chunk, ph) {
+    let placement = match plan_file(state, &network_id, &file_id, largest_chunk, ph) {
         Ok(f) => f,
         Err(e) => return ControlResponse::err(e),
     };
@@ -523,7 +523,9 @@ pub async fn put_file(
             Ok(c) => c,
             Err(e) => return ControlResponse::err(format!("Encryption error: {e}")),
         };
-        if let Err(e) = store_chunk(state, &network_id, &sealed, &grant, &file, &mut total).await {
+        if let Err(e) =
+            store_chunk(state, &network_id, &sealed, &grant, &placement, &mut total).await
+        {
             if !total.chunks.is_empty() {
                 send_order(state, &network_id, &file_id, Action::Delete).await;
             }
@@ -551,7 +553,7 @@ pub async fn put_file(
         Ok(m) => m,
         Err(e) => return ControlResponse::err(e.to_string()),
     };
-    register_placement(state, &network_id, &file_id, &file, &total.chunks);
+    register_placement(state, &network_id, &file_id, &placement, &total.chunks);
     add_to_index(state, &network_id, manifest);
     publish_index(state, &network_id).await;
     ControlResponse::ok(PutFileData {
