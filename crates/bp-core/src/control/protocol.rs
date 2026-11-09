@@ -132,6 +132,7 @@ pub struct FlockData {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatusData {
     pub peer_id: String,
+    pub addresses: Vec<String>,
     pub fingerprint: String,
     pub alias: Option<String>,
     pub local_services: Vec<ServiceInfo>,

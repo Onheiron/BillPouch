@@ -137,6 +137,7 @@ pub struct Invite {
     pub genesis: Entry,
     pub creator_device: DeviceCert,
     pub entry: Entry,
+    pub addrs: Vec<String>,
 }
 
 impl Invite {
@@ -263,6 +264,7 @@ mod tests {
             entry: invite_entry(&carlo, &root, &key, &marco.user_key).unwrap(),
             genesis: root,
             creator_device: carlo.cert.clone(),
+            addrs: vec![],
         };
         let received = Invite::from_token(&invite.to_token().unwrap()).unwrap();
         assert_eq!(received.entry.unwrap_key(&marco).unwrap(), key);
@@ -277,6 +279,7 @@ mod tests {
             entry: root.clone(),
             genesis: root,
             creator_device: carlo.cert.clone(),
+            addrs: vec![],
         };
         let received = Invite::from_token(&invite.to_token().unwrap()).unwrap();
         assert_eq!(received.entry.unwrap_key(&carlo).unwrap(), key);
@@ -291,6 +294,7 @@ mod tests {
             entry: invite_entry(&carlo, &root, &key, &marco.user_key).unwrap(),
             genesis: root,
             creator_device: carlo.cert.clone(),
+            addrs: vec![],
         };
         invite.entry.body.member = Identity::in_memory(None).unwrap().user_key;
         assert!(Invite::from_token(&invite.to_token().unwrap()).is_err());

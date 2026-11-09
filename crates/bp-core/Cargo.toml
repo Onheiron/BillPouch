@@ -23,14 +23,12 @@ libp2p = { version = "0.57", features = [
     "yamux",
     "tcp",
     "identify",
-    "mdns",
     "macros",
     "tokio",
     "ed25519",
     "request-response",
     "autonat",
     "relay",
-    "dns",
 ] }
 
 sha2    = "0.10"

@@ -1,6 +1,6 @@
 use futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use libp2p::{
-    autonat, gossipsub, identify, identity::Keypair, kad, mdns, relay, request_response,
+    autonat, gossipsub, identify, identity::Keypair, kad, relay, request_response,
     swarm::NetworkBehaviour, PeerId, StreamProtocol,
 };
 use serde::{Deserialize, Serialize};
@@ -163,7 +163,6 @@ pub struct BillPouchBehaviour {
     pub gossipsub: gossipsub::Behaviour,
     pub kad: kad::Behaviour<kad::store::MemoryStore>,
     pub identify: identify::Behaviour,
-    pub mdns: mdns::tokio::Behaviour,
     pub fragment_exchange: request_response::Behaviour<FragmentCodec>,
     pub autonat: autonat::Behaviour,
     pub relay: relay::client::Behaviour,
@@ -195,8 +194,6 @@ impl BillPouchBehaviour {
             keypair.public(),
         ));
 
-        let mdns = mdns::tokio::Behaviour::new(mdns::Config::default(), peer_id)?;
-
         let fragment_exchange = request_response::Behaviour::with_codec(
             FragmentCodec,
             [(
@@ -212,7 +209,6 @@ impl BillPouchBehaviour {
             gossipsub,
             kad,
             identify,
-            mdns,
             fragment_exchange,
             autonat,
             relay: relay_client,

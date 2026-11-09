@@ -117,6 +117,9 @@ pub enum NetworkCommand {
     Dial {
         addr: Multiaddr,
     },
+    Dial {
+        addr: Multiaddr,
+    },
     PushFragment {
         peer_id: PeerId,
         chunk_id: String,
@@ -204,6 +207,38 @@ pub fn build_swarm(
     Ok(swarm)
 }
 
+pub type ListenAddrs = Arc<RwLock<Vec<String>>>;
+
+pub fn peer_of(addr: &Multiaddr) -> Option<PeerId> {
+    addr.iter().find_map(|p| match p {
+        libp2p::multiaddr::Protocol::P2p(peer) => Some(peer),
+        _ => None,
+    })
+}
+
+fn track_listen_addrs<E>(event: &SwarmEvent<E>, listen_addrs: &ListenAddrs, me: &PeerId) {
+    let (address, added) = match event {
+        SwarmEvent::NewListenAddr { address, .. } => (address, true),
+        SwarmEvent::ExpiredListenAddr { address, .. } => (address, false),
+        _ => return,
+    };
+    let loopback = address.iter().any(|p| match p {
+        libp2p::multiaddr::Protocol::Ip4(ip) => ip.is_loopback(),
+        libp2p::multiaddr::Protocol::Ip6(ip) => ip.is_loopback(),
+        _ => false,
+    });
+    if loopback {
+        return;
+    }
+    let full = format!("{address}/p2p/{me}");
+    if let Ok(mut addrs) = listen_addrs.write() {
+        addrs.retain(|a| *a != full);
+        if added {
+            addrs.push(full);
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn run_network_loop(
     mut swarm: Swarm<BillPouchBehaviour>,
@@ -216,6 +251,7 @@ pub async fn run_network_loop(
     identity: crate::identity::Identity,
     observations: ObservationLog,
     file_gossip: FileGossip,
+    listen_addrs: ListenAddrs,
 ) -> BpResult<()> {
     swarm
         .listen_on(listen_addr.clone())
@@ -273,6 +309,7 @@ pub async fn run_network_loop(
     loop {
         tokio::select! {
             event = swarm.select_next_some() => {
+                track_listen_addrs(&event, &listen_addrs, swarm.local_peer_id());
                 handle_swarm_event(event, &mut swarm, &state, &networks, &topics, &chains, &identity, &file_gossip, &storage_managers, &mut pending_fetches, &mut pending_pings, &mut pending_pos, &mut pending_fills, &mut repairs, &mut pending_syncs, &remote_fragment_index, &mut local_kad_peers).await;
             }
             cmd = cmd_rx.recv() => {
@@ -300,6 +337,14 @@ pub async fn run_network_loop(
                     }
                     Some(NetworkCommand::Publish { network_id, message }) => {
                         publish(&mut swarm, &networks, &network_id, &message);
+                    }
+                    Some(NetworkCommand::Dial { addr }) => {
+                        if let Some(peer) = peer_of(&addr) {
+                            swarm.behaviour_mut().kad.add_address(&peer, addr.clone());
+                        }
+                        if let Err(e) = swarm.dial(addr.clone()) {
+                            tracing::warn!(addr=%addr, "cannot dial: {e}");
+                        }
                     }
                     Some(NetworkCommand::Dial { addr }) => {
                         if let Err(e) = swarm.dial(addr.clone()) {
@@ -580,29 +625,6 @@ async fn handle_swarm_event(
             }
         }
 
-        SwarmEvent::Behaviour(behaviour::BillPouchBehaviourEvent::Mdns(
-            libp2p::mdns::Event::Discovered(list),
-        )) => {
-            for (peer_id, addr) in list {
-                tracing::info!(peer=%peer_id, addr=%addr, "mDNS peer discovered");
-                swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
-                known_peers.add(peer_id.to_string(), addr.to_string());
-                swarm.behaviour_mut().kad.add_address(&peer_id, addr);
-            }
-        }
-
-        SwarmEvent::Behaviour(behaviour::BillPouchBehaviourEvent::Mdns(
-            libp2p::mdns::Event::Expired(list),
-        )) => {
-            for (peer_id, _addr) in list {
-                tracing::debug!(peer=%peer_id, "mDNS peer expired");
-                swarm
-                    .behaviour_mut()
-                    .gossipsub
-                    .remove_explicit_peer(&peer_id);
-            }
-        }
-
         SwarmEvent::Behaviour(behaviour::BillPouchBehaviourEvent::Identify(
             libp2p::identify::Event::Received { peer_id, info, .. },
         )) => {
@@ -848,6 +870,11 @@ fn handle_gossip(
                 })
                 .unwrap_or(false);
             if info.network_id == network_id && member && info.is_authentic(publisher) {
+                if let Some(peer) = publisher {
+                    for addr in info.listen_addrs.iter().filter_map(|a| a.parse().ok()) {
+                        swarm.behaviour_mut().kad.add_address(peer, addr);
+                    }
+                }
                 if let Ok(mut st) = state.write() {
                     st.upsert(*info);
                 }

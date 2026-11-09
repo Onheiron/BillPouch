@@ -54,6 +54,7 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
         crate::chain::now_ms(),
     )?));
     let observations = crate::chain::ObservationLog::default();
+    let listen_addrs: crate::network::ListenAddrs = Arc::default();
 
     let daemon_state = Arc::new(DaemonState {
         identity: identity.clone(),
@@ -66,6 +67,7 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
         qos,
         remote_fragment_index: Arc::clone(&remote_fragment_index),
         files: RwLock::new(crate::files::FileStore::load()),
+        listen_addrs: Arc::clone(&listen_addrs),
     });
 
     let swarm = network::build_swarm(identity.device.clone())
@@ -85,6 +87,7 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
     let net_chains = Arc::clone(&chains);
     let net_identity = identity.clone();
     let net_observations = Arc::clone(&observations);
+    let net_listen_addrs = Arc::clone(&listen_addrs);
     let (file_tx, mut file_rx) = mpsc::channel(256);
     tokio::spawn(async move {
         if let Err(e) = network::run_network_loop(
@@ -98,6 +101,7 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
             net_identity,
             net_observations,
             file_tx,
+            net_listen_addrs,
         )
         .await
         {

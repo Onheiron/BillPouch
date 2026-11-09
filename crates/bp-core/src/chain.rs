@@ -165,6 +165,7 @@ impl Chain {
             genesis: self.genesis.clone(),
             creator_device: self.creator_device.clone(),
             entry,
+            addrs: Vec::new(),
         })
     }
 
@@ -173,6 +174,7 @@ impl Chain {
             genesis: self.genesis.clone(),
             creator_device: self.creator_device.clone(),
             entry: self.own_entry.clone(),
+            addrs: Vec::new(),
         }
     }
 

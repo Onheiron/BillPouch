@@ -39,6 +39,7 @@ pub struct DaemonState {
     pub qos: Arc<RwLock<QosRegistry>>,
     pub remote_fragment_index: Arc<RwLock<RemoteFragmentIndex>>,
     pub files: RwLock<crate::files::FileStore>,
+    pub listen_addrs: crate::network::ListenAddrs,
 }
 
 pub async fn run_control_server(
@@ -154,6 +155,7 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
 
             let data = StatusData {
                 peer_id: own_peer,
+                addresses: state.listen_addrs.read().unwrap().clone(),
                 fingerprint: state.identity.fingerprint.clone(),
                 alias: state.identity.profile.alias.clone(),
                 local_services: services.all().into_iter().cloned().collect(),
@@ -430,7 +432,11 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                             "you are not in a network named '{network_id}'"
                         ))
                     })
-                    .and_then(|chain| chain.own_invite().to_token());
+                    .and_then(|chain| {
+                        let mut invite = chain.own_invite();
+                        invite.addrs = state.listen_addrs.read().unwrap().clone();
+                        invite.to_token()
+                    });
                 return match token {
                     Ok(token) => ControlResponse::ok(InviteData {
                         token,
@@ -450,7 +456,10 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 ),
                 Some(chain) => chain.invite(&member_key, now_ms()),
             };
-            let token = match result.and_then(|invite| invite.to_token()) {
+            let token = match result.and_then(|mut invite| {
+                invite.addrs = state.listen_addrs.read().unwrap().clone();
+                invite.to_token()
+            }) {
                 Ok(token) => token,
                 Err(e) => return ControlResponse::err(e.to_string()),
             };
@@ -471,18 +480,21 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
         ControlRequest::JoinNetwork { token } => {
             let result = Invite::from_token(&token).and_then(|invite| {
                 let name = invite.genesis.body.network.clone();
-                if state.chains.read().unwrap().contains_key(&name) {
-                    return Ok(name);
+                let addrs = invite.addrs.clone();
+                if !state.chains.read().unwrap().contains_key(&name) {
+                    let mut chain = Chain::from_invite(&state.identity, invite)?;
+                    chain.save()?;
+                    state.chains.write().unwrap().insert(name.clone(), chain);
                 }
-                let mut chain = Chain::from_invite(&state.identity, invite)?;
-                chain.save()?;
-                state.chains.write().unwrap().insert(name.clone(), chain);
-                Ok(name)
+                Ok((name, addrs))
             });
-            let name = match result {
-                Ok(name) => name,
+            let (name, addrs) = match result {
+                Ok(joined) => joined,
                 Err(e) => return ControlResponse::err(e.to_string()),
             };
+            for addr in addrs.iter().filter_map(|a| a.parse().ok()) {
+                let _ = state.net_tx.send(NetworkCommand::Dial { addr }).await;
+            }
             if let Err(e) = subscribe(state, &name).await {
                 return ControlResponse::err(e.to_string());
             }
@@ -902,7 +914,7 @@ async fn announce_service(state: &DaemonState, svc: &ServiceInfo) {
         service_type: svc.service_type,
         service_id: svc.id.clone(),
         network_id: svc.network_id.clone(),
-        listen_addrs: vec![],
+        listen_addrs: state.listen_addrs.read().unwrap().clone(),
         announced_at: chrono::Utc::now().timestamp() as u64,
         metadata: pouch_metadata(state, svc),
         device_cert: state.identity.cert.clone(),

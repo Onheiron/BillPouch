@@ -52,7 +52,7 @@ else
     fail "bp-laptop never joined as a second device of carlo"
 fi
 
-header "2. Waiting for mDNS discovery + gossipsub mesh formation"
+header "2. Waiting for peers to learn each other's addresses and form the gossipsub mesh"
 info "Sleeping 20s for peers to discover each other and form gossipsub mesh..."
 sleep 20
 

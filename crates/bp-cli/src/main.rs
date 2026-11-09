@@ -280,7 +280,7 @@ enum Cmd {
 
     #[command(
         about = "Manage WAN bootstrap nodes (stored in bootstrap.json)",
-        long_about = "Manage WAN bootstrap nodes (stored in bootstrap.json).\n\nBootstrap nodes let the daemon discover peers on the public internet where mDNS multicast is not available.  Changes take effect on the next daemon restart."
+        long_about = "Manage WAN bootstrap nodes (stored in bootstrap.json).\n\nBootstrap nodes let the daemon reach peers it did not learn from an invite token or from the network; `bp status` prints a node's addresses. Changes take effect on the next daemon restart."
     )]
     Bootstrap {
         #[command(subcommand)]

@@ -52,12 +52,18 @@ libp2p 0.57 over TCP with Noise and Yamux:
 
 | Behaviour | Use |
 |-----------|-----|
-| mDNS | Zero-config discovery on the LAN |
-| Kademlia | Routing table, seeded by `kad_peers.json` and `bootstrap.json` |
+| Kademlia | Routing table, seeded by invite tokens, `kad_peers.json`, `bootstrap.json` and the addresses in NodeInfo |
 | Identify | `/billpouch/id/1.0.0` |
 | Gossipsub | One topic per network, `BLAKE3_keyed(network key, "billpouch/topic/v1")`; every message is encrypted with the network key |
 | Request-response (CBOR) | `/billpouch/fragment/1.1.0`: store, fetch, ping, Proof-of-Storage |
 | AutoNAT + relay client | NAT traversal through a relay (`bp relay connect`) |
+
+Peers are found without any local-network discovery: nodes on one LAN tend to
+fail together, so they are no better than any other peer. An invite token
+carries the addresses the inviter listens on (VPN ones included), and joining
+dials them. Every NodeInfo carries its node's addresses, so whoever accepts it
+can reach that node; identify, saved peers (`kad_peers.json`) and
+`bp bootstrap add` with an address from `bp status` do the rest.
 
 A daemon can be in several networks at once. Gossip messages are `Node` (NodeInfo), `Index` (fragment locations) and `Consensus` (ledger ops, proposals, votes, commits). A node accepts NodeInfo, and serves fragment requests, only from devices of ledger members.
 
