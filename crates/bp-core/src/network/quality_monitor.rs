@@ -36,7 +36,7 @@ const CATCH_UP_INTERVAL_SECS: u64 = 60;
 const MAX_REPAIRS_PER_ROUND: usize = 64;
 const MAX_VOLUNTEERS_PER_ROUND: usize = 2;
 
-const DEFAULT_TRUST_AT: f64 = 0.8;
+const DEFAULT_TRUST_AT: f64 = 0.9;
 
 const CLAIM_RETRY_SECS: u64 = 600;
 
@@ -88,7 +88,7 @@ pub async fn run_quality_monitor(
             }
             _ = catch_up_interval.tick() => {
                 run_catch_up(&me, &network_state, &storage_managers, &chains, &net_tx, &mut claimed).await;
-                run_trust_round(&identity, &storage_managers, &chains, &mut claimed);
+                run_trust_round(&identity, &storage_managers, &chains, &qos, &mut claimed);
             }
         }
     }
@@ -516,6 +516,7 @@ fn run_trust_round(
     identity: &Identity,
     storage_managers: &StorageManagerMap,
     chains: &Chains,
+    qos: &Arc<RwLock<QosRegistry>>,
     claimed: &mut Claims,
 ) {
     let me = identity.peer_id.to_string();
@@ -575,7 +576,10 @@ fn run_trust_round(
     let threshold = trust_threshold();
     let mut chosen: std::collections::BTreeMap<String, (f64, String, String)> =
         std::collections::BTreeMap::new();
-    for (network, file_id, newcomer, confidence) in offers {
+    let seen = qos.read().ok();
+    for (network, file_id, newcomer, public) in offers {
+        let watched = seen.as_ref().map_or(0.0, |q| q.availability(&newcomer));
+        let confidence = public.max(watched);
         let better = chosen
             .get(&network)
             .is_none_or(|(best, _, _)| confidence > *best);
@@ -583,6 +587,7 @@ fn run_trust_round(
             chosen.insert(network, (confidence, file_id, newcomer));
         }
     }
+    drop(seen);
     let mut all = chains.write().unwrap();
     for (network, (confidence, file_id, newcomer)) in chosen {
         let Some(chain) = all.get_mut(&network) else {

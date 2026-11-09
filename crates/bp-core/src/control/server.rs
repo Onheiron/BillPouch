@@ -547,7 +547,9 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                         .get(fingerprint)
                         .map_or(0, |a| a.len()),
                     trust: ledger.trust_score(fingerprint),
+                    locked_trust: ledger.locked_trust(fingerprint),
                     open_bets: ledger.open_bets(fingerprint),
+                    sponsoring: ledger.sponsoring(fingerprint),
                 })
                 .collect();
             ControlResponse::ok(MembersData {

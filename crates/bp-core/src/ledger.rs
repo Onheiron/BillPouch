@@ -16,7 +16,9 @@ pub const USAGE_INTERVAL_SECS: u64 = 120;
 pub const MAX_CHUNKS_PER_FILE: usize = 1 << 20;
 const DAY: u64 = 86_400;
 const PPM: i64 = 1_000_000;
-const TRUST_PER_BET: i64 = 250_000;
+const STAKE: i64 = 250_000;
+const SPONSOR_REWARD: i64 = 50_000;
+const FREE_COMMITMENTS: usize = 4;
 
 const PROMOTIONS: [(ReputationTier, u64, f64); 3] = [
     (ReputationTier::R4, 365, 0.999),
@@ -107,7 +109,6 @@ pub struct Placement {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Params {
     pub ph_ppm: u32,
-    pub prior_ppm: u32,
     pub decay_ppm: u32,
     pub horizon_epochs: u64,
     pub grace_epochs: u64,
@@ -117,7 +118,6 @@ impl Default for Params {
     fn default() -> Self {
         Self {
             ph_ppm: 999_000,
-            prior_ppm: 500_000,
             decay_ppm: 900_000,
             horizon_epochs: 7,
             grace_epochs: 2,
@@ -132,7 +132,6 @@ impl Params {
 
     fn valid(&self) -> bool {
         (1..1_000_000).contains(&self.ph_ppm)
-            && self.prior_ppm <= 1_000_000
             && self.decay_ppm <= 1_000_000
             && (1..=365).contains(&self.horizon_epochs)
             && (1..=365).contains(&self.grace_epochs)
@@ -146,6 +145,15 @@ pub struct Bet {
     pub released: String,
     pub newcomer: String,
     pub confidence_ppm: u32,
+    pub baseline_ppm: u32,
+    pub until_epoch: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Sponsorship {
+    pub sponsor: String,
+    pub member: String,
+    pub from_epoch: u64,
     pub until_epoch: u64,
 }
 
@@ -301,6 +309,7 @@ pub struct Ledger {
     pub params: Params,
     pub param_votes: BTreeMap<String, Params>,
     pub bets: Vec<Bet>,
+    pub sponsorships: Vec<Sponsorship>,
     pub trust: BTreeMap<String, i64>,
 }
 
@@ -360,6 +369,7 @@ impl Ledger {
             params: Params::default(),
             param_votes: BTreeMap::new(),
             bets: Vec::new(),
+            sponsorships: Vec::new(),
             trust: BTreeMap::new(),
             genesis,
         };
@@ -429,9 +439,33 @@ impl Ledger {
         self.bets.iter().filter(|b| b.user == user).count()
     }
 
-    pub fn bet_allowance(&self, user: &str) -> usize {
+    pub fn sponsoring(&self, user: &str) -> usize {
+        self.sponsorships
+            .iter()
+            .filter(|s| s.sponsor == user)
+            .count()
+    }
+
+    pub fn locked_trust(&self, user: &str) -> f64 {
+        (self.open_bets(user) + self.sponsoring(user)) as f64 * STAKE as f64 / PPM as f64
+    }
+
+    pub fn allowance(&self, user: &str) -> usize {
         let trust = self.trust.get(user).copied().unwrap_or(0).max(0);
-        1 + usize::try_from(trust / TRUST_PER_BET).unwrap_or(usize::MAX)
+        FREE_COMMITMENTS + usize::try_from(trust / STAKE).unwrap_or(usize::MAX)
+    }
+
+    fn may_commit(&self, user: &str) -> bool {
+        self.open_bets(user) + self.sponsoring(user) < self.allowance(user)
+    }
+
+    fn invited(&self, by: &str, user: &str) -> bool {
+        let (Some(by), Some(user)) = (self.members.get(by), self.members.get(user)) else {
+            return false;
+        };
+        self.entries
+            .iter()
+            .any(|e| e.body.author == by.key && e.body.member == user.key)
     }
 
     fn promote(&mut self, file_id: &str) {
@@ -491,8 +525,8 @@ impl Ledger {
         if open + p.k >= p.planned {
             return Err("the file has no tolerance left for untested holders");
         }
-        if self.open_bets(user) >= self.bet_allowance(user) {
-            return Err("too many open bets for your trust");
+        if !self.may_commit(user) {
+            return Err("too many open bets and invitations for your trust");
         }
         Ok(())
     }
@@ -511,13 +545,38 @@ impl Ledger {
                 self.bets.push(bet);
                 continue;
             }
+            let newcomer = self.device_owner(&bet.newcomer).unwrap_or_default();
+            if self.invited(&bet.user, newcomer) {
+                continue;
+            }
             let outcome = if holding { PPM } else { 0 };
-            let prior = i64::from(self.params.prior_ppm);
+            let baseline = i64::from(bet.baseline_ppm);
             let forecast = i64::from(bet.confidence_ppm);
-            let skill = ((prior - outcome).pow(2) - (forecast - outcome).pow(2)) / PPM;
+            let skill = ((baseline - outcome).pow(2) - (forecast - outcome).pow(2)) / PPM;
             let decay = i64::from(self.params.decay_ppm);
             let score = self.trust.entry(bet.user).or_default();
             *score = *score * decay / PPM + skill;
+        }
+        for sponsorship in std::mem::take(&mut self.sponsorships) {
+            let worked = self.devices.iter().any(|(device, d)| {
+                d.user == sponsorship.member
+                    && self.is_live(device)
+                    && self
+                        .proven
+                        .get(device)
+                        .is_some_and(|&e| e >= sponsorship.from_epoch)
+            });
+            let gone = !self.is_member(&sponsorship.member);
+            if !gone && epoch < sponsorship.until_epoch {
+                self.sponsorships.push(sponsorship);
+                continue;
+            }
+            let change = match (gone, worked) {
+                (true, _) => -STAKE,
+                (false, true) => SPONSOR_REWARD,
+                (false, false) => 0,
+            };
+            *self.trust.entry(sponsorship.sponsor).or_default() += change;
         }
     }
 
@@ -637,6 +696,15 @@ impl Ledger {
                 if self.members.contains_key(&member) {
                     return Err(invalid("already a member"));
                 }
+                if !self.may_commit(&author) {
+                    return Err(invalid("too many open bets and invitations for your trust"));
+                }
+                self.sponsorships.push(Sponsorship {
+                    sponsor: author.clone(),
+                    member: member.clone(),
+                    from_epoch: block.epoch(),
+                    until_epoch: block.epoch() + self.params.horizon_epochs,
+                });
                 self.members.insert(
                     member,
                     Member {
@@ -847,6 +915,7 @@ impl Ledger {
                     released: released.clone(),
                     newcomer: newcomer.clone(),
                     confidence_ppm: *confidence_ppm,
+                    baseline_ppm: (self.survival(newcomer) * PPM as f64) as u32,
                     until_epoch: block.epoch() + self.params.horizon_epochs,
                 });
             }
@@ -1662,15 +1731,15 @@ mod tests {
 
         net.commit(0, t, vec![sign(0, place("g")), sign(2, hold("g"))])
             .unwrap();
-        assert!(
-            net.commit(0, t, vec![sign(1, trust("g", &d1))]).is_err(),
-            "one open bet without trust"
-        );
         for _ in 0..net.ledger.params.horizon_epochs {
             net.next_epoch();
         }
         assert!(net.ledger.bets.is_empty());
-        assert_eq!(net.ledger.trust[&net.fp(1)], 240_000);
+        assert_eq!(
+            net.ledger.trust[&net.fp(1)],
+            974_437,
+            "it beat the ledger's forecast"
+        );
 
         let t = net.now();
         net.commit(0, t, vec![sign(1, trust("g", &d1))]).unwrap();
@@ -1679,7 +1748,75 @@ mod tests {
             net.ledger.bets.is_empty(),
             "a vanished newcomer loses the bet"
         );
-        assert_eq!(net.ledger.trust[&net.fp(1)], 216_000 - 560_000);
+        assert_eq!(net.ledger.trust[&net.fp(1)], 876_993 - 809_938);
+    }
+
+    #[test]
+    fn inviting_stakes_trust_and_bets_on_invitees_do_not_score() {
+        let mut net = Net::everyone_joined(3);
+        for who in 1..3 {
+            let op = SignedOp::sign(
+                &net.people[who],
+                Op::RegisterDevice {
+                    cert: net.people[who].cert.clone(),
+                },
+            )
+            .unwrap();
+            let t = net.now();
+            net.commit(0, t, vec![op]).unwrap();
+        }
+        let device = |i: usize| net.people[i].peer_id.to_string();
+        let (d0, d1, d2) = (device(0), device(1), device(2));
+        let people = net.people.clone();
+        let sign = |who: usize, op: Op| SignedOp::sign(&people[who], op).unwrap();
+        assert_eq!(net.ledger.sponsoring(&net.fp(0)), 2);
+        let t = net.now();
+        let place = Op::Place {
+            file_id: "f".into(),
+            k: 1,
+            layer: StorageTier::T1,
+            chunks: vec!["c".into()],
+            holders: [d0.clone(), d1.clone()].into(),
+        };
+        let hold = Op::Hold {
+            file_id: "f".into(),
+            device: d2.clone(),
+        };
+        let trust = Op::Trust {
+            file_id: "f".into(),
+            released: d0.clone(),
+            newcomer: d2.clone(),
+            confidence_ppm: 900_000,
+        };
+        net.commit(0, t, vec![sign(0, place), sign(2, hold)])
+            .unwrap();
+        net.commit(0, t, vec![sign(0, trust)]).unwrap();
+        for _ in 0..net.ledger.params.horizon_epochs {
+            net.next_epoch();
+            let t = net.now();
+            let seen = vec![net.observe(0, 1, 5, 5, t), net.observe(1, 2, 5, 5, t)];
+            net.commit(0, t, seen).unwrap();
+        }
+        assert!(net.ledger.sponsorships.is_empty() && net.ledger.bets.is_empty());
+        assert_eq!(
+            net.ledger.trust[&net.fp(0)],
+            2 * SPONSOR_REWARD,
+            "two invitees who work, and an unscored bet on one of them"
+        );
+
+        let mut net = Net::everyone_joined(3);
+        let t = net.now();
+        let leave = SignedOp::sign(&net.people[2], Op::Leave).unwrap();
+        net.commit(0, t, vec![leave]).unwrap();
+        assert_eq!(net.ledger.trust[&net.fp(0)], -STAKE);
+        for _ in 0..net.ledger.params.horizon_epochs {
+            net.next_epoch();
+        }
+        assert_eq!(
+            net.ledger.trust[&net.fp(0)],
+            -STAKE,
+            "an invitee who stays without working costs nothing"
+        );
     }
 
     #[test]

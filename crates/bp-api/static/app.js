@@ -341,7 +341,7 @@ function renderNetwork(data) {
     .map(([network, m]) => {
       const p = m.params;
       const params = p
-        ? `<div class="params">target recovery <b>${(p.ph_ppm / 1e4).toFixed(2)}%</b> · trust prior <b>${(p.prior_ppm / 1e6).toFixed(2)}</b> · decay <b>${(p.decay_ppm / 1e6).toFixed(2)}</b> · bets last <b>${plural(p.horizon_epochs, "epoch", "epochs")}</b> · a silent device counts for <b>${plural(p.grace_epochs, "epoch", "epochs")}</b></div>`
+        ? `<div class="params">target recovery <b>${(p.ph_ppm / 1e4).toFixed(2)}%</b> · decay <b>${(p.decay_ppm / 1e6).toFixed(2)}</b> · bets last <b>${plural(p.horizon_epochs, "epoch", "epochs")}</b> · a silent device counts for <b>${plural(p.grace_epochs, "epoch", "epochs")}</b></div>`
         : "";
       const rows = m.members
         .map(
@@ -350,7 +350,7 @@ function renderNetwork(data) {
             <td>${esc(u.tier)} · ${u.weight}</td>
             <td>${bytes(u.credit_bytes)}</td>
             <td>${bytes(u.used_bytes)}</td>
-            <td class="${u.trust > 0 ? "up" : u.trust < 0 ? "down" : ""}">${u.trust >= 0 ? "+" : ""}${u.trust.toFixed(2)}${u.open_bets ? ` <small>${plural(u.open_bets, "open bet", "open bets")}</small>` : ""}</td>
+            <td class="${u.trust > 0 ? "up" : u.trust < 0 ? "down" : ""}">${u.trust >= 0 ? "+" : ""}${u.trust.toFixed(2)}${u.open_bets || u.sponsoring ? ` <small>${u.locked_trust.toFixed(2)} locked · ${plural(u.open_bets, "open bet", "open bets")} · ${plural(u.sponsoring, "invitation", "invitations")}</small>` : ""}</td>
           </tr>`,
         )
         .join("");
