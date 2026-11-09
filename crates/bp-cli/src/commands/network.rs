@@ -78,7 +78,7 @@ pub async fn members(network_id: String) -> anyhow::Result<()> {
             ""
         };
         println!(
-            "   {:<12} {}  {:<10} weight {}  hosts {:.1} MiB  stores {:.1} MiB  devices {}  trust {:+.2} ({} open bet(s)){}{}",
+            "   {:<12} {}  {:<10} weight {}  hosts {:.1} MiB  stores {:.1} MiB  devices {}  trust {:+.2} ({:.2} locked: {} open bet(s), {} invitation(s)){}{}",
             member.name,
             member.fingerprint,
             member.tier,
@@ -87,7 +87,9 @@ pub async fn members(network_id: String) -> anyhow::Result<()> {
             member.used_bytes as f64 / 1_048_576.0,
             member.devices,
             member.trust,
+            member.locked_trust,
             member.open_bets,
+            member.sponsoring,
             you,
             expel
         );
@@ -108,7 +110,6 @@ fn ppm(value: f64) -> anyhow::Result<u32> {
 pub async fn params(
     network_id: String,
     ph: Option<f64>,
-    prior: Option<f64>,
     decay: Option<f64>,
     horizon: Option<u64>,
     grace: Option<u64>,
@@ -128,13 +129,10 @@ pub async fn params(
         }
     };
     let mut data = fetch(None).await?;
-    if ph.is_some() || prior.is_some() || decay.is_some() || horizon.is_some() || grace.is_some() {
+    if ph.is_some() || decay.is_some() || horizon.is_some() || grace.is_some() {
         let mut wanted = data.params;
         if let Some(v) = ph {
             wanted.ph_ppm = ppm(v)?;
-        }
-        if let Some(v) = prior {
-            wanted.prior_ppm = ppm(v)?;
         }
         if let Some(v) = decay {
             wanted.decay_ppm = ppm(v)?;
@@ -149,9 +147,8 @@ pub async fn params(
     }
     let show = |p: &Params| {
         format!(
-            "ph {:.6}  prior {:.3}  decay {:.3}  horizon {} epoch(s)  grace {} epoch(s)",
+            "ph {:.6}  decay {:.3}  horizon {} epoch(s)  grace {} epoch(s)",
             p.ph(),
-            f64::from(p.prior_ppm) / 1e6,
             f64::from(p.decay_ppm) / 1e6,
             p.horizon_epochs,
             p.grace_epochs

@@ -176,9 +176,6 @@ enum Cmd {
         #[arg(help = "Default target recovery probability of a file, below 1")]
         #[arg(long)]
         ph: Option<f64>,
-        #[arg(help = "Prior chance that a newcomer stays, the baseline of trust bets")]
-        #[arg(long)]
-        prior: Option<f64>,
         #[arg(help = "How much of their trust a member keeps at each settled bet")]
         #[arg(long)]
         decay: Option<f64>,
@@ -497,12 +494,11 @@ async fn main() -> anyhow::Result<()> {
         Some(Cmd::Params {
             network_id,
             ph,
-            prior,
             decay,
             horizon,
             grace,
         }) => {
-            commands::network::params(network_id, ph, prior, decay, horizon, grace).await?;
+            commands::network::params(network_id, ph, decay, horizon, grace).await?;
         }
 
         Some(Cmd::Leave { network_id, force }) => {

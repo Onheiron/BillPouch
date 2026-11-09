@@ -192,7 +192,9 @@ pub struct MemberInfo {
     pub joined_at: u64,
     pub expel_approvals: usize,
     pub trust: f64,
+    pub locked_trust: f64,
     pub open_bets: usize,
+    pub sponsoring: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
