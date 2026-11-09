@@ -249,7 +249,7 @@ if the new member leaves or is expelled before then the inviter loses 0.25,
 if by then one of their devices proved its storage the inviter gains 0.05,
 otherwise nothing changes. A bet on a member you invited is allowed but not
 scored, so nobody farms trust on users they brought in. Every open bet and
-invitation locks 0.25 of trust: a member has at most `4 + trust / 0.25` of
+invitation locks 0.25 of trust: a member has at most `8 + trust / 0.25` of
 them open together. Safety floor: a file has at most `n − k` open bets, so it
 survives every untested newcomer vanishing. Nobody bets on their own devices.
 Each node's confidence is the higher of the public forecast and its own
