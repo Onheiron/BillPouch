@@ -14,7 +14,7 @@ use crate::{
 };
 use libp2p::PeerId;
 use rand::{seq::SliceRandom, Rng};
-use std::collections::BTreeMap;
+use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
@@ -34,8 +34,6 @@ const MAX_BLOBS_PER_ROUND: u64 = 256;
 const CATCH_UP_INTERVAL_SECS: u64 = 60;
 
 const MAX_REPAIRS_PER_ROUND: usize = 64;
-
-const MAX_CATALOGS_PER_ROUND: usize = 16;
 
 const MAX_CHALLENGES_PER_ROUND: usize = 8;
 
@@ -68,6 +66,7 @@ pub async fn run_quality_monitor(
         "Quality monitor started"
     );
 
+    let mut claimed = HashSet::new();
     loop {
         tokio::select! {
             _ = ping_interval.tick() => {
@@ -83,7 +82,7 @@ pub async fn run_quality_monitor(
                 run_fill_round(&identity, &network_state, &storage_managers, &net_tx).await;
             }
             _ = catch_up_interval.tick() => {
-                run_catch_up(&me, &network_state, &storage_managers, &net_tx).await;
+                run_catch_up(&me, &network_state, &storage_managers, &chains, &net_tx, &mut claimed).await;
             }
         }
     }
@@ -282,34 +281,8 @@ async fn run_pos_round(
     }
 }
 
-fn layer_peers(
-    network_state: &Arc<RwLock<NetworkState>>,
-    network: &str,
-    layer: StorageTier,
-    me: &str,
-) -> Vec<String> {
-    network_state
-        .read()
-        .map(|ns| {
-            ns.in_network(network)
-                .into_iter()
-                .filter(|n| n.service_type == ServiceType::Pouch && n.peer_id != me)
-                .filter(|n| n.metadata.get("evicting").and_then(|v| v.as_bool()) != Some(true))
-                .filter(|n| {
-                    n.metadata
-                        .get("tier")
-                        .and_then(|t| t.as_str())
-                        .and_then(|t| StorageTier::parse(t).ok())
-                        .is_some_and(|t| t >= layer)
-                })
-                .map(|n| n.peer_id.clone())
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 pub fn repairs_fall_to_me(
-    chunk_id: &str,
+    key: &str,
     planned: usize,
     holding: &[String],
     layer: &[String],
@@ -322,7 +295,7 @@ pub fn repairs_fall_to_me(
         .chain(std::iter::once(me))
         .filter(|p| !holding.iter().any(|h| h == p))
         .collect();
-    candidates.sort_by_key(|p| blake3::hash(format!("{chunk_id}/{p}").as_bytes()).to_hex());
+    candidates.sort_by_key(|p| blake3::hash(format!("{key}/{p}").as_bytes()).to_hex());
     candidates.dedup();
     candidates
         .iter()
@@ -346,7 +319,9 @@ async fn run_catch_up(
     me: &str,
     network_state: &Arc<RwLock<NetworkState>>,
     storage_managers: &StorageManagerMap,
+    chains: &Chains,
     net_tx: &mpsc::Sender<NetworkCommand>,
+    claimed: &mut HashSet<String>,
 ) {
     let pouches: Vec<(
         String,
@@ -364,83 +339,117 @@ async fn run_catch_up(
         })
         .unwrap_or_default();
     for (network, tier, sm) in pouches {
-        for layer in tier.layers() {
-            let peers = layer_peers(network_state, &network, layer, me);
-            let asked: Vec<String> = peers
-                .choose_multiple(&mut rand::thread_rng(), MAX_CATALOGS_PER_ROUND)
-                .cloned()
-                .collect();
-            let mut holders: BTreeMap<String, (crate::storage::CatalogEntry, Vec<String>)> =
-                BTreeMap::new();
-            for peer in asked {
-                let Ok(peer_id) = peer.parse::<PeerId>() else {
-                    continue;
-                };
-                let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                let sent = net_tx
-                    .send(NetworkCommand::Catalog {
-                        peer_id,
-                        network: network.clone(),
-                        layer,
-                        resp_tx,
-                    })
-                    .await;
-                if sent.is_err() {
+        let pouches_by_tier = layer_tiers(network_state, &network, me);
+        let mut recodes = Vec::new();
+        let mut complete = Vec::new();
+        {
+            let all = chains.read().unwrap();
+            let Some(chain) = all.get(&network) else {
+                continue;
+            };
+            let ledger = chain.ledger();
+            for (file_id, placement) in &ledger.placements {
+                if tier < placement.layer || placement.holders.contains(me) {
                     continue;
                 }
-                let Ok(Ok(catalog)) =
-                    tokio::time::timeout(Duration::from_secs(POS_TIMEOUT_SECS), resp_rx).await
+                let live: Vec<String> = ledger
+                    .live_holders(placement)
+                    .into_iter()
+                    .cloned()
+                    .collect();
+                let layer: Vec<String> = pouches_by_tier
+                    .iter()
+                    .filter(|(_, t)| *t >= placement.layer)
+                    .map(|(p, _)| p.clone())
+                    .collect();
+                if !repairs_fall_to_me(file_id, placement.planned, &live, &layer, me) {
+                    continue;
+                }
+                let Some(owner_key) = ledger.members.get(&placement.owner).map(|m| m.key.clone())
                 else {
                     continue;
                 };
-                for entry in catalog {
-                    holders
-                        .entry(entry.chunk_id.clone())
-                        .or_insert_with(|| (entry, Vec::new()))
-                        .1
-                        .push(peer.clone());
+                let owner = crate::storage::ChunkOwner {
+                    owner_key,
+                    file_id: file_id.clone(),
+                    layer: placement.layer,
+                };
+                let missing: Vec<&String> = {
+                    let sm = sm.read().unwrap();
+                    placement
+                        .chunks
+                        .iter()
+                        .filter(|c| !sm.has_chunk(c))
+                        .collect()
+                };
+                if missing.is_empty() {
+                    complete.push(file_id.clone());
+                }
+                for chunk in missing {
+                    recodes.push((chunk.clone(), owner.clone(), live.clone(), placement.k));
                 }
             }
-            let missing: Vec<_> = {
-                let sm = sm.read().unwrap();
-                holders
-                    .into_values()
-                    .filter(|(entry, holding)| {
-                        !sm.has_chunk(&entry.chunk_id)
-                            && repairs_fall_to_me(
-                                &entry.chunk_id,
-                                entry.owner.holders,
-                                holding,
-                                &peers,
-                                me,
-                            )
-                    })
-                    .take(MAX_REPAIRS_PER_ROUND)
-                    .collect()
-            };
-            let mut started = 0;
-            for (entry, holding) in missing {
-                let Some(route) = repair_route(&holding, entry.k, me) else {
-                    continue;
-                };
-                let Ok(first) = route[0].parse::<PeerId>() else {
-                    continue;
-                };
-                let _ = net_tx
-                    .send(NetworkCommand::Recode {
-                        peer_id: first,
-                        chunk_id: entry.chunk_id,
-                        owner: entry.owner,
-                        route: route[1..].to_vec(),
-                    })
-                    .await;
-                started += 1;
+        }
+        for file_id in complete {
+            if !claimed.insert(file_id.clone()) {
+                continue;
             }
-            if started > 0 {
-                tracing::info!(network = %network, layer = ?layer, chunks = started, "catching up: recoding missing fragments");
+            let hold = crate::ledger::Op::Hold {
+                file_id: file_id.clone(),
+                device: me.to_string(),
+            };
+            if let Some(chain) = chains.write().unwrap().get_mut(&network) {
+                match chain.propose(hold, crate::chain::now_ms()) {
+                    Ok(()) => {
+                        tracing::info!(file_id = %file_id, "repaired a file and became its holder")
+                    }
+                    Err(e) => tracing::warn!(file_id = %file_id, "cannot register as holder: {e}"),
+                }
             }
         }
+        let mut started = 0;
+        for (chunk_id, owner, live, k) in recodes.into_iter().take(MAX_REPAIRS_PER_ROUND) {
+            let Some(route) = repair_route(&live, k, me) else {
+                continue;
+            };
+            let Ok(first) = route[0].parse::<PeerId>() else {
+                continue;
+            };
+            let _ = net_tx
+                .send(NetworkCommand::Recode {
+                    peer_id: first,
+                    chunk_id,
+                    owner,
+                    route: route[1..].to_vec(),
+                })
+                .await;
+            started += 1;
+        }
+        if started > 0 {
+            tracing::info!(network = %network, chunks = started, "repairing files below their planned holders");
+        }
     }
+}
+
+fn layer_tiers(
+    network_state: &Arc<RwLock<NetworkState>>,
+    network: &str,
+    me: &str,
+) -> Vec<(String, StorageTier)> {
+    network_state
+        .read()
+        .map(|ns| {
+            ns.in_network(network)
+                .into_iter()
+                .filter(|n| n.service_type == ServiceType::Pouch && n.peer_id != me)
+                .filter(|n| n.metadata.get("evicting").and_then(|v| v.as_bool()) != Some(true))
+                .filter_map(|n| {
+                    let tier = StorageTier::parse(n.metadata.get("tier")?.as_str()?).ok()?;
+                    Some((n.peer_id.clone(), tier))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 async fn prove_one(

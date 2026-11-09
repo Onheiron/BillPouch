@@ -124,7 +124,6 @@ pub enum NetworkCommand {
         data: Vec<u8>,
         grant: crate::files::Grant,
         layer: crate::storage::StorageTier,
-        holders: usize,
         commitment: crate::storage::commitment::Commitment,
     },
     FetchChunkFragments {
@@ -146,12 +145,6 @@ pub enum NetworkCommand {
         target: crate::storage::PosTarget,
         seed: u64,
         resp_tx: tokio::sync::oneshot::Sender<Option<Proven>>,
-    },
-    Catalog {
-        peer_id: PeerId,
-        network: String,
-        layer: crate::storage::StorageTier,
-        resp_tx: tokio::sync::oneshot::Sender<Vec<crate::storage::CatalogEntry>>,
     },
     Recode {
         peer_id: PeerId,
@@ -176,10 +169,6 @@ pub type Proven = (
 
 type PendingProofs =
     HashMap<request_response::OutboundRequestId, tokio::sync::oneshot::Sender<Option<Proven>>>;
-type PendingCatalogs = HashMap<
-    request_response::OutboundRequestId,
-    tokio::sync::oneshot::Sender<Vec<crate::storage::CatalogEntry>>,
->;
 type PendingFills =
     HashMap<request_response::OutboundRequestId, tokio::sync::oneshot::Sender<bool>>;
 
@@ -355,7 +344,6 @@ pub async fn run_network_loop(
                         data,
                         grant,
                         layer,
-                        holders,
                         commitment,
                     }) => {
                         let req = FragmentRequest::Store {
@@ -364,7 +352,6 @@ pub async fn run_network_loop(
                             data,
                             grant,
                             layer,
-                            holders,
                             commitment,
                         };
                         let _ = swarm
@@ -422,18 +409,6 @@ pub async fn run_network_loop(
                             .fragment_exchange
                             .send_request(&peer_id, FragmentRequest::ProofOfStorage { target, seed });
                         pending_pos.insert(req_id, resp_tx);
-                    }
-                    Some(NetworkCommand::Catalog {
-                        peer_id,
-                        network,
-                        layer,
-                        resp_tx,
-                    }) => {
-                        let req_id = swarm
-                            .behaviour_mut()
-                            .fragment_exchange
-                            .send_request(&peer_id, FragmentRequest::Catalog { network, layer });
-                        repairs.catalogs.insert(req_id, resp_tx);
                     }
                     Some(NetworkCommand::Recode {
                         peer_id,
@@ -692,19 +667,16 @@ async fn handle_swarm_event(
         )) => {
             let requester = member_device(chains, &peer);
             let repair = match (&request, &requester) {
-                (
-                    FragmentRequest::Catalog { .. }
-                    | FragmentRequest::Recode { .. }
-                    | FragmentRequest::Repaired { .. },
-                    Some(_),
-                ) => Some(serve_repair(
-                    request.clone(),
-                    swarm,
-                    chains,
-                    identity,
-                    storage_managers,
-                    repairs,
-                )),
+                (FragmentRequest::Recode { .. } | FragmentRequest::Repaired { .. }, Some(_)) => {
+                    Some(serve_repair(
+                        request.clone(),
+                        swarm,
+                        chains,
+                        identity,
+                        storage_managers,
+                        repairs,
+                    ))
+                }
                 _ => None,
             };
             let response = if let Some(response) = repair {
@@ -764,14 +736,6 @@ async fn handle_swarm_event(
                 let _ = tx.send(proof);
                 return;
             }
-            if let Some(tx) = repairs.catalogs.remove(&request_id) {
-                let chunks = match response {
-                    FragmentResponse::Catalog { chunks } => chunks,
-                    _ => Vec::new(),
-                };
-                let _ = tx.send(chunks);
-                return;
-            }
             if let Some(tx) = pending_fills.remove(&request_id) {
                 let _ = tx.send(matches!(response, FragmentResponse::Stored));
                 return;
@@ -815,7 +779,6 @@ async fn handle_swarm_event(
             if let Some(tx) = pending_fills.remove(&request_id) {
                 let _ = tx.send(false);
             }
-            repairs.catalogs.remove(&request_id);
         }
 
         _ => {}
@@ -935,7 +898,6 @@ fn holdings(
 
 #[derive(Default)]
 struct Repairs {
-    catalogs: PendingCatalogs,
     awaiting: std::collections::HashSet<String>,
 }
 
@@ -949,13 +911,6 @@ fn serve_repair(
 ) -> FragmentResponse {
     let managers = storage_managers.read().unwrap();
     match request {
-        FragmentRequest::Catalog { network, layer } => FragmentResponse::Catalog {
-            chunks: managers
-                .values()
-                .filter(|sm| sm.read().unwrap().meta.network_id == network)
-                .flat_map(|sm| sm.read().unwrap().catalog(layer))
-                .collect(),
-        },
         FragmentRequest::Recode {
             chunk_id,
             owner,
@@ -1171,7 +1126,6 @@ fn serve_fragment_request(
             data,
             grant,
             layer,
-            holders,
             commitment,
         } => {
             if !grant.is_owner_claim() || grant.grantee != requester {
@@ -1195,7 +1149,6 @@ fn serve_fragment_request(
                 owner_key: grant.owner_key.clone(),
                 file_id: grant.file_id.clone(),
                 layer: *layer,
-                holders: *holders,
             };
             let stored = managers.values().any(|sm_arc| {
                 let mut sm = sm_arc.write().unwrap();
@@ -1244,7 +1197,6 @@ fn serve_fragment_request(
         }
         FragmentRequest::Ping { nonce } => FragmentResponse::Pong { nonce: *nonce },
         FragmentRequest::Commits { .. }
-        | FragmentRequest::Catalog { .. }
         | FragmentRequest::Recode { .. }
         | FragmentRequest::Repaired { .. } => FragmentResponse::NotFound,
         FragmentRequest::ProofOfStorage { target, seed } => managers

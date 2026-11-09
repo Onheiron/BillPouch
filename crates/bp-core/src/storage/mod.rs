@@ -26,7 +26,6 @@ pub struct ChunkOwner {
     pub owner_key: String,
     pub file_id: String,
     pub layer: StorageTier,
-    pub holders: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -485,7 +484,6 @@ mod tests {
             owner_key: key.into(),
             file_id: "file".into(),
             layer: StorageTier::T1,
-            holders: 1,
         }
     }
 

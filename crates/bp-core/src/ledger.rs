@@ -3,6 +3,7 @@ use crate::{
     identity::{parse_user_key, DeviceCert, Identity},
     membership::{Entry, WrappedKey},
     network::ReputationTier,
+    storage::StorageTier,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -12,6 +13,7 @@ pub const MAX_CHALLENGES_PER_DEVICE_PER_EPOCH: u32 = 2880;
 pub const MIN_CHALLENGES_FOR_PROMOTION: u64 = 100;
 pub const MAX_BYTES_PER_DEVICE: u64 = 1 << 46;
 pub const USAGE_INTERVAL_SECS: u64 = 120;
+pub const MAX_CHUNKS_PER_FILE: usize = 1 << 20;
 const DAY: u64 = 86_400;
 
 const PROMOTIONS: [(ReputationTier, u64, f64); 3] = [
@@ -55,11 +57,39 @@ pub enum Op {
         device: String,
     },
     Leave,
+    Place {
+        file_id: String,
+        k: usize,
+        layer: StorageTier,
+        chunks: Vec<String>,
+        holders: BTreeSet<String>,
+    },
+    Hold {
+        file_id: String,
+        device: String,
+    },
+    Release {
+        file_id: String,
+        device: String,
+    },
+    Drop {
+        file_id: String,
+    },
     RotateKey {
         epoch: u64,
         wrapped: BTreeMap<String, WrappedKey>,
         commitment: String,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Placement {
+    pub owner: String,
+    pub k: usize,
+    pub layer: StorageTier,
+    pub chunks: Vec<String>,
+    pub planned: usize,
+    pub holders: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -207,6 +237,7 @@ pub struct Ledger {
     pub verified: BTreeMap<String, BTreeMap<String, u64>>,
     pub held: BTreeMap<String, BTreeMap<String, u64>>,
     pub usage_at: BTreeMap<String, u64>,
+    pub placements: BTreeMap<String, Placement>,
 }
 
 impl Ledger {
@@ -258,6 +289,7 @@ impl Ledger {
             verified: BTreeMap::new(),
             held: BTreeMap::new(),
             usage_at: BTreeMap::new(),
+            placements: BTreeMap::new(),
             genesis,
         };
         ledger.snapshot = ledger.compute_snapshot(ledger.snapshot.epoch);
@@ -287,6 +319,19 @@ impl Ledger {
         self.members.contains_key(user)
             && !self.expelled.contains(user)
             && !self.left.contains(user)
+    }
+
+    pub fn holds_for_member(&self, device: &str) -> bool {
+        self.device_owner(device)
+            .is_some_and(|user| self.is_member(user))
+    }
+
+    pub fn live_holders<'a>(&'a self, placement: &'a Placement) -> Vec<&'a String> {
+        placement
+            .holders
+            .iter()
+            .filter(|device| self.holds_for_member(device))
+            .collect()
     }
 
     pub fn active_members(&self) -> impl Iterator<Item = (&String, &Member)> {
@@ -517,6 +562,58 @@ impl Ledger {
                 self.expel_approvals.remove(&author);
                 self.snapshot.users.remove(&author);
                 self.rekey_since.get_or_insert(block.time);
+            }
+            Op::Place {
+                file_id,
+                k,
+                layer,
+                chunks,
+                holders,
+            } => {
+                if self.placements.contains_key(file_id)
+                    || *k == 0
+                    || *k > holders.len()
+                    || chunks.is_empty()
+                    || chunks.len() > MAX_CHUNKS_PER_FILE
+                    || !holders.iter().all(|d| self.holds_for_member(d))
+                {
+                    return Err(invalid("invalid placement"));
+                }
+                self.placements.insert(
+                    file_id.clone(),
+                    Placement {
+                        owner: author.clone(),
+                        k: *k,
+                        layer: *layer,
+                        chunks: chunks.clone(),
+                        planned: holders.len(),
+                        holders: holders.clone(),
+                    },
+                );
+            }
+            Op::Hold { file_id, device } => {
+                let owned = self.device_owner(device) == Some(author.as_str());
+                match self.placements.get_mut(file_id) {
+                    Some(p) if owned && !p.holders.contains(device) => {
+                        p.holders.insert(device.clone());
+                    }
+                    _ => return Err(invalid("invalid holder")),
+                }
+            }
+            Op::Release { file_id, device } => {
+                let owned = self.device_owner(device) == Some(author.as_str());
+                match self.placements.get_mut(file_id) {
+                    Some(p) if owned && p.holders.contains(device) => {
+                        p.holders.remove(device);
+                    }
+                    _ => return Err(invalid("invalid release")),
+                }
+            }
+            Op::Drop { file_id } => {
+                if self.placements.get(file_id).map(|p| &p.owner) != Some(&author) {
+                    return Err(invalid("only the owner drops a file"));
+                }
+                self.placements.remove(file_id);
             }
             Op::RotateKey {
                 epoch,
@@ -1081,5 +1178,85 @@ mod tests {
         let hijack =
             SignedOp::sign(&net.people[0], Op::SetVotingDevice { device: laptop_id }).unwrap();
         assert!(net.commit(0, t, vec![hijack]).is_err());
+    }
+
+    #[test]
+    fn placements_track_who_holds_a_file() {
+        let mut net = Net::everyone_joined(3);
+        for who in 1..3 {
+            let op = SignedOp::sign(
+                &net.people[who],
+                Op::RegisterDevice {
+                    cert: net.people[who].cert.clone(),
+                },
+            )
+            .unwrap();
+            let t = net.now();
+            net.commit(0, t, vec![op]).unwrap();
+        }
+        let device = |i: usize| net.people[i].peer_id.to_string();
+        let (d0, d1, d2) = (device(0), device(1), device(2));
+        let people = net.people.clone();
+        let sign = |who: usize, op: Op| SignedOp::sign(&people[who], op).unwrap();
+        let place = |holders: &[&String], k: usize| Op::Place {
+            file_id: "f".into(),
+            k,
+            layer: StorageTier::T1,
+            chunks: vec!["c1".into(), "c2".into()],
+            holders: holders.iter().map(|d| (*d).clone()).collect(),
+        };
+        let t = net.now();
+        assert!(net
+            .commit(0, t, vec![sign(0, place(&[&d0, &d1], 3))])
+            .is_err());
+        let unknown = "12D3KooWnobody".to_string();
+        assert!(net
+            .commit(0, t, vec![sign(0, place(&[&d0, &unknown], 1))])
+            .is_err());
+        net.commit(0, t, vec![sign(0, place(&[&d0, &d1], 1))])
+            .unwrap();
+        let p = &net.ledger.placements["f"];
+        assert_eq!((p.planned, p.k, p.owner.clone()), (2, 1, net.fp(0)));
+
+        let hold = |device: &String| Op::Hold {
+            file_id: "f".into(),
+            device: device.clone(),
+        };
+        assert!(
+            net.commit(0, t, vec![sign(2, hold(&d1))]).is_err(),
+            "only the device's user"
+        );
+        assert!(
+            net.commit(0, t, vec![sign(1, hold(&d1))]).is_err(),
+            "already a holder"
+        );
+        net.commit(0, t, vec![sign(2, hold(&d2))]).unwrap();
+
+        let release = Op::Release {
+            file_id: "f".into(),
+            device: d1.clone(),
+        };
+        net.commit(0, t, vec![sign(1, release)]).unwrap();
+        let p = &net.ledger.placements["f"];
+        assert_eq!(net.ledger.live_holders(p).len(), 2);
+
+        let leave = sign(2, Op::Leave);
+        net.commit(0, t, vec![leave]).unwrap();
+        let p = &net.ledger.placements["f"];
+        assert_eq!(
+            net.ledger.live_holders(p),
+            vec![&d0],
+            "a departed user holds nothing"
+        );
+
+        let drop = || Op::Drop {
+            file_id: "f".into(),
+        };
+        assert!(
+            net.commit(0, t, vec![sign(1, drop())]).is_err(),
+            "only the owner drops"
+        );
+        net.commit(0, t, vec![sign(0, drop())]).unwrap();
+        assert!(net.ledger.placements.is_empty());
     }
 }

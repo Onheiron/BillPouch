@@ -304,6 +304,38 @@ else
     fail "no passing challenge from carlo-pouch"
 fi
 
+header "9b. Repair when a holder goes away"
+CARLO_FP=$(docker exec bp-pouch bp status 2>/dev/null | grep -oP 'fingerprint\s*:\s*\K\S+' || true)
+info "Waiting up to 240s for carlo's own Pouch to earn credit..."
+for _ in $(seq 1 48); do
+    docker exec bp-pouch bp members smoketest 2>/dev/null | grep "${CARLO_FP}" | grep -qv "hosts 0.0 MiB" && break
+    sleep 5
+done
+docker exec bp-pouch bash -c 'head -c 2097152 /dev/urandom > /tmp/kept.bin'
+KEPT_OUT=$(docker exec bp-pouch bp put /tmp/kept.bin --network smoketest 2>&1) || true
+if echo "${KEPT_OUT}" | grep -q "Stored 2097152 bytes"; then
+    pass "carlo-pouch stored a file across the Pouches of the network"
+else
+    fail "carlo-pouch could not store the file to repair: ${KEPT_OUT}"
+fi
+docker exec bp-post bp hatch pouch --network smoketest --tier T1 >/dev/null 2>&1 || true
+sleep 20
+docker exec bp-laptop bp farewell "${LAPTOP_POUCH}" --evict >/dev/null 2>&1 || true
+info "Waiting up to 240s for lucia-post's new Pouch to rebuild what carlo-laptop held..."
+REPAIRED=false
+for _ in $(seq 1 48); do
+    if grep -q "repaired a file and became its holder" <<< "$(docker logs bp-post 2>&1 | sed 's/\x1b\[[0-9;]*m//g')"; then
+        REPAIRED=true
+        break
+    fi
+    sleep 5
+done
+if [ "${REPAIRED}" = true ]; then
+    pass "after carlo-laptop left, lucia-post's Pouch rebuilt its fragments and holds the file"
+else
+    fail "nobody rebuilt the fragments carlo-laptop held"
+fi
+
 header "10. Expulsion and key rotation"
 POST_FP=$(docker exec bp-post bp status 2>/dev/null | grep -oP 'fingerprint\s*:\s*\K\S+' || true)
 EXPEL_OUT=$(docker exec bp-pouch bp expel smoketest "${POST_FP}" 2>&1) || true

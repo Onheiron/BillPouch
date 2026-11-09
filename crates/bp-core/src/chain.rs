@@ -182,6 +182,13 @@ impl Chain {
         key_commitment(&self.key) == self.engine.ledger.commitment
     }
 
+    pub fn propose(&mut self, op: Op, now_ms: u64) -> BpResult<()> {
+        let op = SignedOp::sign(&self.me, op)?;
+        self.engine.submit(op, now_ms)?;
+        self.record();
+        Ok(())
+    }
+
     pub fn leave(&mut self, now_ms: u64) -> BpResult<()> {
         let op = SignedOp::sign(&self.me, Op::Leave)?;
         self.engine.submit(op, now_ms)?;

@@ -986,7 +986,34 @@ pub async fn announce_all(state: &DaemonState) {
     }
 }
 
+fn release_holdings(state: &DaemonState, network_id: &str) {
+    let me = state.identity.peer_id.to_string();
+    let mut chains = state.chains.write().unwrap();
+    let Some(chain) = chains.get_mut(network_id) else {
+        return;
+    };
+    let held: Vec<String> = chain
+        .ledger()
+        .placements
+        .iter()
+        .filter(|(_, p)| p.holders.contains(&me))
+        .map(|(file_id, _)| file_id.clone())
+        .collect();
+    for file_id in held {
+        let release = crate::ledger::Op::Release {
+            file_id: file_id.clone(),
+            device: me.clone(),
+        };
+        if let Err(e) = chain.propose(release, now_ms()) {
+            tracing::warn!(file_id = %file_id, "cannot release the file: {e}");
+        }
+    }
+}
+
 async fn evict_service(state: &DaemonState, svc: &ServiceInfo) -> (usize, usize, u64) {
+    if svc.service_type == ServiceType::Pouch {
+        release_holdings(state, &svc.network_id);
+    }
     let summary = match state.storage_managers.write().unwrap().remove(&svc.id) {
         Some(sm) => {
             let sm = sm.read().unwrap();
