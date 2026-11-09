@@ -15,6 +15,8 @@ pub const MAX_BYTES_PER_DEVICE: u64 = 1 << 46;
 pub const USAGE_INTERVAL_SECS: u64 = 120;
 pub const MAX_CHUNKS_PER_FILE: usize = 1 << 20;
 const DAY: u64 = 86_400;
+const PPM: i64 = 1_000_000;
+const TRUST_PER_BET: i64 = 250_000;
 
 const PROMOTIONS: [(ReputationTier, u64, f64); 3] = [
     (ReputationTier::R4, 365, 0.999),
@@ -75,6 +77,15 @@ pub enum Op {
     Drop {
         file_id: String,
     },
+    Trust {
+        file_id: String,
+        released: String,
+        newcomer: String,
+        confidence_ppm: u32,
+    },
+    SetParams {
+        params: Params,
+    },
     RotateKey {
         epoch: u64,
         wrapped: BTreeMap<String, WrappedKey>,
@@ -91,6 +102,48 @@ pub struct Placement {
     pub planned: usize,
     pub holders: BTreeSet<String>,
     pub extra: BTreeSet<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Params {
+    pub ph_ppm: u32,
+    pub prior_ppm: u32,
+    pub decay_ppm: u32,
+    pub horizon_epochs: u64,
+}
+
+impl Default for Params {
+    fn default() -> Self {
+        Self {
+            ph_ppm: 999_000,
+            prior_ppm: 500_000,
+            decay_ppm: 900_000,
+            horizon_epochs: 7,
+        }
+    }
+}
+
+impl Params {
+    pub fn ph(&self) -> f64 {
+        f64::from(self.ph_ppm) / PPM as f64
+    }
+
+    fn valid(&self) -> bool {
+        (1..1_000_000).contains(&self.ph_ppm)
+            && self.prior_ppm <= 1_000_000
+            && self.decay_ppm <= 1_000_000
+            && (1..=365).contains(&self.horizon_epochs)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Bet {
+    pub user: String,
+    pub file_id: String,
+    pub released: String,
+    pub newcomer: String,
+    pub confidence_ppm: u32,
+    pub until_epoch: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -239,6 +292,10 @@ pub struct Ledger {
     pub held: BTreeMap<String, BTreeMap<String, u64>>,
     pub usage_at: BTreeMap<String, u64>,
     pub placements: BTreeMap<String, Placement>,
+    pub params: Params,
+    pub param_votes: BTreeMap<String, Params>,
+    pub bets: Vec<Bet>,
+    pub trust: BTreeMap<String, i64>,
 }
 
 impl Ledger {
@@ -291,6 +348,10 @@ impl Ledger {
             held: BTreeMap::new(),
             usage_at: BTreeMap::new(),
             placements: BTreeMap::new(),
+            params: Params::default(),
+            param_votes: BTreeMap::new(),
+            bets: Vec::new(),
+            trust: BTreeMap::new(),
             genesis,
         };
         ledger.snapshot = ledger.compute_snapshot(ledger.snapshot.epoch);
@@ -334,6 +395,80 @@ impl Ledger {
             .chain(&placement.extra)
             .filter(|device| self.holds_for_member(device))
             .collect()
+    }
+
+    pub fn trust_score(&self, user: &str) -> f64 {
+        self.trust.get(user).copied().unwrap_or(0) as f64 / PPM as f64
+    }
+
+    pub fn open_bets(&self, user: &str) -> usize {
+        self.bets.iter().filter(|b| b.user == user).count()
+    }
+
+    pub fn bet_allowance(&self, user: &str) -> usize {
+        let trust = self.trust.get(user).copied().unwrap_or(0).max(0);
+        1 + usize::try_from(trust / TRUST_PER_BET).unwrap_or(usize::MAX)
+    }
+
+    fn invited(&self, by: &str, user: &str) -> bool {
+        let (Some(by), Some(user)) = (self.members.get(by), self.members.get(user)) else {
+            return false;
+        };
+        self.entries
+            .iter()
+            .any(|e| e.body.author == by.key && e.body.member == user.key)
+    }
+
+    pub fn may_trust(
+        &self,
+        user: &str,
+        file_id: &str,
+        released: &str,
+        newcomer: &str,
+    ) -> Result<(), &'static str> {
+        let p = self.placements.get(file_id).ok_or("no such file")?;
+        if self.device_owner(released) != Some(user) || !p.holders.contains(released) {
+            return Err("you do not hold this file");
+        }
+        let other = self.device_owner(newcomer).ok_or("unknown newcomer")?;
+        if !p.extra.contains(newcomer) || !self.is_member(other) {
+            return Err("the newcomer is not an extra holder");
+        }
+        if other == user || self.invited(user, other) {
+            return Err("you cannot trust yourself or whom you invited");
+        }
+        let open = self.bets.iter().filter(|b| b.file_id == file_id).count();
+        if open + p.k >= p.planned {
+            return Err("the file has no tolerance left for untested holders");
+        }
+        if self.open_bets(user) >= self.bet_allowance(user) {
+            return Err("too many open bets for your trust");
+        }
+        Ok(())
+    }
+
+    fn settle_bets(&mut self, epoch: u64) {
+        for bet in std::mem::take(&mut self.bets) {
+            let Some(p) = self.placements.get(&bet.file_id) else {
+                continue;
+            };
+            if !self.is_member(&bet.user) {
+                continue;
+            }
+            let holding = (p.holders.contains(&bet.newcomer) || p.extra.contains(&bet.newcomer))
+                && self.holds_for_member(&bet.newcomer);
+            if holding && epoch < bet.until_epoch {
+                self.bets.push(bet);
+                continue;
+            }
+            let outcome = if holding { PPM } else { 0 };
+            let prior = i64::from(self.params.prior_ppm);
+            let forecast = i64::from(bet.confidence_ppm);
+            let skill = ((prior - outcome).pow(2) - (forecast - outcome).pow(2)) / PPM;
+            let decay = i64::from(self.params.decay_ppm);
+            let score = self.trust.entry(bet.user).or_default();
+            *score = *score * decay / PPM + skill;
+        }
     }
 
     pub fn active_members(&self) -> impl Iterator<Item = (&String, &Member)> {
@@ -415,6 +550,7 @@ impl Ledger {
         for op in &block.ops {
             next.apply_op(op, block)?;
         }
+        next.settle_bets(block.epoch());
         next.height = block.height;
         next.head = block.hash();
         next.time = block.time;
@@ -642,6 +778,46 @@ impl Ledger {
                     return Err(invalid("only the owner drops a file"));
                 }
                 self.placements.remove(file_id);
+            }
+            Op::Trust {
+                file_id,
+                released,
+                newcomer,
+                confidence_ppm,
+            } => {
+                if *confidence_ppm > 1_000_000 {
+                    return Err(invalid("confidence above 1"));
+                }
+                self.may_trust(&author, file_id, released, newcomer)
+                    .map_err(invalid)?;
+                let p = self.placements.get_mut(file_id).expect("checked above");
+                p.holders.remove(released);
+                p.extra.remove(newcomer);
+                p.holders.insert(newcomer.clone());
+                self.bets.push(Bet {
+                    user: author.clone(),
+                    file_id: file_id.clone(),
+                    released: released.clone(),
+                    newcomer: newcomer.clone(),
+                    confidence_ppm: *confidence_ppm,
+                    until_epoch: block.epoch() + self.params.horizon_epochs,
+                });
+            }
+            Op::SetParams { params } => {
+                if !self.has_capability(&author, Capability::Vote) || !params.valid() {
+                    return Err(invalid("cannot vote these parameters"));
+                }
+                self.param_votes.insert(author.clone(), *params);
+                let voters: Vec<&String> = self
+                    .param_votes
+                    .iter()
+                    .filter(|(_, v)| *v == params)
+                    .map(|(u, _)| u)
+                    .collect();
+                if self.snapshot.is_quorum(voters) {
+                    self.params = *params;
+                    self.param_votes.clear();
+                }
             }
             Op::RotateKey {
                 epoch,
@@ -1299,5 +1475,99 @@ mod tests {
         );
         net.commit(0, t, vec![sign(0, drop())]).unwrap();
         assert!(net.ledger.placements.is_empty());
+    }
+
+    #[test]
+    fn trusting_a_newcomer_is_a_scored_bet() {
+        let mut net = Net::everyone_joined(3);
+        for who in 1..3 {
+            let op = SignedOp::sign(
+                &net.people[who],
+                Op::RegisterDevice {
+                    cert: net.people[who].cert.clone(),
+                },
+            )
+            .unwrap();
+            let t = net.now();
+            net.commit(0, t, vec![op]).unwrap();
+        }
+        let device = |i: usize| net.people[i].peer_id.to_string();
+        let (d0, d1, d2) = (device(0), device(1), device(2));
+        let people = net.people.clone();
+        let sign = |who: usize, op: Op| SignedOp::sign(&people[who], op).unwrap();
+        let place = |file: &str| Op::Place {
+            file_id: file.into(),
+            k: 1,
+            layer: StorageTier::T1,
+            chunks: vec!["c".into()],
+            holders: [d0.clone(), d1.clone()].into(),
+        };
+        let hold = |file: &str| Op::Hold {
+            file_id: file.into(),
+            device: d2.clone(),
+        };
+        let trust = |file: &str, released: &String| Op::Trust {
+            file_id: file.into(),
+            released: released.clone(),
+            newcomer: d2.clone(),
+            confidence_ppm: 900_000,
+        };
+        let t = net.now();
+        net.commit(0, t, vec![sign(0, place("f")), sign(2, hold("f"))])
+            .unwrap();
+        assert!(
+            net.commit(0, t, vec![sign(0, trust("f", &d0))]).is_err(),
+            "nobody bets on whom they invited"
+        );
+        net.commit(0, t, vec![sign(1, trust("f", &d1))]).unwrap();
+        let p = &net.ledger.placements["f"];
+        assert_eq!(p.holders, [d0.clone(), d2.clone()].into());
+        assert!(p.extra.is_empty());
+
+        net.commit(0, t, vec![sign(0, place("g")), sign(2, hold("g"))])
+            .unwrap();
+        assert!(
+            net.commit(0, t, vec![sign(1, trust("g", &d1))]).is_err(),
+            "one open bet without trust"
+        );
+        for _ in 0..net.ledger.params.horizon_epochs {
+            net.next_epoch();
+        }
+        assert!(net.ledger.bets.is_empty());
+        assert_eq!(net.ledger.trust[&net.fp(1)], 240_000);
+
+        let t = net.now();
+        net.commit(0, t, vec![sign(1, trust("g", &d1))]).unwrap();
+        net.commit(0, t, vec![sign(2, Op::Leave)]).unwrap();
+        assert!(
+            net.ledger.bets.is_empty(),
+            "a vanished newcomer loses the bet"
+        );
+        assert_eq!(net.ledger.trust[&net.fp(1)], 216_000 - 560_000);
+    }
+
+    #[test]
+    fn parameters_change_with_a_quorum() {
+        let mut net = Net::everyone_joined(3);
+        let people = net.people.clone();
+        let wanted = Params {
+            horizon_epochs: 3,
+            ..Params::default()
+        };
+        let vote = |who: usize, params: Params| {
+            SignedOp::sign(&people[who], Op::SetParams { params }).unwrap()
+        };
+        let t = net.now();
+        let broken = Params {
+            ph_ppm: 1_000_000,
+            ..Params::default()
+        };
+        assert!(net.commit(0, t, vec![vote(0, broken)]).is_err());
+        net.commit(0, t, vec![vote(0, wanted), vote(1, wanted)])
+            .unwrap();
+        assert_eq!(net.ledger.params, Params::default());
+        net.commit(0, t, vec![vote(2, wanted)]).unwrap();
+        assert_eq!(net.ledger.params, wanted);
+        assert!(net.ledger.param_votes.is_empty());
     }
 }

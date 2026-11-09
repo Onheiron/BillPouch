@@ -36,6 +36,8 @@ const CATCH_UP_INTERVAL_SECS: u64 = 60;
 const MAX_REPAIRS_PER_ROUND: usize = 64;
 const MAX_VOLUNTEERS_PER_ROUND: usize = 2;
 
+const DEFAULT_TRUST_AT: f64 = 0.9;
+
 const MAX_CHALLENGES_PER_ROUND: usize = 8;
 
 #[allow(clippy::too_many_arguments)]
@@ -84,6 +86,7 @@ pub async fn run_quality_monitor(
             }
             _ = catch_up_interval.tick() => {
                 run_catch_up(&me, &network_state, &storage_managers, &chains, &net_tx, &mut claimed).await;
+                run_trust_round(&identity, &storage_managers, &chains, &qos, &mut claimed);
             }
         }
     }
@@ -436,6 +439,105 @@ async fn run_catch_up(
     }
 }
 
+fn trust_threshold() -> f64 {
+    std::env::var("BP_TRUST_AT")
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        .filter(|v| (0.0..=1.0).contains(v))
+        .unwrap_or(DEFAULT_TRUST_AT)
+}
+
+fn run_trust_round(
+    identity: &Identity,
+    storage_managers: &StorageManagerMap,
+    chains: &Chains,
+    qos: &Arc<RwLock<QosRegistry>>,
+    claimed: &mut HashSet<String>,
+) {
+    let me = identity.peer_id.to_string();
+    let user = identity.fingerprint.as_str();
+    let mut released = Vec::new();
+    let mut offers = Vec::new();
+    {
+        let all = chains.read().unwrap();
+        for (network, chain) in all.iter() {
+            let ledger = chain.ledger();
+            for bet in ledger.bets.iter().filter(|b| b.released == me) {
+                let Some(p) = ledger.placements.get(&bet.file_id) else {
+                    continue;
+                };
+                if p.holders.contains(&me) || p.extra.contains(&me) {
+                    continue;
+                }
+                if let Some(owner) = ledger.members.get(&p.owner) {
+                    released.push((network.clone(), bet.file_id.clone(), owner.key.clone()));
+                }
+            }
+            for (file_id, p) in &ledger.placements {
+                if !p.holders.contains(&me) || claimed.contains(&format!("trust/{file_id}")) {
+                    continue;
+                }
+                for newcomer in &p.extra {
+                    if ledger.may_trust(user, file_id, &me, newcomer).is_ok() {
+                        offers.push((network.clone(), file_id.clone(), newcomer.clone()));
+                    }
+                }
+            }
+        }
+    }
+    if let Ok(managers) = storage_managers.read() {
+        for (network, file_id, owner_key) in &released {
+            for sm in managers.values() {
+                let mut sm = sm.write().unwrap();
+                if sm.meta.network_id == *network {
+                    match sm.delete_file(file_id, owner_key) {
+                        Ok(0) => {}
+                        Ok(freed) => {
+                            tracing::info!(file_id = %file_id, freed, "dropped a file entrusted to a newcomer")
+                        }
+                        Err(e) => {
+                            tracing::warn!(file_id = %file_id, "cannot drop an entrusted file: {e}")
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let threshold = trust_threshold();
+    let mut chosen: std::collections::BTreeMap<String, (f64, String, String)> =
+        std::collections::BTreeMap::new();
+    if let Ok(q) = qos.read() {
+        for (network, file_id, newcomer) in offers {
+            let confidence = q.availability(&newcomer);
+            let better = chosen
+                .get(&network)
+                .is_none_or(|(best, _, _)| confidence > *best);
+            if confidence >= threshold && better {
+                chosen.insert(network, (confidence, file_id, newcomer));
+            }
+        }
+    }
+    let mut all = chains.write().unwrap();
+    for (network, (confidence, file_id, newcomer)) in chosen {
+        let Some(chain) = all.get_mut(&network) else {
+            continue;
+        };
+        claimed.insert(format!("trust/{file_id}"));
+        let op = crate::ledger::Op::Trust {
+            file_id: file_id.clone(),
+            released: me.clone(),
+            newcomer: newcomer.clone(),
+            confidence_ppm: (confidence * 1_000_000.0) as u32,
+        };
+        match chain.propose(op, crate::chain::now_ms()) {
+            Ok(()) => {
+                tracing::info!(file_id = %file_id, newcomer = %newcomer, confidence, "trusted a newcomer with a file")
+            }
+            Err(e) => tracing::warn!(file_id = %file_id, "cannot trust the newcomer: {e}"),
+        }
+    }
+}
+
 fn volunteers(
     ledger: &crate::ledger::Ledger,
     sm: &crate::storage::StorageManager,
@@ -447,8 +549,15 @@ fn volunteers(
     let mut candidates: Vec<(bool, usize, String, u64, &str)> = ledger
         .placements
         .iter()
-        .filter(|(_, p)| {
-            tier >= p.layer && !p.holders.contains(me) && !p.extra.contains(me) && p.k > 0
+        .filter(|(file_id, p)| {
+            tier >= p.layer
+                && !p.holders.contains(me)
+                && !p.extra.contains(me)
+                && p.k > 0
+                && !ledger
+                    .bets
+                    .iter()
+                    .any(|b| b.file_id == **file_id && b.released == me)
         })
         .map(|(file_id, p)| {
             let started = p.chunks.iter().any(|c| sm.has_chunk(c));

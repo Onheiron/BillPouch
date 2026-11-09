@@ -3,7 +3,7 @@ use crate::{
     chain::{now_ms, Chain, Chains},
     control::protocol::{
         ControlRequest, ControlResponse, CreditStat, ExpelData, FileEntry, FlockData, HatchData,
-        InviteData, MemberInfo, MembersData, NetworkQosSummary, PouchStat, StatusData,
+        InviteData, MemberInfo, MembersData, NetworkQosSummary, ParamsData, PouchStat, StatusData,
         StorageInfoData,
     },
     error::BpResult,
@@ -546,6 +546,8 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                         .expel_approvals
                         .get(fingerprint)
                         .map_or(0, |a| a.len()),
+                    trust: ledger.trust_score(fingerprint),
+                    open_bets: ledger.open_bets(fingerprint),
                 })
                 .collect();
             ControlResponse::ok(MembersData {
@@ -581,6 +583,45 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 network_id,
                 member,
                 outcome,
+            })
+        }
+
+        ControlRequest::Params {
+            network_id,
+            propose,
+        } => {
+            let me = state.identity.fingerprint.clone();
+            if let Some(params) = propose {
+                let result = match state.chains.write().unwrap().get_mut(&network_id) {
+                    None => Err(crate::error::BpError::InvalidInput(format!(
+                        "you are not in a network named '{network_id}'"
+                    ))),
+                    Some(chain) => chain.propose(crate::ledger::Op::SetParams { params }, now_ms()),
+                };
+                if let Err(e) = result {
+                    return ControlResponse::err(e.to_string());
+                }
+                let committed = wait_until(state, &network_id, |c| {
+                    let l = c.ledger();
+                    l.params == params || l.param_votes.get(&me) == Some(&params)
+                })
+                .await;
+                if !committed {
+                    return ControlResponse::err(
+                        "the vote was not committed by the network in time",
+                    );
+                }
+            }
+            let chains = state.chains.read().unwrap();
+            let Some(chain) = chains.get(&network_id) else {
+                return ControlResponse::err(format!(
+                    "you are not in a network named '{network_id}'"
+                ));
+            };
+            ControlResponse::ok(ParamsData {
+                network_id: network_id.clone(),
+                params: chain.ledger().params,
+                voted: chain.ledger().param_votes.get(&me).copied(),
             })
         }
 

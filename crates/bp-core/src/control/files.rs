@@ -25,7 +25,6 @@ use libp2p::PeerId;
 use std::collections::HashSet;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-const DEFAULT_PH: f64 = 0.999;
 const FETCH_TIMEOUT_SECS: u64 = 10;
 
 #[derive(Default)]
@@ -179,8 +178,21 @@ pub fn quota_rate(
     })
 }
 
+fn network_ph(state: &DaemonState, network_id: &str) -> f64 {
+    state.chains.read().unwrap().get(network_id).map_or_else(
+        || crate::ledger::Params::default().ph(),
+        |c| c.ledger().params.ph(),
+    )
+}
+
 pub fn default_rate(state: &DaemonState, network_id: &str) -> Option<Rate> {
-    quota_rate(state, network_id, CHUNK_BYTES as u64, DEFAULT_PH).ok()
+    quota_rate(
+        state,
+        network_id,
+        CHUNK_BYTES as u64,
+        network_ph(state, network_id),
+    )
+    .ok()
 }
 
 fn check_allowance(
@@ -483,7 +495,7 @@ pub async fn put_file(
     network_id: String,
     file_name: Option<String>,
 ) -> ControlResponse {
-    let ph = ph.unwrap_or(DEFAULT_PH);
+    let ph = ph.unwrap_or_else(|| network_ph(state, &network_id));
     let mut file = match tokio::fs::File::open(&path).await {
         Ok(f) => f,
         Err(e) => return ControlResponse::err(format!("cannot read {}: {e}", path.display())),
@@ -902,7 +914,7 @@ pub async fn publish_index(state: &DaemonState, network_id: &str) {
         network_id,
         &file_id,
         blob.len().clamp(1, CHUNK_BYTES),
-        DEFAULT_PH,
+        network_ph(state, network_id),
     ) {
         Ok(f) => f,
         Err(e) => return tracing::warn!(network = %network_id, "cannot store the file index: {e}"),
