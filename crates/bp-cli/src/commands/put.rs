@@ -6,7 +6,7 @@ use crate::client::ControlClient;
 pub async fn put(
     path: PathBuf,
     network: String,
-    ph: f64,
+    ph: Option<f64>,
     name: Option<String>,
 ) -> anyhow::Result<()> {
     let path = std::fs::canonicalize(&path)
@@ -15,7 +15,7 @@ pub async fn put(
         .await?
         .request(ControlRequest::PutFile {
             path,
-            ph: Some(ph),
+            ph,
             network_id: network.clone(),
             file_name: name,
         })

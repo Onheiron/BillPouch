@@ -167,6 +167,27 @@ enum Cmd {
     },
 
     #[command(
+        about = "Show or vote the parameters of a network",
+        long_about = "Show or vote the parameters of a network.\n\nWithout flags it prints them. With flags it votes the current parameters changed by the flags given; they change when the members voting the same values hold more than 2/3 of the weight."
+    )]
+    Params {
+        #[arg(help = "The network")]
+        network_id: String,
+        #[arg(help = "Default target recovery probability of a file, below 1")]
+        #[arg(long)]
+        ph: Option<f64>,
+        #[arg(help = "Prior chance that a newcomer stays, the baseline of trust bets")]
+        #[arg(long)]
+        prior: Option<f64>,
+        #[arg(help = "How much of their trust a member keeps at each settled bet")]
+        #[arg(long)]
+        decay: Option<f64>,
+        #[arg(help = "Epochs a newcomer must keep a file to win a trust bet")]
+        #[arg(long)]
+        horizon: Option<u64>,
+    },
+
+    #[command(
         about = "Leave a network",
         long_about = "Leave a network.\n\nWithout `--force`: fails if any services are still active on the network. Use `bp farewell <id> --evict` (Pouch) or `bp farewell <id>` (Bill/Post) first.\n\nWith `--force`: automatically evicts all active services on the network, then leaves.  Equivalent to running `bp farewell --evict` on each Pouch and `bp farewell` on each Bill/Post, then leaving."
     )]
@@ -188,10 +209,10 @@ enum Cmd {
         network: String,
 
         #[arg(
-            help = "Target recovery probability: probability of recovering the file at any given moment (default: 0.999 = 99.9%)"
+            help = "Target recovery probability: probability of recovering the file at any given moment (default: the network's, see `bp params`)"
         )]
-        #[arg(long, default_value_t = 0.999)]
-        ph: f64,
+        #[arg(long)]
+        ph: Option<f64>,
 
         #[arg(
             help = "Human-readable name for the file (shown by `bp ls`). Defaults to the file's original filename"
@@ -466,6 +487,16 @@ async fn main() -> anyhow::Result<()> {
 
         Some(Cmd::Expel { network_id, member }) => {
             commands::network::expel(network_id, member).await?;
+        }
+
+        Some(Cmd::Params {
+            network_id,
+            ph,
+            prior,
+            decay,
+            horizon,
+        }) => {
+            commands::network::params(network_id, ph, prior, decay, horizon).await?;
         }
 
         Some(Cmd::Leave { network_id, force }) => {

@@ -49,6 +49,10 @@ pub enum ControlRequest {
         network_id: String,
         member: String,
     },
+    Params {
+        network_id: String,
+        propose: Option<crate::ledger::Params>,
+    },
     Leave {
         network_id: String,
         force: bool,
@@ -187,6 +191,8 @@ pub struct MemberInfo {
     pub devices: usize,
     pub joined_at: u64,
     pub expel_approvals: usize,
+    pub trust: f64,
+    pub open_bets: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -198,6 +204,13 @@ pub struct MembersData {
     pub total_weight: u64,
     pub members: Vec<MemberInfo>,
     pub expelled: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParamsData {
+    pub network_id: String,
+    pub params: crate::ledger::Params,
+    pub voted: Option<crate::ledger::Params>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

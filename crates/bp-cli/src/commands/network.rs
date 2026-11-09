@@ -1,7 +1,8 @@
 use crate::client::ControlClient;
 use bp_core::{
     chain::ExpelOutcome,
-    control::protocol::{ControlRequest, ExpelData, InviteData, MembersData},
+    control::protocol::{ControlRequest, ExpelData, InviteData, MembersData, ParamsData},
+    ledger::Params,
 };
 
 pub async fn create(name: String) -> anyhow::Result<()> {
@@ -77,7 +78,7 @@ pub async fn members(network_id: String) -> anyhow::Result<()> {
             ""
         };
         println!(
-            "   {:<12} {}  {:<10} weight {}  hosts {:.1} MiB  stores {:.1} MiB  devices {}{}{}",
+            "   {:<12} {}  {:<10} weight {}  hosts {:.1} MiB  stores {:.1} MiB  devices {}  trust {:+.2} ({} open bet(s)){}{}",
             member.name,
             member.fingerprint,
             member.tier,
@@ -85,12 +86,75 @@ pub async fn members(network_id: String) -> anyhow::Result<()> {
             member.credit_bytes as f64 / 1_048_576.0,
             member.used_bytes as f64 / 1_048_576.0,
             member.devices,
+            member.trust,
+            member.open_bets,
             you,
             expel
         );
     }
     for fingerprint in &m.expelled {
         println!("   {fingerprint}  expelled");
+    }
+    Ok(())
+}
+
+fn ppm(value: f64) -> anyhow::Result<u32> {
+    if !(0.0..=1.0).contains(&value) {
+        anyhow::bail!("{value} is not between 0 and 1");
+    }
+    Ok((value * 1_000_000.0).round() as u32)
+}
+
+pub async fn params(
+    network_id: String,
+    ph: Option<f64>,
+    prior: Option<f64>,
+    decay: Option<f64>,
+    horizon: Option<u64>,
+) -> anyhow::Result<()> {
+    let fetch = |propose: Option<Params>| {
+        let network_id = network_id.clone();
+        async move {
+            let data = ControlClient::connect()
+                .await?
+                .request(ControlRequest::Params {
+                    network_id,
+                    propose,
+                })
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("empty response from daemon"))?;
+            anyhow::Ok(serde_json::from_value::<ParamsData>(data)?)
+        }
+    };
+    let mut data = fetch(None).await?;
+    if ph.is_some() || prior.is_some() || decay.is_some() || horizon.is_some() {
+        let mut wanted = data.params;
+        if let Some(v) = ph {
+            wanted.ph_ppm = ppm(v)?;
+        }
+        if let Some(v) = prior {
+            wanted.prior_ppm = ppm(v)?;
+        }
+        if let Some(v) = decay {
+            wanted.decay_ppm = ppm(v)?;
+        }
+        if let Some(v) = horizon {
+            wanted.horizon_epochs = v;
+        }
+        data = fetch(Some(wanted)).await?;
+    }
+    let show = |p: &Params| {
+        format!(
+            "ph {:.6}  prior {:.3}  decay {:.3}  horizon {} epoch(s)",
+            p.ph(),
+            f64::from(p.prior_ppm) / 1e6,
+            f64::from(p.decay_ppm) / 1e6,
+            p.horizon_epochs
+        )
+    };
+    println!("🌐 {}: {}", data.network_id, show(&data.params));
+    if let Some(voted) = data.voted {
+        println!("   your vote, waiting for a quorum: {}", show(&voted));
     }
     Ok(())
 }

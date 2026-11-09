@@ -223,6 +223,22 @@ first live one takes the place of a charged holder that `Release`s. Real
 fragments evict filler, so a new Pouch stores redundancy that serves instead
 of random data.
 
+**Proof of Trust.** A charged holder can hand its place to an extra holder of
+another user with `Trust`, stating its confidence that the newcomer keeps the
+file (its own availability estimate of that Pouch). Its Pouch then deletes its
+copy. The `Trust` is a bet that settles after `horizon` epochs, won if the
+newcomer still holds the file, or as soon as the newcomer releases it or its
+user is gone, lost. It is scored with the Brier rule relative to the network's
+`prior`: `(prior − o)² − (confidence − o)²` with `o` = 1 if won, 0 if lost, so
+honest forecasts pay best and a confident loss costs most. A member's
+**trust** is the sum of these scores, multiplied by `decay` at each settled
+bet; it is not voting weight. Safety floor: a file has at most `n − k` open
+bets, so it survives every untested newcomer vanishing. A member has
+`1 + trust / 0.25` open bets at most, and nobody bets on their own devices or
+on users they invited. Each node trusts a newcomer only once its availability
+estimate reaches `BP_TRUST_AT` (default 0.9), at most one file per network per
+round. A dropped file voids its bets.
+
 Rebuilding is a **recoding chain**: `k` live holders in turn add `c · own fragment` (random `c`
 in GF(2⁸)) to the running sum and
 pass it on, and the last one hands the result to the new Pouch, which stores it
@@ -304,7 +320,14 @@ signed ops from the genesis entry and the creator's device certificate:
 | `Place` | Owner registers a file: chunks, `k`, layer and the holders it was planned with |
 | `Hold` / `Release` | A user's device starts or stops holding a file's fragments, as a charged or an extra holder |
 | `Drop` | Owner deletes a file from the registry |
+| `Trust` | A holder hands its place in a file to an extra holder of another user and bets that they keep it |
+| `SetParams` | Votes the network parameters; they change when the votes for the same values hold > 2/3 of the weight |
 | `RotateKey` | New network key, wrapped for every current member |
+
+**Parameters** (`bp params`) are in the ledger: `ph`, the default target
+recovery probability of a file (0.999); `prior`, the baseline chance that a
+newcomer stays (0.5); `decay`, the share of trust kept at each settled bet
+(0.9); `horizon`, the epochs a trust bet lasts (7).
 
 **Epochs** last one day of block time. At the first block of an epoch the
 ledger takes a snapshot of every user's tier and weight; weights stay fixed for

@@ -30,7 +30,8 @@ started automatically when missing.
 |---------|-------------|
 | `bp network create <name>` | Create a network; you are its first member and its creator |
 | `bp invite <network> "<ssh public key>"` | Submit the invitation to the network, wait until it is committed and print (on stdout) the token they join with. Requires the `invite` capability (R2+, or the creator while nobody is R2) |
-| `bp members <network>` | Members by name (the comment of their SSH key, yours marked `← you`) with tier, voting weight, bytes they host (verified by the others last epoch) and store, devices and pending expulsions; expelled members |
+| `bp members <network>` | Members by name (the comment of their SSH key, yours marked `← you`) with tier, voting weight, bytes they host (verified by the others last epoch) and store, devices, trust and open trust bets, pending expulsions; expelled members |
+| `bp params <network> [--ph X] [--prior X] [--decay X] [--horizon N]` | Print the network parameters, or vote them changed by the flags given; they change when the votes for the same values hold > 2/3 of the weight |
 | `bp expel <network> <fingerprint>` | Propose an expulsion (R3+, or the creator while nobody is R3) or approve one (R1+). It passes with > 2/3 of the other members' weight and at least half of them; the network key is then rotated without the expelled member |
 | `bp invite <network> "<your own public key>"` | Token for another device of yours: log in there with the same SSH key and `bp join` it |
 | `bp dashboard [--port 3000] [--host 127.0.0.1] [--no-open]` | Start `bp-api` if it is not running, sign a 12 h session with your SSH key and open the web app with it |
@@ -42,7 +43,7 @@ started automatically when missing.
 
 | Command | Description |
 |---------|-------------|
-| `bp put <file> --network <id> [--ph <p>] [--name <name>]` | Stream a file in 4 MiB chunks: encrypt, encode and give one fragment to every Pouch of the lowest layer with room; prints its `file_id`. `--ph` = target recovery probability (default 0.999) |
+| `bp put <file> --network <id> [--ph <p>] [--name <name>]` | Stream a file in 4 MiB chunks: encrypt, encode and give one fragment to every Pouch of the lowest layer with room; prints its `file_id`. `--ph` = target recovery probability (default: the network's `ph`, see `bp params`) |
 | `bp get <file_id> <output> --network <id>` | Fetch, decode and decrypt one of your files or one shared with you, chunk by chunk |
 | `bp rm <file_id> --network <id>` | Delete one of your files (every Pouch drops its fragments), or remove a shared file from your list |
 | `bp ls [--network <id>]` | Your files and the ones shared with you, from your index (synced across your devices) |
@@ -63,4 +64,5 @@ started automatically when missing.
 |----------|--------|
 | `BP_PASSPHRASE` | Passphrase for an encrypted identity |
 | `BP_LISTEN_PORT` | Fixed TCP listen port for the daemon (default: random); `off` makes a client-only node that only dials out, enough for a Bill |
+| `BP_TRUST_AT` | Availability a newcomer's Pouch must reach before this node hands it a file it holds (default 0.9; 1 never trusts) |
 | `RUST_LOG` | Log filter, e.g. `bp_core=debug` |
