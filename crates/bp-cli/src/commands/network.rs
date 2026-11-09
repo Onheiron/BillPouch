@@ -111,6 +111,7 @@ pub async fn params(
     prior: Option<f64>,
     decay: Option<f64>,
     horizon: Option<u64>,
+    grace: Option<u64>,
 ) -> anyhow::Result<()> {
     let fetch = |propose: Option<Params>| {
         let network_id = network_id.clone();
@@ -127,7 +128,7 @@ pub async fn params(
         }
     };
     let mut data = fetch(None).await?;
-    if ph.is_some() || prior.is_some() || decay.is_some() || horizon.is_some() {
+    if ph.is_some() || prior.is_some() || decay.is_some() || horizon.is_some() || grace.is_some() {
         let mut wanted = data.params;
         if let Some(v) = ph {
             wanted.ph_ppm = ppm(v)?;
@@ -141,15 +142,19 @@ pub async fn params(
         if let Some(v) = horizon {
             wanted.horizon_epochs = v;
         }
+        if let Some(v) = grace {
+            wanted.grace_epochs = v;
+        }
         data = fetch(Some(wanted)).await?;
     }
     let show = |p: &Params| {
         format!(
-            "ph {:.6}  prior {:.3}  decay {:.3}  horizon {} epoch(s)",
+            "ph {:.6}  prior {:.3}  decay {:.3}  horizon {} epoch(s)  grace {} epoch(s)",
             p.ph(),
             f64::from(p.prior_ppm) / 1e6,
             f64::from(p.decay_ppm) / 1e6,
-            p.horizon_epochs
+            p.horizon_epochs,
+            p.grace_epochs
         )
     };
     println!("🌐 {}: {}", data.network_id, show(&data.params));

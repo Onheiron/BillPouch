@@ -185,6 +185,11 @@ enum Cmd {
         #[arg(help = "Epochs a newcomer must keep a file to win a trust bet")]
         #[arg(long)]
         horizon: Option<u64>,
+        #[arg(
+            help = "Epochs a device may go without passing a challenge before it stops counting as a holder"
+        )]
+        #[arg(long)]
+        grace: Option<u64>,
     },
 
     #[command(
@@ -495,8 +500,9 @@ async fn main() -> anyhow::Result<()> {
             prior,
             decay,
             horizon,
+            grace,
         }) => {
-            commands::network::params(network_id, ph, prior, decay, horizon).await?;
+            commands::network::params(network_id, ph, prior, decay, horizon, grace).await?;
         }
 
         Some(Cmd::Leave { network_id, force }) => {
