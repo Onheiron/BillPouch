@@ -202,16 +202,18 @@ For every peer the daemon keeps a QoS record (`network/qos.rs`):
   one always present climbs towards 0.97, so evidence, not hope, earns a place
   among the holders.
 - RTT EWMA (α = 0.125) and challenge success EWMA (β = 0.10, used for credit).
-**Repair is the network's job.** Every fragment carries the number of holders
-its file was planned with. Every 60 s each Pouch, for each of its layers, asks
-up to 16 Pouches of the layer for their **catalog** (chunk, owner, `file_id`,
-`k`, planned holders) and learns who holds what. A chunk seen on fewer holders
-than planned lacks that many fragments; among the Pouches of the layer that do
-not hold it, the ones ranked first by a hash of the chunk and the Pouch, as many
-as are lacking, rebuild it, so the same chunk is not rebuilt twice and a chunk
-that has all its holders gets no extra copies. Rebuilding is a **recoding
-chain**: `k` of its holders in turn add `c · own fragment` (random `c` in GF(2⁸))
-to the running sum and
+**Repair is the network's job.** After storing a file its owner registers it
+in the ledger (`Place`): chunks, `k`, layer and holders. A holder counts while
+its user is a member; an evicted Pouch `Release`s what it held, and a user who
+leaves or is expelled stops counting. Every 60 s each Pouch looks at the
+registered files of its layers: a file with fewer live holders than planned
+lacks that many, and among the Pouches of the layer that do not hold it, the
+ones ranked first by a hash of the file and the Pouch, as many as are lacking,
+rebuild every chunk of it, so nothing is rebuilt twice and a file with all its
+holders gets no extra copies. Once it has every chunk, the Pouch registers
+itself as a holder (`Hold`). Deleting a file `Drop`s it. Rebuilding is a
+**recoding chain**: `k` live holders in turn add `c · own fragment` (random `c`
+in GF(2⁸)) to the running sum and
 pass it on, and the last one hands the result to the new Pouch, which stores it
 with the chunk's owner. The result is a fresh RLNC fragment; nobody sees more
 than its own fragment and one partial sum, so no fetch grant is needed, only
@@ -288,6 +290,9 @@ signed ops from the genesis entry and the creator's device certificate:
 | `Observations` | Adds PoS counts to other users' totals |
 | `ProposeExpel` / `ApproveExpel` | Expulsion vote |
 | `Leave` | The author leaves: no longer a member, weight removed, rotation due |
+| `Place` | Owner registers a file: chunks, `k`, layer and the holders it was planned with |
+| `Hold` / `Release` | A user's device starts or stops holding a file's fragments |
+| `Drop` | Owner deletes a file from the registry |
 | `RotateKey` | New network key, wrapped for every current member |
 
 **Epochs** last one day of block time. At the first block of an epoch the

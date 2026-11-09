@@ -18,7 +18,6 @@ pub enum FragmentRequest {
         data: Vec<u8>,
         grant: crate::files::Grant,
         layer: crate::storage::StorageTier,
-        holders: usize,
         commitment: crate::storage::commitment::Commitment,
     },
     Ping {
@@ -38,10 +37,6 @@ pub enum FragmentRequest {
         network: String,
         from: u64,
         cert: crate::identity::DeviceCert,
-    },
-    Catalog {
-        network: String,
-        layer: crate::storage::StorageTier,
     },
     Recode {
         chunk_id: String,
@@ -77,9 +72,6 @@ pub enum FragmentResponse {
     },
     Commits {
         commits: Vec<crate::consensus::Commit>,
-    },
-    Catalog {
-        chunks: Vec<crate::storage::CatalogEntry>,
     },
 }
 

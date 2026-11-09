@@ -211,12 +211,60 @@ fn check_allowance(
     ))
 }
 
+pub struct FilePlan {
+    layer: StorageTier,
+    holders: Vec<String>,
+    plan: coding_params::Plan,
+}
+
+fn plan_file(
+    state: &DaemonState,
+    network_id: &str,
+    file_id: &str,
+    largest_chunk: usize,
+    ph: f64,
+) -> Result<FilePlan, String> {
+    let (layer, holders, plan) = choose_layer(
+        &layer_nodes(state, network_id),
+        file_id,
+        |peers| availabilities(state, peers),
+        largest_chunk,
+        ph,
+    )?;
+    Ok(FilePlan {
+        layer,
+        holders,
+        plan,
+    })
+}
+
+fn register_placement(
+    state: &DaemonState,
+    network_id: &str,
+    file_id: &str,
+    file: &FilePlan,
+    chunks: &[String],
+) {
+    let op = crate::ledger::Op::Place {
+        file_id: file_id.to_string(),
+        k: file.plan.k,
+        layer: file.layer,
+        chunks: chunks.to_vec(),
+        holders: file.holders.iter().cloned().collect(),
+    };
+    if let Some(chain) = state.chains.write().unwrap().get_mut(network_id) {
+        if let Err(e) = chain.propose(op, crate::chain::now_ms()) {
+            tracing::warn!(file_id, "cannot register the placement: {e}");
+        }
+    }
+}
+
 async fn store_chunk(
     state: &DaemonState,
     network_id: &str,
     data: &[u8],
     grant: &Grant,
-    ph: f64,
+    file: &FilePlan,
     total: &mut Stored,
 ) -> Result<String, String> {
     let local = state
@@ -228,19 +276,12 @@ async fn store_chunk(
         .cloned();
     let me = state.identity.peer_id.to_string();
     let chunk_id = rlnc::chunk_hash(data);
-    let (layer, nodes, plan) = choose_layer(
-        &layer_nodes(state, network_id),
-        &grant.file_id,
-        |peers| availabilities(state, peers),
-        data.len(),
-        ph,
-    )?;
+    let (layer, nodes, plan) = (file.layer, &file.holders, &file.plan);
     let fragments = rlnc::encode(data, plan.k, plan.n).map_err(|e| format!("Encode error: {e}"))?;
     let owner = crate::storage::ChunkOwner {
         owner_key: grant.owner_key.clone(),
         file_id: grant.file_id.clone(),
         layer,
-        holders: plan.n,
     };
 
     let mut pointers = Vec::new();
@@ -287,7 +328,6 @@ async fn store_chunk(
                 data: bytes,
                 grant: grant.clone(),
                 layer,
-                holders: plan.n,
                 commitment,
             })
             .await;
@@ -459,6 +499,11 @@ pub async fn put_file(
         Ok(g) => g,
         Err(e) => return ControlResponse::err(e.to_string()),
     };
+    let largest_chunk = (size_on_disk as usize).clamp(1, CHUNK_BYTES);
+    let file = match plan_file(state, &network_id, &file_id, largest_chunk, ph) {
+        Ok(f) => f,
+        Err(e) => return ControlResponse::err(e),
+    };
     let mut total = Stored::default();
     let mut size = 0u64;
     loop {
@@ -478,7 +523,7 @@ pub async fn put_file(
             Ok(c) => c,
             Err(e) => return ControlResponse::err(format!("Encryption error: {e}")),
         };
-        if let Err(e) = store_chunk(state, &network_id, &sealed, &grant, ph, &mut total).await {
+        if let Err(e) = store_chunk(state, &network_id, &sealed, &grant, &file, &mut total).await {
             if !total.chunks.is_empty() {
                 send_order(state, &network_id, &file_id, Action::Delete).await;
             }
@@ -506,6 +551,7 @@ pub async fn put_file(
         Ok(m) => m,
         Err(e) => return ControlResponse::err(e.to_string()),
     };
+    register_placement(state, &network_id, &file_id, &file, &total.chunks);
     add_to_index(state, &network_id, manifest);
     publish_index(state, &network_id).await;
     ControlResponse::ok(PutFileData {
@@ -726,6 +772,19 @@ pub async fn delete_file(
 }
 
 async fn send_order(state: &DaemonState, network_id: &str, file_id: &str, action: Action) {
+    if matches!(action, Action::Delete) {
+        if let Some(chain) = state.chains.write().unwrap().get_mut(network_id) {
+            let placed = chain.ledger().placements.contains_key(file_id);
+            let drop = crate::ledger::Op::Drop {
+                file_id: file_id.to_string(),
+            };
+            if placed {
+                if let Err(e) = chain.propose(drop, crate::chain::now_ms()) {
+                    tracing::warn!(file_id, "cannot drop the placement: {e}");
+                }
+            }
+        }
+    }
     let order = match Order::sign(&state.identity, file_id, action) {
         Ok(o) => o,
         Err(e) => return tracing::warn!("cannot sign order: {e}"),
@@ -836,13 +895,23 @@ pub async fn publish_index(state: &DaemonState, network_id: &str) {
         Ok(g) => g,
         Err(e) => return tracing::warn!("cannot sign the index grant: {e}"),
     };
+    let file = match plan_file(
+        state,
+        network_id,
+        &file_id,
+        blob.len().clamp(1, CHUNK_BYTES),
+        DEFAULT_PH,
+    ) {
+        Ok(f) => f,
+        Err(e) => return tracing::warn!(network = %network_id, "cannot store the file index: {e}"),
+    };
     let mut total = Stored::default();
     for piece in blob.chunks(CHUNK_BYTES) {
-        if let Err(e) = store_chunk(state, network_id, piece, &grant, DEFAULT_PH, &mut total).await
-        {
+        if let Err(e) = store_chunk(state, network_id, piece, &grant, &file, &mut total).await {
             return tracing::warn!(network = %network_id, "cannot store the file index: {e}");
         }
     }
+    register_placement(state, network_id, &file_id, &file, &total.chunks);
     let head = match Head::sign(&state.identity, network_id, version, &file_id, total.chunks) {
         Ok(h) => h,
         Err(e) => return tracing::warn!("cannot sign the index head: {e}"),
