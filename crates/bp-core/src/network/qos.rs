@@ -5,7 +5,7 @@ const ALPHA_RTT: f64 = 0.125;
 
 const BETA_CHALLENGE: f64 = 0.10;
 
-const MEMORY: f64 = 0.99;
+const MEMORY: f64 = 0.9995;
 
 const PRUDENCE_Z: f64 = 1.645;
 

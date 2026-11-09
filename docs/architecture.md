@@ -111,8 +111,10 @@ chunks; only one chunk is in memory at a time. Each file gets a random
    availability: a Pouch that cannot raise `k` gets no fragment, since it would
    only add overhead. Ties are broken by a hash of the file id and the Pouch, so
    every chunk of a file goes to the same holders and different files spread.
-   If no subset reaches `Ph`, every Pouch of the layer gets a full copy
-   (`k = 1`) and `Pe` is reported.
+   If no subset reaches `Ph`, the target becomes a loss chance at most twice
+   that of a full copy on every Pouch of the layer, so a Pouch too new to
+   add anything gets nothing; if even that is hopeless (a loss chance above
+   one half), every Pouch gets a full copy (`k = 1`). `Pe` is reported.
 4. **Encode and place.** Systematic RLNC over GF(2⁸): `n` fragments, any `k` of
    which decode. Your own fragment is stored locally; the others are pushed to
    their Pouches with your **owner grant** and the layer. The placement is gossiped as an
@@ -196,10 +198,11 @@ For every peer the daemon keeps a QoS record (`network/qos.rs`):
 
 - **Availability** `p_i`, the `p_i` used for k/n. Every ping answered and every
   challenge passed counts as seen, every timeout or failed challenge as
-  missed, with a memory that decays by 0.99 per observation. With
+  missed, with a memory that decays by 0.9995 per observation (about a day
+  and a half of pings). With
   `a = 1 + seen` and `b = 1 + missed`, `p_i` is the lower 5 % bound of
   Beta(a, b), `mean − 1.645·σ`: a Pouch never observed counts as about 0.03 and
-  one always present climbs towards 0.97, so evidence, not hope, earns a place
+  one always present climbs towards 0.999, so evidence, not hope, earns a place
   among the holders.
 - RTT EWMA (α = 0.125) and challenge success EWMA (β = 0.10, used for credit).
 **Repair is the network's job.** After storing a file its owner registers it

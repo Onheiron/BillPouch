@@ -58,11 +58,32 @@ pub fn best_plan(availabilities: &[f64], ph: f64) -> BpResult<(Plan, Vec<usize>)
             .total_cmp(&availabilities[a])
             .then(a.cmp(&b))
     });
+    let reachable = 1.0 - recovery_probability(availabilities, 1);
+    let target = if recovery_probability(availabilities, 1) >= ph || reachable >= 0.5 {
+        ph
+    } else {
+        1.0 - 2.0 * reachable
+    };
+    let (chosen, m) = match widest(availabilities, &order, ph, target)? {
+        Some(found) => found,
+        None => (plan(availabilities, ph)?, availabilities.len()),
+    };
+    let mut nodes = order[..m].to_vec();
+    nodes.sort_unstable();
+    Ok((chosen, nodes))
+}
+
+fn widest(
+    availabilities: &[f64],
+    order: &[usize],
+    ph: f64,
+    target: f64,
+) -> BpResult<Option<(Plan, usize)>> {
     let mut best: Option<(Plan, usize)> = None;
     for m in 1..=order.len() {
         let chosen: Vec<f64> = order[..m].iter().map(|&i| availabilities[i]).collect();
-        let candidate = plan(&chosen, ph)?;
-        if candidate.pe < ph {
+        let candidate = plan(&chosen, target.min(ph))?;
+        if candidate.pe < target {
             continue;
         }
         let better = best
@@ -72,13 +93,7 @@ pub fn best_plan(availabilities: &[f64], ph: f64) -> BpResult<(Plan, Vec<usize>)
             best = Some((candidate, m));
         }
     }
-    let (chosen, m) = match best {
-        Some(found) => found,
-        None => (plan(availabilities, ph)?, availabilities.len()),
-    };
-    let mut nodes = order[..m].to_vec();
-    nodes.sort_unstable();
-    Ok((chosen, nodes))
+    Ok(best)
 }
 
 #[cfg(test)]
@@ -153,6 +168,13 @@ mod tests {
         assert!(after.k * before.n >= before.k * after.n);
         assert!(chosen.contains(&10));
         assert!(after.pe >= 0.999);
+    }
+
+    #[test]
+    fn an_unreachable_target_does_not_take_useless_nodes() {
+        let (p, chosen) = best_plan(&[0.85, 0.85, 0.85, 0.03], 0.999).unwrap();
+        assert_eq!((p.k, p.n), (1, 3));
+        assert_eq!(chosen, vec![0, 1, 2]);
     }
 
     #[test]
