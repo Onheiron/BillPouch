@@ -48,6 +48,39 @@ pub fn plan(stabilities: &[f64], ph: f64) -> BpResult<Plan> {
     })
 }
 
+pub fn best_plan(availabilities: &[f64], ph: f64) -> BpResult<(Plan, Vec<usize>)> {
+    if availabilities.is_empty() {
+        return Err(BpError::Coding("no Pouch to place fragments on".into()));
+    }
+    let mut order: Vec<usize> = (0..availabilities.len()).collect();
+    order.sort_by(|&a, &b| {
+        availabilities[b]
+            .total_cmp(&availabilities[a])
+            .then(a.cmp(&b))
+    });
+    let mut best: Option<(Plan, usize)> = None;
+    for m in 1..=order.len() {
+        let chosen: Vec<f64> = order[..m].iter().map(|&i| availabilities[i]).collect();
+        let candidate = plan(&chosen, ph)?;
+        if candidate.pe < ph {
+            continue;
+        }
+        let better = best
+            .as_ref()
+            .is_none_or(|(b, _)| candidate.k * b.n >= b.k * candidate.n);
+        if better {
+            best = Some((candidate, m));
+        }
+    }
+    let (chosen, m) = match best {
+        Some(found) => found,
+        None => (plan(availabilities, ph)?, availabilities.len()),
+    };
+    let mut nodes = order[..m].to_vec();
+    nodes.sort_unstable();
+    Ok((chosen, nodes))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -101,8 +134,38 @@ mod tests {
     }
 
     #[test]
+    fn a_weak_node_gets_no_fragments_when_it_cannot_raise_k() {
+        let mut nodes = vec![0.9; 10];
+        nodes.push(0.1);
+        let (p, chosen) = best_plan(&nodes, 0.999).unwrap();
+        assert!(!chosen.contains(&10));
+        assert!(p.pe >= 0.999);
+        assert!(p.k * 10 >= 5 * p.n, "{p:?}");
+        assert_eq!(chosen.len(), p.n);
+    }
+
+    #[test]
+    fn a_reliable_newcomer_raises_k_over_n() {
+        let (before, _) = best_plan(&[0.9; 10], 0.999).unwrap();
+        let mut nodes = vec![0.9; 10];
+        nodes.push(0.99);
+        let (after, chosen) = best_plan(&nodes, 0.999).unwrap();
+        assert!(after.k * before.n >= before.k * after.n);
+        assert!(chosen.contains(&10));
+        assert!(after.pe >= 0.999);
+    }
+
+    #[test]
+    fn an_unreachable_target_uses_every_node() {
+        let (p, chosen) = best_plan(&[0.03; 4], 0.999).unwrap();
+        assert_eq!((p.k, p.n), (1, 4));
+        assert_eq!(chosen, vec![0, 1, 2, 3]);
+    }
+
+    #[test]
     fn invalid_inputs_are_rejected() {
         assert!(plan(&[], 0.99).is_err());
+        assert!(best_plan(&[], 0.99).is_err());
         assert!(plan(&[0.9], 1.0).is_err());
     }
 }

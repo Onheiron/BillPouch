@@ -1,15 +1,25 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-const RTT_REF_MS: f64 = 500.0;
-
 const ALPHA_RTT: f64 = 0.125;
 
 const BETA_CHALLENGE: f64 = 0.10;
 
-const W_LATENCY: f64 = 0.6;
+const MEMORY: f64 = 0.99;
 
-const W_RELIABILITY: f64 = 0.4;
+const PRUDENCE_Z: f64 = 1.645;
+
+pub fn availability_lower_bound(seen: f64, missed: f64) -> f64 {
+    let (a, b) = (1.0 + seen, 1.0 + missed);
+    let total = a + b;
+    let mean = a / total;
+    let spread = (a * b / (total * total * (total + 1.0))).sqrt();
+    (mean - PRUDENCE_Z * spread).clamp(0.0, 1.0)
+}
+
+pub fn unknown_availability() -> f64 {
+    availability_lower_bound(0.0, 0.0)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeerQos {
@@ -24,6 +34,10 @@ pub struct PeerQos {
     pub challenges_sent: u64,
 
     pub challenges_succeeded: u64,
+
+    pub seen: f64,
+
+    pub missed: f64,
 }
 
 impl PeerQos {
@@ -35,6 +49,18 @@ impl PeerQos {
             last_ping_at: None,
             challenges_sent: 0,
             challenges_succeeded: 0,
+            seen: 0.0,
+            missed: 0.0,
+        }
+    }
+
+    fn observe(&mut self, available: bool) {
+        self.seen *= MEMORY;
+        self.missed *= MEMORY;
+        if available {
+            self.seen += 1.0;
+        } else {
+            self.missed += 1.0;
         }
     }
 
@@ -44,10 +70,11 @@ impl PeerQos {
             Some(prev) => ALPHA_RTT * rtt_ms + (1.0 - ALPHA_RTT) * prev,
         });
         self.last_ping_at = Some(chrono::Utc::now().timestamp() as u64);
+        self.observe(true);
     }
 
     pub fn record_ping_timeout(&mut self) {
-        self.record_ping(RTT_REF_MS * 10.0);
+        self.observe(false);
     }
 
     pub fn record_challenge(&mut self, success: bool) {
@@ -58,19 +85,11 @@ impl PeerQos {
         if success {
             self.challenges_succeeded += 1;
         }
+        self.observe(success);
     }
 
-    pub fn latency_score(&self) -> f64 {
-        self.rtt_ewma_ms
-            .map_or(0.0, |rtt| (-rtt / RTT_REF_MS).exp())
-    }
-
-    pub fn stability_score(&self) -> f64 {
-        W_LATENCY * self.latency_score() + W_RELIABILITY * self.challenge_success_ewma
-    }
-
-    pub fn is_observed(&self) -> bool {
-        self.rtt_ewma_ms.is_some()
+    pub fn availability(&self) -> f64 {
+        availability_lower_bound(self.seen, self.missed)
     }
 }
 
@@ -117,14 +136,14 @@ impl QosRegistry {
         self.peers.remove(peer_id);
     }
 
-    pub fn stability_score(&self, peer_id: &str) -> f64 {
+    pub fn availability(&self, peer_id: &str) -> f64 {
         self.peers
             .get(peer_id)
-            .map_or(0.0, PeerQos::stability_score)
+            .map_or_else(unknown_availability, PeerQos::availability)
     }
 
-    pub fn all_stability_scores(&self) -> Vec<f64> {
-        self.peers.values().map(PeerQos::stability_score).collect()
+    pub fn all_availabilities(&self) -> Vec<f64> {
+        self.peers.values().map(PeerQos::availability).collect()
     }
 
     pub fn peer_count(&self) -> usize {
@@ -141,48 +160,62 @@ mod tests {
     use super::*;
 
     #[test]
-    fn new_peer_has_zero_latency_score() {
+    fn an_unknown_peer_counts_for_almost_nothing() {
         let p = PeerQos::new("peer1");
-        assert_eq!(p.latency_score(), 0.0);
+        assert!(p.availability() < 0.05, "{}", p.availability());
+        assert!((p.availability() - unknown_availability()).abs() < 1e-12);
         assert_eq!(p.challenge_success_ewma, 1.0);
     }
 
     #[test]
-    fn stability_score_perfect_peer() {
+    fn availability_grows_with_evidence_and_stays_below_the_truth() {
         let mut p = PeerQos::new("peer1");
-        p.record_ping(0.0);
-        assert!((p.latency_score() - 1.0).abs() < 1e-9);
-        assert!((p.stability_score() - 1.0).abs() < 1e-9);
-    }
-
-    #[test]
-    fn stability_score_at_rtt_ref() {
-        let mut p = PeerQos::new("peer1");
-        p.rtt_ewma_ms = Some(RTT_REF_MS);
-        let expected_lat = (-1.0_f64).exp();
-        assert!((p.latency_score() - expected_lat).abs() < 1e-9);
-    }
-
-    #[test]
-    fn challenge_failure_degrades_score() {
-        let mut p = PeerQos::new("peer1");
-        p.record_ping(10.0);
-        let score_before = p.stability_score();
-        for _ in 0..20 {
-            p.record_challenge(false);
+        let mut last = p.availability();
+        for _ in 0..30 {
+            p.record_ping(10.0);
+            assert!(p.availability() > last);
+            last = p.availability();
         }
-        assert!(p.stability_score() < score_before);
+        for _ in 0..500 {
+            p.record_ping(10.0);
+        }
+        assert!(
+            p.availability() > 0.95 && p.availability() < 1.0,
+            "{}",
+            p.availability()
+        );
     }
 
     #[test]
-    fn ping_timeout_degrades_latency() {
+    fn misses_and_failed_challenges_lower_availability() {
         let mut p = PeerQos::new("peer1");
-        p.record_ping(10.0);
-        let lat_before = p.latency_score();
-        for _ in 0..20 {
+        for _ in 0..100 {
+            p.record_ping(10.0);
+        }
+        let before = p.availability();
+        for _ in 0..10 {
             p.record_ping_timeout();
         }
-        assert!(p.latency_score() < lat_before);
+        let after_timeouts = p.availability();
+        assert!(after_timeouts < before);
+        for _ in 0..10 {
+            p.record_challenge(false);
+        }
+        assert!(p.availability() < after_timeouts);
+    }
+
+    #[test]
+    fn a_half_present_peer_is_estimated_below_half() {
+        let mut p = PeerQos::new("peer1");
+        for i in 0..400 {
+            if i % 2 == 0 {
+                p.record_ping(10.0);
+            } else {
+                p.record_ping_timeout();
+            }
+        }
+        let a = p.availability();
+        assert!(a < 0.5 && a > 0.35, "{a}");
     }
 
     #[test]
@@ -195,19 +228,10 @@ mod tests {
     }
 
     #[test]
-    fn registry_entry_creates_new_peer() {
+    fn the_registry_falls_back_to_unknown_availability() {
         let mut reg = QosRegistry::new();
         reg.entry("p1").record_ping(50.0);
-        assert!(reg.get("p1").is_some());
-        assert_eq!(reg.peer_count(), 1);
-    }
-
-    #[test]
-    fn all_stability_scores_length() {
-        let mut reg = QosRegistry::new();
-        reg.entry("p1").record_ping(50.0);
-        reg.entry("p2").record_ping(100.0);
-        reg.entry("p3").record_ping(300.0);
-        assert_eq!(reg.all_stability_scores().len(), 3);
+        assert!(reg.availability("p1") > reg.availability("never-seen"));
+        assert_eq!(reg.all_availabilities().len(), 1);
     }
 }

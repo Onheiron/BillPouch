@@ -232,7 +232,7 @@ pub struct CreditStat {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkQosSummary {
     pub observed_peers: usize,
-    pub avg_stability: f64,
+    pub avg_availability: f64,
     pub tier_counts: std::collections::HashMap<String, usize>,
 }
 

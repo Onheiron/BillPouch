@@ -14,6 +14,7 @@ use crate::{
 };
 use libp2p::PeerId;
 use rand::{seq::SliceRandom, Rng};
+use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
@@ -33,6 +34,8 @@ const MAX_BLOBS_PER_ROUND: u64 = 256;
 const CATCH_UP_INTERVAL_SECS: u64 = 60;
 
 const MAX_REPAIRS_PER_ROUND: usize = 64;
+
+const MAX_CATALOGS_PER_ROUND: usize = 16;
 
 const MAX_CHALLENGES_PER_ROUND: usize = 8;
 
@@ -305,6 +308,28 @@ fn layer_peers(
         .unwrap_or_default()
 }
 
+pub fn repairs_fall_to_me(
+    chunk_id: &str,
+    planned: usize,
+    holding: &[String],
+    layer: &[String],
+    me: &str,
+) -> bool {
+    let lacking = planned.saturating_sub(holding.len());
+    let mut candidates: Vec<&str> = layer
+        .iter()
+        .map(String::as_str)
+        .chain(std::iter::once(me))
+        .filter(|p| !holding.iter().any(|h| h == p))
+        .collect();
+    candidates.sort_by_key(|p| blake3::hash(format!("{chunk_id}/{p}").as_bytes()).to_hex());
+    candidates.dedup();
+    candidates
+        .iter()
+        .position(|p| *p == me)
+        .is_some_and(|rank| rank < lacking)
+}
+
 pub fn repair_route(peers: &[String], k: usize, me: &str) -> Option<Vec<String>> {
     if peers.len() < k {
         return None;
@@ -341,40 +366,61 @@ async fn run_catch_up(
     for (network, tier, sm) in pouches {
         for layer in tier.layers() {
             let peers = layer_peers(network_state, &network, layer, me);
-            let Some(source) = peers
-                .choose(&mut rand::thread_rng())
-                .and_then(|p| p.parse::<PeerId>().ok())
-            else {
-                continue;
-            };
-            let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-            let sent = net_tx
-                .send(NetworkCommand::Catalog {
-                    peer_id: source,
-                    network: network.clone(),
-                    layer,
-                    resp_tx,
-                })
-                .await;
-            if sent.is_err() {
-                continue;
+            let asked: Vec<String> = peers
+                .choose_multiple(&mut rand::thread_rng(), MAX_CATALOGS_PER_ROUND)
+                .cloned()
+                .collect();
+            let mut holders: BTreeMap<String, (crate::storage::CatalogEntry, Vec<String>)> =
+                BTreeMap::new();
+            for peer in asked {
+                let Ok(peer_id) = peer.parse::<PeerId>() else {
+                    continue;
+                };
+                let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                let sent = net_tx
+                    .send(NetworkCommand::Catalog {
+                        peer_id,
+                        network: network.clone(),
+                        layer,
+                        resp_tx,
+                    })
+                    .await;
+                if sent.is_err() {
+                    continue;
+                }
+                let Ok(Ok(catalog)) =
+                    tokio::time::timeout(Duration::from_secs(POS_TIMEOUT_SECS), resp_rx).await
+                else {
+                    continue;
+                };
+                for entry in catalog {
+                    holders
+                        .entry(entry.chunk_id.clone())
+                        .or_insert_with(|| (entry, Vec::new()))
+                        .1
+                        .push(peer.clone());
+                }
             }
-            let Ok(Ok(catalog)) =
-                tokio::time::timeout(Duration::from_secs(POS_TIMEOUT_SECS), resp_rx).await
-            else {
-                continue;
-            };
             let missing: Vec<_> = {
                 let sm = sm.read().unwrap();
-                catalog
-                    .into_iter()
-                    .filter(|entry| !sm.has_chunk(&entry.chunk_id))
+                holders
+                    .into_values()
+                    .filter(|(entry, holding)| {
+                        !sm.has_chunk(&entry.chunk_id)
+                            && repairs_fall_to_me(
+                                &entry.chunk_id,
+                                entry.owner.holders,
+                                holding,
+                                &peers,
+                                me,
+                            )
+                    })
                     .take(MAX_REPAIRS_PER_ROUND)
                     .collect()
             };
             let mut started = 0;
-            for entry in missing {
-                let Some(route) = repair_route(&peers, entry.k, me) else {
+            for (entry, holding) in missing {
+                let Some(route) = repair_route(&holding, entry.k, me) else {
                     continue;
                 };
                 let Ok(first) = route[0].parse::<PeerId>() else {
@@ -562,12 +608,12 @@ mod tests {
             e.record_ping(10.0);
             e.record_challenge(true);
         }
-        let score_before = qos.read().unwrap().stability_score("p1");
+        let score_before = qos.read().unwrap().availability("p1");
 
         for _ in 0..5 {
             record_timeout("p1", &qos);
         }
-        let score_after = qos.read().unwrap().stability_score("p1");
+        let score_after = qos.read().unwrap().availability("p1");
         assert!(score_after < score_before, "timeout should degrade score");
     }
 
@@ -575,7 +621,7 @@ mod tests {
     fn new_peer_gets_timeout_entry() {
         let qos = Arc::new(RwLock::new(QosRegistry::new()));
         record_timeout("new-peer", &qos);
-        let score = qos.read().unwrap().stability_score("new-peer");
+        let score = qos.read().unwrap().availability("new-peer");
         assert!(
             score < 0.95,
             "new peer after one timeout should have degraded score"
@@ -632,6 +678,27 @@ mod tests {
             "self-sponsored filler"
         );
         assert!(!filler.passes(&right, Some("carlo"), true));
+    }
+
+    #[test]
+    fn only_as_many_nodes_as_the_chunk_lacks_repair_it() {
+        let layer: Vec<String> = (0..6).map(|i| format!("p{i}")).collect();
+        let holding = vec!["p0".to_string(), "p1".to_string(), "p2".to_string()];
+        let repairers = |planned: usize| {
+            layer[3..]
+                .iter()
+                .filter(|me| repairs_fall_to_me("c", planned, &holding, &layer, me))
+                .count()
+        };
+        assert_eq!(
+            repairers(3),
+            0,
+            "a chunk with all its holders needs no repair"
+        );
+        assert_eq!(repairers(4), 1);
+        assert_eq!(repairers(5), 2);
+        assert_eq!(repairers(9), 3, "never more than the nodes that lack it");
+        assert!(!repairs_fall_to_me("c", 9, &holding, &layer, "p0"));
     }
 
     #[test]

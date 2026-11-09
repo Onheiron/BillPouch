@@ -129,8 +129,8 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 if peer_count == 0 {
                     None
                 } else {
-                    let scores = qos.all_stability_scores();
-                    let avg_stability = if scores.is_empty() {
+                    let scores = qos.all_availabilities();
+                    let avg_availability = if scores.is_empty() {
                         0.0
                     } else {
                         scores.iter().sum::<f64>() / scores.len() as f64
@@ -147,7 +147,7 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                     }
                     Some(NetworkQosSummary {
                         observed_peers: peer_count,
-                        avg_stability,
+                        avg_availability,
                         tier_counts,
                     })
                 }
