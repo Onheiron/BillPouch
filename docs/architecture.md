@@ -205,7 +205,7 @@ For every peer the daemon keeps a QoS record (`network/qos.rs`):
 **Repair is the network's job.** After storing a file its owner registers it
 in the ledger (`Place`): chunks, `k`, layer and holders. A holder counts while
 its user is a member; an evicted Pouch `Release`s what it held, and a user who
-leaves or is expelled stops counting. Every 60 s each Pouch looks at the
+leaves or is expelled loses every place at once, taken by live extra holders. Every 60 s each Pouch looks at the
 registered files of its layers: a file with fewer live holders than planned
 lacks that many, and among the Pouches of the layer that do not hold it, the
 ones ranked first by a hash of the file and the Pouch, as many as are lacking,
@@ -234,8 +234,8 @@ honest forecasts pay best and a confident loss costs most. A member's
 **trust** is the sum of these scores, multiplied by `decay` at each settled
 bet; it is not voting weight. Safety floor: a file has at most `n − k` open
 bets, so it survives every untested newcomer vanishing. A member has
-`1 + trust / 0.25` open bets at most, and nobody bets on their own devices or
-on users they invited. Each node trusts a newcomer only once its availability
+`1 + trust / 0.25` open bets at most, and nobody bets on their own devices.
+Each node trusts a newcomer only once its availability
 estimate reaches `BP_TRUST_AT` (default 0.9), at most one file per network per
 round. A dropped file voids its bets.
 
