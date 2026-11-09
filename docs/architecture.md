@@ -204,8 +204,12 @@ For every peer the daemon keeps a QoS record (`network/qos.rs`):
 - RTT EWMA (α = 0.125) and challenge success EWMA (β = 0.10, used for credit).
 **Repair is the network's job.** After storing a file its owner registers it
 in the ledger (`Place`): chunks, `k`, layer and holders. A holder counts while
-its user is a member; an evicted Pouch `Release`s what it held, and a user who
-leaves or is expelled loses every place at once, taken by live extra holders. Every 60 s each Pouch looks at the
+it is **live**: its user is a member and the device passed a challenge within
+`grace` epochs of the last epoch in which any device of the network passed
+one (a network nobody challenges, such as a single user's, ages nobody). An
+evicted Pouch `Release`s what it held; a user who leaves or is expelled loses
+every place at once; in all these cases live extra holders take the free
+places. Every 60 s each Pouch looks at the
 registered files of its layers: a file with fewer live holders than planned
 lacks that many, and among the Pouches of the layer that do not hold it, the
 ones ranked first by a hash of the file and the Pouch, as many as are lacking,
@@ -218,15 +222,18 @@ beyond half of what it offers volunteers for up to 2 files per round that it
 does not hold, those with fewest live holders first, as long as the file fits
 in the space beyond that half. It rebuilds them like a repair and registers
 with `Hold`: a file that already has all its planned holders takes it as an
-**extra** holder. Extra holders are not charged to the owner's quota, and the
-first live one takes the place of a charged holder that `Release`s. Real
-fragments evict filler, so a new Pouch stores redundancy that serves instead
-of random data.
+**extra** holder. Extra holders are not charged to the owner's quota, and live
+ones take the place of charged holders that are gone. Real fragments evict
+filler, so a new Pouch stores redundancy that serves instead of random data;
+filler only fills what no file needs. When less than a quarter of a Pouch is
+free or filler, it gives up one extra file per round (`Release`), so charged
+fragments always find room.
 
 **Proof of Trust.** A charged holder can hand its place to an extra holder of
 another user with `Trust`, stating its confidence that the newcomer keeps the
-file (its own availability estimate of that Pouch). Its Pouch then deletes its
-copy. The `Trust` is a bet that settles after `horizon` epochs, won if the
+file for the whole bet: the ledger's survival forecast `((a + 1)/(a + 2))^horizon`,
+with `a` the epochs that device has proven its storage since it registered.
+Its Pouch then deletes its copy. The `Trust` is a bet that settles after `horizon` epochs, won if the
 newcomer still holds the file, or as soon as the newcomer releases it or its
 user is gone, lost. It is scored with the Brier rule relative to the network's
 `prior`: `(prior − o)² − (confidence − o)²` with `o` = 1 if won, 0 if lost, so
@@ -235,9 +242,10 @@ honest forecasts pay best and a confident loss costs most. A member's
 bet; it is not voting weight. Safety floor: a file has at most `n − k` open
 bets, so it survives every untested newcomer vanishing. A member has
 `1 + trust / 0.25` open bets at most, and nobody bets on their own devices.
-Each node trusts a newcomer only once its availability
-estimate reaches `BP_TRUST_AT` (default 0.9), at most one file per network per
-round. A dropped file voids its bets.
+Each node trusts a newcomer only once that forecast reaches `BP_TRUST_AT`
+(default 0.8, about a month of proofs), at most one file per network per
+round. A dropped file voids its bets. A proposal the ledger does not take is
+retried after 10 minutes.
 
 Rebuilding is a **recoding chain**: `k` live holders in turn add `c · own fragment` (random `c`
 in GF(2⁸)) to the running sum and
@@ -327,7 +335,8 @@ signed ops from the genesis entry and the creator's device certificate:
 **Parameters** (`bp params`) are in the ledger: `ph`, the default target
 recovery probability of a file (0.999); `prior`, the baseline chance that a
 newcomer stays (0.5); `decay`, the share of trust kept at each settled bet
-(0.9); `horizon`, the epochs a trust bet lasts (7).
+(0.9); `horizon`, the epochs a trust bet lasts (7); `grace`, the epochs a device
+may go without passing a challenge before it stops counting as a holder (2).
 
 **Epochs** last one day of block time. At the first block of an epoch the
 ledger takes a snapshot of every user's tier and weight; weights stay fixed for

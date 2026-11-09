@@ -16,7 +16,7 @@ use libp2p::PeerId;
 use rand::{seq::SliceRandom, Rng};
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 
 const PING_INTERVAL_SECS: u64 = 60;
@@ -36,7 +36,9 @@ const CATCH_UP_INTERVAL_SECS: u64 = 60;
 const MAX_REPAIRS_PER_ROUND: usize = 64;
 const MAX_VOLUNTEERS_PER_ROUND: usize = 2;
 
-const DEFAULT_TRUST_AT: f64 = 0.9;
+const DEFAULT_TRUST_AT: f64 = 0.8;
+
+const CLAIM_RETRY_SECS: u64 = 600;
 
 const MAX_CHALLENGES_PER_ROUND: usize = 8;
 
@@ -69,7 +71,7 @@ pub async fn run_quality_monitor(
         "Quality monitor started"
     );
 
-    let mut claimed = HashSet::new();
+    let mut claimed = Claims::default();
     loop {
         tokio::select! {
             _ = ping_interval.tick() => {
@@ -86,7 +88,7 @@ pub async fn run_quality_monitor(
             }
             _ = catch_up_interval.tick() => {
                 run_catch_up(&me, &network_state, &storage_managers, &chains, &net_tx, &mut claimed).await;
-                run_trust_round(&identity, &storage_managers, &chains, &qos, &mut claimed);
+                run_trust_round(&identity, &storage_managers, &chains, &mut claimed);
             }
         }
     }
@@ -325,7 +327,7 @@ async fn run_catch_up(
     storage_managers: &StorageManagerMap,
     chains: &Chains,
     net_tx: &mpsc::Sender<NetworkCommand>,
-    claimed: &mut HashSet<String>,
+    claimed: &mut Claims,
 ) {
     let pouches: Vec<(
         String,
@@ -343,6 +345,7 @@ async fn run_catch_up(
         })
         .unwrap_or_default();
     for (network, tier, sm) in pouches {
+        shed_extra(me, &network, &sm, chains, claimed);
         let pouches_by_tier = layer_tiers(network_state, &network, me);
         let mut recodes = Vec::new();
         let mut complete = Vec::new();
@@ -401,7 +404,7 @@ async fn run_catch_up(
             }
         }
         for file_id in complete {
-            if !claimed.insert(file_id.clone()) {
+            if !claimed.take(&file_id) {
                 continue;
             }
             let hold = crate::ledger::Op::Hold {
@@ -439,6 +442,68 @@ async fn run_catch_up(
     }
 }
 
+fn shed_extra(
+    me: &str,
+    network: &str,
+    sm: &Arc<RwLock<crate::storage::StorageManager>>,
+    chains: &Chains,
+    claimed: &mut Claims,
+) {
+    let tight = {
+        let sm = sm.read().unwrap();
+        sm.meta.available_bytes() + sm.filler_bytes() < sm.meta.storage_bytes_bid / 4
+    };
+    if !tight {
+        return;
+    }
+    let mut all = chains.write().unwrap();
+    let Some(chain) = all.get_mut(network) else {
+        return;
+    };
+    let ledger = chain.ledger();
+    let Some((file_id, owner_key)) = ledger.placements.iter().find_map(|(file_id, p)| {
+        let owner = ledger.members.get(&p.owner)?;
+        (p.extra.contains(me) && !claimed.pending(&format!("release/{file_id}")))
+            .then(|| (file_id.clone(), owner.key.clone()))
+    }) else {
+        return;
+    };
+    claimed.take(&format!("release/{file_id}"));
+    let release = crate::ledger::Op::Release {
+        file_id: file_id.clone(),
+        device: me.to_string(),
+    };
+    if let Err(e) = chain.propose(release, crate::chain::now_ms()) {
+        return tracing::warn!(file_id = %file_id, "cannot release an extra file: {e}");
+    }
+    drop(all);
+    match sm.write().unwrap().delete_file(&file_id, &owner_key) {
+        Ok(freed) => {
+            tracing::info!(file_id = %file_id, freed, "gave up an extra file to make room")
+        }
+        Err(e) => tracing::warn!(file_id = %file_id, "cannot delete an extra file: {e}"),
+    }
+}
+
+#[derive(Default)]
+struct Claims(std::collections::HashMap<String, Instant>);
+
+impl Claims {
+    fn pending(&self, key: &str) -> bool {
+        self.0
+            .get(key)
+            .is_some_and(|at| at.elapsed() < Duration::from_secs(CLAIM_RETRY_SECS))
+    }
+
+    fn take(&mut self, key: &str) -> bool {
+        if self.pending(key) {
+            return false;
+        }
+        self.0.insert(key.to_string(), Instant::now());
+        true
+    }
+}
+
 fn trust_threshold() -> f64 {
     std::env::var("BP_TRUST_AT")
         .ok()
@@ -451,8 +516,7 @@ fn run_trust_round(
     identity: &Identity,
     storage_managers: &StorageManagerMap,
     chains: &Chains,
-    qos: &Arc<RwLock<QosRegistry>>,
-    claimed: &mut HashSet<String>,
+    claimed: &mut Claims,
 ) {
     let me = identity.peer_id.to_string();
     let user = identity.fingerprint.as_str();
@@ -474,12 +538,17 @@ fn run_trust_round(
                 }
             }
             for (file_id, p) in &ledger.placements {
-                if !p.holders.contains(&me) || claimed.contains(&format!("trust/{file_id}")) {
+                if !p.holders.contains(&me) || claimed.pending(&format!("trust/{file_id}")) {
                     continue;
                 }
                 for newcomer in &p.extra {
                     if ledger.may_trust(user, file_id, &me, newcomer).is_ok() {
-                        offers.push((network.clone(), file_id.clone(), newcomer.clone()));
+                        offers.push((
+                            network.clone(),
+                            file_id.clone(),
+                            newcomer.clone(),
+                            ledger.survival(newcomer),
+                        ));
                     }
                 }
             }
@@ -506,15 +575,12 @@ fn run_trust_round(
     let threshold = trust_threshold();
     let mut chosen: std::collections::BTreeMap<String, (f64, String, String)> =
         std::collections::BTreeMap::new();
-    if let Ok(q) = qos.read() {
-        for (network, file_id, newcomer) in offers {
-            let confidence = q.availability(&newcomer);
-            let better = chosen
-                .get(&network)
-                .is_none_or(|(best, _, _)| confidence > *best);
-            if confidence >= threshold && better {
-                chosen.insert(network, (confidence, file_id, newcomer));
-            }
+    for (network, file_id, newcomer, confidence) in offers {
+        let better = chosen
+            .get(&network)
+            .is_none_or(|(best, _, _)| confidence > *best);
+        if confidence >= threshold && better {
+            chosen.insert(network, (confidence, file_id, newcomer));
         }
     }
     let mut all = chains.write().unwrap();
@@ -522,7 +588,7 @@ fn run_trust_round(
         let Some(chain) = all.get_mut(&network) else {
             continue;
         };
-        claimed.insert(format!("trust/{file_id}"));
+        claimed.take(&format!("trust/{file_id}"));
         let op = crate::ledger::Op::Trust {
             file_id: file_id.clone(),
             released: me.clone(),

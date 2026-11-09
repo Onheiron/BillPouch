@@ -110,6 +110,7 @@ pub struct Params {
     pub prior_ppm: u32,
     pub decay_ppm: u32,
     pub horizon_epochs: u64,
+    pub grace_epochs: u64,
 }
 
 impl Default for Params {
@@ -119,6 +120,7 @@ impl Default for Params {
             prior_ppm: 500_000,
             decay_ppm: 900_000,
             horizon_epochs: 7,
+            grace_epochs: 2,
         }
     }
 }
@@ -133,6 +135,7 @@ impl Params {
             && self.prior_ppm <= 1_000_000
             && self.decay_ppm <= 1_000_000
             && (1..=365).contains(&self.horizon_epochs)
+            && (1..=365).contains(&self.grace_epochs)
     }
 }
 
@@ -267,6 +270,7 @@ pub struct Member {
 pub struct Device {
     pub user: String,
     pub key: String,
+    pub since: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -292,6 +296,8 @@ pub struct Ledger {
     pub held: BTreeMap<String, BTreeMap<String, u64>>,
     pub usage_at: BTreeMap<String, u64>,
     pub placements: BTreeMap<String, Placement>,
+    pub proven: BTreeMap<String, u64>,
+    pub last_proof: u64,
     pub params: Params,
     pub param_votes: BTreeMap<String, Params>,
     pub bets: Vec<Bet>,
@@ -322,6 +328,7 @@ impl Ledger {
             Device {
                 user: creator,
                 key: creator_device.device_key.clone(),
+                since: genesis.body.at / EPOCH_SECS,
             },
         )]);
         let mut ledger = Self {
@@ -348,6 +355,8 @@ impl Ledger {
             held: BTreeMap::new(),
             usage_at: BTreeMap::new(),
             placements: BTreeMap::new(),
+            proven: BTreeMap::new(),
+            last_proof: 0,
             params: Params::default(),
             param_votes: BTreeMap::new(),
             bets: Vec::new(),
@@ -383,9 +392,24 @@ impl Ledger {
             && !self.left.contains(user)
     }
 
-    pub fn holds_for_member(&self, device: &str) -> bool {
-        self.device_owner(device)
-            .is_some_and(|user| self.is_member(user))
+    pub fn is_live(&self, device: &str) -> bool {
+        let Some(d) = self.devices.get(device) else {
+            return false;
+        };
+        let seen = self.proven.get(device).copied().unwrap_or(0).max(d.since);
+        self.is_member(&d.user) && seen + self.params.grace_epochs >= self.last_proof
+    }
+
+    pub fn survival(&self, device: &str) -> f64 {
+        let Some(d) = self.devices.get(device) else {
+            return 0.0;
+        };
+        let lived = self
+            .proven
+            .get(device)
+            .map_or(0, |&e| e.saturating_sub(d.since)) as f64;
+        let horizon = i32::try_from(self.params.horizon_epochs).unwrap_or(i32::MAX);
+        ((lived + 1.0) / (lived + 2.0)).powi(horizon)
     }
 
     pub fn live_holders<'a>(&'a self, placement: &'a Placement) -> Vec<&'a String> {
@@ -393,7 +417,7 @@ impl Ledger {
             .holders
             .iter()
             .chain(&placement.extra)
-            .filter(|device| self.holds_for_member(device))
+            .filter(|device| self.is_live(device))
             .collect()
     }
 
@@ -414,15 +438,11 @@ impl Ledger {
         let Some(p) = self.placements.get(file_id) else {
             return;
         };
-        let charged = p
-            .holders
-            .iter()
-            .filter(|d| self.holds_for_member(d))
-            .count();
+        let charged = p.holders.iter().filter(|d| self.is_live(d)).count();
         let promoted: Vec<String> = p
             .extra
             .iter()
-            .filter(|d| self.holds_for_member(d))
+            .filter(|d| self.is_live(d))
             .take(p.planned.saturating_sub(charged))
             .cloned()
             .collect();
@@ -461,7 +481,7 @@ impl Ledger {
             return Err("you do not hold this file");
         }
         let other = self.device_owner(newcomer).ok_or("unknown newcomer")?;
-        if !p.extra.contains(newcomer) || !self.is_member(other) {
+        if !p.extra.contains(newcomer) || !self.is_live(newcomer) {
             return Err("the newcomer is not an extra holder");
         }
         if other == user {
@@ -486,7 +506,7 @@ impl Ledger {
                 continue;
             }
             let holding = (p.holders.contains(&bet.newcomer) || p.extra.contains(&bet.newcomer))
-                && self.holds_for_member(&bet.newcomer);
+                && self.is_live(&bet.newcomer);
             if holding && epoch < bet.until_epoch {
                 self.bets.push(bet);
                 continue;
@@ -650,6 +670,14 @@ impl Ledger {
                     let member = self.members.get_mut(&o.user).expect("checked member");
                     member.sent += u64::from(o.sent);
                     member.passed += u64::from(o.passed);
+                    if o.passed > 0 && self.device_owner(&o.device) == Some(o.user.as_str()) {
+                        self.proven.insert(o.device.clone(), *epoch);
+                        self.last_proof = self.last_proof.max(*epoch);
+                    }
+                }
+                let files: Vec<String> = self.placements.keys().cloned().collect();
+                for file_id in files {
+                    self.promote(&file_id);
                 }
             }
             Op::Usage { verified, held } => {
@@ -711,6 +739,7 @@ impl Ledger {
                     Device {
                         user: author.clone(),
                         key: cert.device_key.clone(),
+                        since: block.epoch(),
                     },
                 );
                 let member = self.members.get_mut(&author).expect("checked member");
@@ -744,7 +773,7 @@ impl Ledger {
                     || *k > holders.len()
                     || chunks.is_empty()
                     || chunks.len() > MAX_CHUNKS_PER_FILE
-                    || !holders.iter().all(|d| self.holds_for_member(d))
+                    || !holders.iter().all(|d| self.is_live(d))
                 {
                     return Err(invalid("invalid placement"));
                 }
@@ -769,11 +798,7 @@ impl Ledger {
                 if !owned || p.holders.contains(device) || p.extra.contains(device) {
                     return Err(invalid("invalid holder"));
                 }
-                let charged = p
-                    .holders
-                    .iter()
-                    .filter(|d| self.holds_for_member(d))
-                    .count();
+                let charged = p.holders.iter().filter(|d| self.is_live(d)).count();
                 let full = charged >= p.planned;
                 let p = self.placements.get_mut(file_id).expect("checked above");
                 if full {
@@ -1536,6 +1561,56 @@ mod tests {
         let p = &net.ledger.placements["f"];
         assert_eq!(p.holders, [d0, d2].into());
         assert!(p.extra.is_empty());
+    }
+
+    #[test]
+    fn a_holder_that_stops_proving_its_storage_is_replaced() {
+        let mut net = Net::everyone_joined(3);
+        for who in 1..3 {
+            let op = SignedOp::sign(
+                &net.people[who],
+                Op::RegisterDevice {
+                    cert: net.people[who].cert.clone(),
+                },
+            )
+            .unwrap();
+            let t = net.now();
+            net.commit(0, t, vec![op]).unwrap();
+        }
+        let device = |i: usize| net.people[i].peer_id.to_string();
+        let (d0, d1, d2) = (device(0), device(1), device(2));
+        let people = net.people.clone();
+        let sign = |who: usize, op: Op| SignedOp::sign(&people[who], op).unwrap();
+        let t = net.now();
+        let place = Op::Place {
+            file_id: "f".into(),
+            k: 1,
+            layer: StorageTier::T1,
+            chunks: vec!["c".into()],
+            holders: [d0.clone(), d1.clone()].into(),
+        };
+        let hold = Op::Hold {
+            file_id: "f".into(),
+            device: d2.clone(),
+        };
+        net.commit(0, t, vec![sign(0, place), sign(2, hold)])
+            .unwrap();
+        for _ in 0..net.ledger.params.grace_epochs {
+            net.next_epoch();
+            let t = net.now();
+            let seen = vec![net.observe(0, 2, 5, 5, t), net.observe(2, 0, 5, 5, t)];
+            net.commit(0, t, seen).unwrap();
+        }
+        assert!(net.ledger.is_live(&d1), "still within the grace epochs");
+        net.next_epoch();
+        let t = net.now();
+        let seen = vec![net.observe(0, 2, 5, 5, t), net.observe(2, 0, 5, 5, t)];
+        net.commit(0, t, seen).unwrap();
+        assert!(!net.ledger.is_live(&d1));
+        let p = &net.ledger.placements["f"];
+        assert!(p.holders.contains(&d2) && p.extra.is_empty());
+        assert_eq!(net.ledger.live_holders(p).len(), 2);
+        assert!(net.ledger.survival(&d2) > net.ledger.survival(&d1));
     }
 
     #[test]
