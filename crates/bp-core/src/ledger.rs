@@ -18,7 +18,7 @@ const DAY: u64 = 86_400;
 const PPM: i64 = 1_000_000;
 const STAKE: i64 = 250_000;
 const SPONSOR_REWARD: i64 = 50_000;
-const FREE_COMMITMENTS: usize = 4;
+const FREE_COMMITMENTS: usize = 8;
 
 const PROMOTIONS: [(ReputationTier, u64, f64); 3] = [
     (ReputationTier::R4, 365, 0.999),
