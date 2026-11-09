@@ -677,8 +677,9 @@ mod tests {
                     .unwrap()],
                 );
             }
-            apply(&mut ledger, start + EPOCH_SECS, vec![]);
-            let now = (start + EPOCH_SECS) * 1000;
+            let midday = (start / EPOCH_SECS + 1) * EPOCH_SECS + EPOCH_SECS / 2;
+            apply(&mut ledger, midday, vec![]);
+            let now = midday * 1000;
             let engines = people
                 .iter()
                 .map(|p| Engine::new(p, ledger.clone()))
