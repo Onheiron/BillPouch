@@ -26,7 +26,7 @@ Types: `bp_core::control::protocol`; client helper: `bp_core::control::client::s
 | `create_network` | `name` | Creates a network with you as creator |
 | `invite` | `network_id`, `member_key` (OpenSSH line) | Adds a member once committed and returns the join token; with your own key, returns a token for another device of yours (`for_device: true`) |
 | `join_network` | `token` | Joins with a token and waits for the ledger to sync |
-| `members` | `network_id` | Members with tier, weight, devices, pending expulsions; expelled members |
+| `members` | `network_id` | Members with tier, weight, devices, trust and open bets, pending expulsions; expelled members; network parameters |
 | `expel` | `network_id`, `member` (fingerprint) | Proposes or approves an expulsion |
 | `leave` | `network_id`, `force` | Leaves a network |
 | `put_file` | `path` (on the daemon's machine), `network_id`, `ph`?, `file_name`? | Streams a file in, returns `file_id`, `chunks`, `k`, `n`, placement counts |
