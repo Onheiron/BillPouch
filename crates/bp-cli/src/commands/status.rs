@@ -117,7 +117,7 @@ fn print_status(s: &StatusData) {
     if let Some(qos) = &s.network_qos {
         println!();
         println!("📶 Network QoS  ({} observed peers)", qos.observed_peers);
-        println!("   avg stability : {:.3}", qos.avg_stability);
+        println!("   avg availability : {:.3}", qos.avg_availability);
         let mut tiers: Vec<(&String, &usize)> = qos.tier_counts.iter().collect();
         tiers.sort_by_key(|(k, _)| k.as_str());
         for (tier, count) in tiers {

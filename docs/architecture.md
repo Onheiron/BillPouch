@@ -101,13 +101,18 @@ chunks; only one chunk is in memory at a time. Each file gets a random
    BLAKE3 prefix of the ciphertext. The chunk goes to the lowest layer whose
    every Pouch (yours included) still has room for one fragment in that layer's
    slice; lower layers have more Pouches, so they are at least as stable.
-3. **Choose k** (`coding/params.rs`). Every Pouch of the layer gets exactly one
-   fragment, so `n` = Pouches in the layer. With `X_i` = Pouch `i` reachable
-   (probability `p_i`, its stability score; 0.8 if never pinged), the recovery
-   probability `Pe = P(Σ X_i ≥ k)` is computed exactly by dynamic programming,
-   and `k` is the largest (≤ 128) with `Pe ≥ Ph` (`--ph`, default 0.999). Each
-   Pouch then stores 1/k of the chunk. If even `k = 1` (a full copy on every
-   Pouch) misses `Ph`, it is used anyway and `Pe` is reported.
+3. **Choose k and the holders** (`coding/params.rs`). With `X_i` = Pouch `i`
+   reachable, with probability `p_i` (its conservative availability, below),
+   the recovery probability `Pe = P(Σ X_i ≥ k)` over `n` holders is computed
+   exactly by dynamic programming, and for a given set of holders `k` is the
+   largest (≤ 128) with `Pe ≥ Ph` (`--ph`, default 0.999). Each holder stores
+   one fragment of 1/k of the chunk, so the overhead is `n/k`. The holders are
+   the subset of the layer that maximises `k/n`, taking Pouches in order of
+   availability: a Pouch that cannot raise `k` gets no fragment, since it would
+   only add overhead. Ties are broken by a hash of the file id and the Pouch, so
+   every chunk of a file goes to the same holders and different files spread.
+   If no subset reaches `Ph`, every Pouch of the layer gets a full copy
+   (`k = 1`) and `Pe` is reported.
 4. **Encode and place.** Systematic RLNC over GF(2⁸): `n` fragments, any `k` of
    which decode. Your own fragment is stored locally; the others are pushed to
    their Pouches with your **owner grant** and the layer. The placement is gossiped as an
@@ -189,16 +194,24 @@ the Pouch's setup (others' fragments, filler, free space) and your **quota**
 
 For every peer the daemon keeps a QoS record (`network/qos.rs`):
 
-- **Stability score** `s = 0.6·exp(−rtt/500 ms) + 0.4·success_rate`
-  (RTT EWMA α = 0.125, success EWMA β = 0.10). This is the `p_i` used for k/n.
-**Repair is the network's job.** Every Pouch of a layer holds one fragment of
-every chunk of that layer, so a Pouch that dies costs every chunk of its
-layers one fragment and there is nowhere else to put it: redundancy comes back
-when a Pouch joins the layer, new or replacing the lost one. Every 60 s each
-Pouch, for each of its layers, asks a random Pouch of the layer for its
-**catalog** (chunk, owner, `file_id`, `k`) and, for each chunk it lacks (at
-most 64 per round), starts a **recoding chain**: `k` random Pouches of the layer
-in turn add `c · own fragment` (random `c` in GF(2⁸)) to the running sum and
+- **Availability** `p_i`, the `p_i` used for k/n. Every ping answered and every
+  challenge passed counts as seen, every timeout or failed challenge as
+  missed, with a memory that decays by 0.99 per observation. With
+  `a = 1 + seen` and `b = 1 + missed`, `p_i` is the lower 5 % bound of
+  Beta(a, b), `mean − 1.645·σ`: a Pouch never observed counts as about 0.03 and
+  one always present climbs towards 0.97, so evidence, not hope, earns a place
+  among the holders.
+- RTT EWMA (α = 0.125) and challenge success EWMA (β = 0.10, used for credit).
+**Repair is the network's job.** Every fragment carries the number of holders
+its file was planned with. Every 60 s each Pouch, for each of its layers, asks
+up to 16 Pouches of the layer for their **catalog** (chunk, owner, `file_id`,
+`k`, planned holders) and learns who holds what. A chunk seen on fewer holders
+than planned lacks that many fragments; among the Pouches of the layer that do
+not hold it, the ones ranked first by a hash of the chunk and the Pouch, as many
+as are lacking, rebuild it, so the same chunk is not rebuilt twice and a chunk
+that has all its holders gets no extra copies. Rebuilding is a **recoding
+chain**: `k` of its holders in turn add `c · own fragment` (random `c` in GF(2⁸))
+to the running sum and
 pass it on, and the last one hands the result to the new Pouch, which stores it
 with the chunk's owner. The result is a fresh RLNC fragment; nobody sees more
 than its own fragment and one partial sum, so no fetch grant is needed, only

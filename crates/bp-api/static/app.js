@@ -179,6 +179,14 @@ function nodes(data) {
   return [...local, ...remote].filter((n) => inNetwork(n.network));
 }
 
+function availability(q) {
+  const a = 1 + q.seen;
+  const b = 1 + q.missed;
+  const total = a + b;
+  const spread = Math.sqrt((a * b) / (total * total * (total + 1)));
+  return Math.min(1, Math.max(0, a / total - 1.645 * spread));
+}
+
 function verification(node, data) {
   if (node.kind !== "pouch") {
     if (node.paused) return ["wait", "In maintenance"];
@@ -195,7 +203,7 @@ function verification(node, data) {
   const q = node.qos;
   if (!q || q.challenges_sent === 0) return ["wait", "Not challenged yet"];
   const rate = Math.round(q.challenge_success_ewma * 100);
-  const detail = `${q.challenges_succeeded}/${q.challenges_sent} challenges passed (${rate}%)`;
+  const detail = `${q.challenges_succeeded}/${q.challenges_sent} challenges passed (${rate}%) · counted as ${Math.round(availability(q) * 100)}% available`;
   if (q.challenge_success_ewma >= 0.9) return ["ok", detail];
   if (q.challenge_success_ewma >= 0.5) return ["wait", detail];
   return ["bad", detail];

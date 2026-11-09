@@ -124,6 +124,7 @@ pub enum NetworkCommand {
         data: Vec<u8>,
         grant: crate::files::Grant,
         layer: crate::storage::StorageTier,
+        holders: usize,
         commitment: crate::storage::commitment::Commitment,
     },
     FetchChunkFragments {
@@ -354,6 +355,7 @@ pub async fn run_network_loop(
                         data,
                         grant,
                         layer,
+                        holders,
                         commitment,
                     }) => {
                         let req = FragmentRequest::Store {
@@ -362,6 +364,7 @@ pub async fn run_network_loop(
                             data,
                             grant,
                             layer,
+                            holders,
                             commitment,
                         };
                         let _ = swarm
@@ -1168,6 +1171,7 @@ fn serve_fragment_request(
             data,
             grant,
             layer,
+            holders,
             commitment,
         } => {
             if !grant.is_owner_claim() || grant.grantee != requester {
@@ -1191,6 +1195,7 @@ fn serve_fragment_request(
                 owner_key: grant.owner_key.clone(),
                 file_id: grant.file_id.clone(),
                 layer: *layer,
+                holders: *holders,
             };
             let stored = managers.values().any(|sm_arc| {
                 let mut sm = sm_arc.write().unwrap();

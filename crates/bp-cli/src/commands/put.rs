@@ -25,7 +25,7 @@ pub async fn put(
     println!("✓ Stored {} bytes in {} chunk(s)", d.size_bytes, d.chunks);
     println!("   file_id      : {}", d.file_id);
     println!(
-        "   k / n        : {} / {}  (one fragment per Pouch of the layer)",
+        "   k / n        : {} / {}  (one fragment per holder, any k rebuild the file)",
         d.k, d.n
     );
     println!("   Ph target    : {:.4}   Pe effective: {:.4}", d.ph, d.pe);

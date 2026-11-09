@@ -27,7 +27,6 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const DEFAULT_PH: f64 = 0.999;
 const FETCH_TIMEOUT_SECS: u64 = 10;
-const UNOBSERVED_STABILITY: f64 = 0.8;
 
 #[derive(Default)]
 pub struct Stored {
@@ -98,20 +97,15 @@ pub fn layer_nodes(state: &DaemonState, network_id: &str) -> Vec<LayerNode> {
     nodes
 }
 
-fn stabilities(state: &DaemonState, peers: &[String]) -> Vec<f64> {
+fn availabilities(state: &DaemonState, peers: &[String]) -> Vec<f64> {
     let qos = state.qos.read().unwrap();
-    peers
-        .iter()
-        .map(|p| match qos.get(p) {
-            Some(q) if q.is_observed() => q.stability_score(),
-            _ => UNOBSERVED_STABILITY,
-        })
-        .collect()
+    peers.iter().map(|p| qos.availability(p)).collect()
 }
 
 pub fn choose_layer(
     nodes: &[LayerNode],
-    stabilities: impl Fn(&[String]) -> Vec<f64>,
+    file_id: &str,
+    availabilities: impl Fn(&[String]) -> Vec<f64>,
     data_len: usize,
     ph: f64,
 ) -> Result<(StorageTier, Vec<String>, coding_params::Plan), String> {
@@ -119,18 +113,21 @@ pub fn choose_layer(
         return Err("no Pouch available — hatch a Pouch or wait for Pouch peers to join".into());
     }
     for layer in StorageTier::all().iter().copied() {
-        let members: Vec<&LayerNode> = nodes.iter().filter(|n| n.tier >= layer).collect();
+        let mut members: Vec<&LayerNode> = nodes.iter().filter(|n| n.tier >= layer).collect();
         if members.is_empty() {
             break;
         }
+        members.sort_by_key(|n| blake3::hash(format!("{file_id}/{}", n.peer).as_bytes()).to_hex());
         let peers: Vec<String> = members.iter().map(|n| n.peer.clone()).collect();
-        let plan = coding_params::plan(&stabilities(&peers), ph).map_err(|e| e.to_string())?;
+        let (plan, chosen) =
+            coding_params::best_plan(&availabilities(&peers), ph).map_err(|e| e.to_string())?;
         let fragment = (data_len.div_ceil(plan.k) + plan.k + 16) as u64;
-        if members
+        if chosen
             .iter()
-            .all(|n| n.free.get(&layer).copied().unwrap_or(0) >= fragment)
+            .all(|&i| members[i].free.get(&layer).copied().unwrap_or(0) >= fragment)
         {
-            return Ok((layer, peers, plan));
+            let holders = chosen.into_iter().map(|i| peers[i].clone()).collect();
+            return Ok((layer, holders, plan));
         }
     }
     Err("every layer of the network is full".into())
@@ -164,7 +161,7 @@ pub fn quota_rate(
 ) -> Result<Rate, String> {
     let nodes = layer_nodes(state, network_id);
     let sample = (size as usize).clamp(1, CHUNK_BYTES);
-    let (_, peers, plan) = choose_layer(&nodes, |p| stabilities(state, p), sample, ph)?;
+    let (_, peers, plan) = choose_layer(&nodes, "", |p| availabilities(state, p), sample, ph)?;
     let chains = state.chains.read().unwrap();
     let ledger = chains
         .get(network_id)
@@ -233,7 +230,8 @@ async fn store_chunk(
     let chunk_id = rlnc::chunk_hash(data);
     let (layer, nodes, plan) = choose_layer(
         &layer_nodes(state, network_id),
-        |peers| stabilities(state, peers),
+        &grant.file_id,
+        |peers| availabilities(state, peers),
         data.len(),
         ph,
     )?;
@@ -242,6 +240,7 @@ async fn store_chunk(
         owner_key: grant.owner_key.clone(),
         file_id: grant.file_id.clone(),
         layer,
+        holders: plan.n,
     };
 
     let mut pointers = Vec::new();
@@ -288,6 +287,7 @@ async fn store_chunk(
                 data: bytes,
                 grant: grant.clone(),
                 layer,
+                holders: plan.n,
                 commitment,
             })
             .await;
@@ -1102,20 +1102,20 @@ mod tests {
         nodes.extend((0..3).map(|i| node(&format!("t2-{i}"), StorageTier::T2, 1 << 30)));
         let even = |peers: &[String]| vec![0.95; peers.len()];
 
-        let (layer, peers, plan) = choose_layer(&nodes, even, 4 << 20, 0.999).unwrap();
+        let (layer, peers, plan) = choose_layer(&nodes, "f", even, 4 << 20, 0.999).unwrap();
         assert_eq!(layer, StorageTier::T1);
         assert_eq!(peers.len(), 9, "T1 holds every node, T2 ones included");
         assert_eq!(plan.n, 9);
 
         nodes[0].free.insert(StorageTier::T1, 10);
-        let (layer, peers, _) = choose_layer(&nodes, even, 4 << 20, 0.999).unwrap();
+        let (layer, peers, _) = choose_layer(&nodes, "f", even, 4 << 20, 0.999).unwrap();
         assert_eq!(layer, StorageTier::T2);
         assert!(peers.iter().all(|p| p.starts_with("t2-")));
 
         for n in nodes.iter_mut() {
             n.free.insert(StorageTier::T2, 10);
         }
-        assert!(choose_layer(&nodes, even, 4 << 20, 0.999).is_err());
-        assert!(choose_layer(&[], even, 1, 0.999).is_err());
+        assert!(choose_layer(&nodes, "f", even, 4 << 20, 0.999).is_err());
+        assert!(choose_layer(&[], "f", even, 1, 0.999).is_err());
     }
 }

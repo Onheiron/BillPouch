@@ -243,25 +243,13 @@ else
     fail "carlo-laptop's Pouch holds no filler"
 fi
 
-info "Waiting up to 150s for the laptop's new Pouch to catch up on the existing files..."
-CAUGHT_UP=false
-for _ in $(seq 1 75); do
-    if grep -q "received a recoded fragment" <<< "$(docker logs bp-laptop 2>&1)"; then
-        CAUGHT_UP=true
-        break
-    fi
-    sleep 2
-done
-if [ "${CAUGHT_UP}" = true ]; then
-    pass "the laptop's new Pouch received recoded fragments of the files stored before it joined"
-else
-    fail "the laptop's new Pouch never caught up"
-fi
+info "Giving the laptop's new Pouch 70s, more than a repair round, to show it copies nothing..."
+sleep 70
 FRAGS=$(docker exec bp-laptop bash -c 'find ~/.local/share/billpouch/storage -name "*.frag" | wc -l' || echo 0)
-if [ "${FRAGS}" -gt 0 ]; then
-    pass "carlo-laptop's Pouch holds ${FRAGS} recoded fragment(s)"
+if [ "${FRAGS}" -eq 0 ] && ! grep -q "received a recoded fragment" <<< "$(docker logs bp-laptop 2>&1)"; then
+    pass "carlo-laptop's new Pouch copies nothing of files that already have all their holders"
 else
-    fail "carlo-laptop's Pouch holds no fragment"
+    fail "carlo-laptop's new Pouch took ${FRAGS} redundant fragment(s)"
 fi
 
 UNSHARE_OUT=$(docker exec bp-pouch bp unshare "${CHUNK}" "${BILL_FP}" --network smoketest 2>&1) || true
