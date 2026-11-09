@@ -34,6 +34,7 @@ const MAX_BLOBS_PER_ROUND: u64 = 256;
 const CATCH_UP_INTERVAL_SECS: u64 = 60;
 
 const MAX_REPAIRS_PER_ROUND: usize = 64;
+const MAX_VOLUNTEERS_PER_ROUND: usize = 2;
 
 const MAX_CHALLENGES_PER_ROUND: usize = 8;
 
@@ -348,8 +349,12 @@ async fn run_catch_up(
                 continue;
             };
             let ledger = chain.ledger();
+            let volunteered = volunteers(ledger, &sm.read().unwrap(), tier, me);
             for (file_id, placement) in &ledger.placements {
-                if tier < placement.layer || placement.holders.contains(me) {
+                if tier < placement.layer
+                    || placement.holders.contains(me)
+                    || placement.extra.contains(me)
+                {
                     continue;
                 }
                 let live: Vec<String> = ledger
@@ -362,7 +367,9 @@ async fn run_catch_up(
                     .filter(|(_, t)| *t >= placement.layer)
                     .map(|(p, _)| p.clone())
                     .collect();
-                if !repairs_fall_to_me(file_id, placement.planned, &live, &layer, me) {
+                if !volunteered.contains(file_id)
+                    && !repairs_fall_to_me(file_id, placement.planned, &live, &layer, me)
+                {
                     continue;
                 }
                 let Some(owner_key) = ledger.members.get(&placement.owner).map(|m| m.key.clone())
@@ -400,9 +407,7 @@ async fn run_catch_up(
             };
             if let Some(chain) = chains.write().unwrap().get_mut(&network) {
                 match chain.propose(hold, crate::chain::now_ms()) {
-                    Ok(()) => {
-                        tracing::info!(file_id = %file_id, "repaired a file and became its holder")
-                    }
+                    Ok(()) => tracing::info!(file_id = %file_id, "now holds a file"),
                     Err(e) => tracing::warn!(file_id = %file_id, "cannot register as holder: {e}"),
                 }
             }
@@ -429,6 +434,53 @@ async fn run_catch_up(
             tracing::info!(network = %network, chunks = started, "repairing files below their planned holders");
         }
     }
+}
+
+fn volunteers(
+    ledger: &crate::ledger::Ledger,
+    sm: &crate::storage::StorageManager,
+    tier: StorageTier,
+    me: &str,
+) -> HashSet<String> {
+    let bid = sm.meta.storage_bytes_bid;
+    let mut spare = (sm.meta.available_bytes() + sm.filler_bytes()).saturating_sub(bid / 2);
+    let mut candidates: Vec<(bool, usize, String, u64, &str)> = ledger
+        .placements
+        .iter()
+        .filter(|(_, p)| {
+            tier >= p.layer && !p.holders.contains(me) && !p.extra.contains(me) && p.k > 0
+        })
+        .map(|(file_id, p)| {
+            let started = p.chunks.iter().any(|c| sm.has_chunk(c));
+            let size = (p.chunks.len() * crate::files::CHUNK_BYTES / p.k) as u64;
+            let rank = blake3::hash(format!("{file_id}/{me}").as_bytes())
+                .to_hex()
+                .to_string();
+            (
+                !started,
+                ledger.live_holders(p).len(),
+                rank,
+                size,
+                file_id.as_str(),
+            )
+        })
+        .collect();
+    candidates.sort();
+    let mut chosen = HashSet::new();
+    for (fresh, _, _, size, file_id) in candidates {
+        if chosen.len() >= MAX_VOLUNTEERS_PER_ROUND {
+            break;
+        }
+        if fresh {
+            let layer = ledger.placements[file_id].layer;
+            if size > spare || size > sm.layer_free(layer) {
+                continue;
+            }
+            spare -= size;
+        }
+        chosen.insert(file_id.to_string());
+    }
+    chosen
 }
 
 fn layer_tiers(

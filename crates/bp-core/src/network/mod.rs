@@ -453,7 +453,7 @@ pub async fn run_network_loop(
                         .keys()
                         .filter_map(|name| {
                             let chain = all.get_mut(name)?;
-                            let held = holdings(&storage_managers, name);
+                            let held = holdings(&storage_managers, name, chain.ledger(), &identity.peer_id.to_string());
                             chain.tick(&observations, &held, now);
                             Some((name.clone(), chain.key, chain.outbox()))
                         })
@@ -879,13 +879,21 @@ fn handle_gossip(
 fn holdings(
     storage_managers: &StorageManagerMap,
     network: &str,
+    ledger: &crate::ledger::Ledger,
+    me: &str,
 ) -> std::collections::BTreeMap<String, u64> {
+    let charged = |file_id: &str| {
+        !ledger
+            .placements
+            .get(file_id)
+            .is_some_and(|p| p.extra.contains(me))
+    };
     let mut held = std::collections::BTreeMap::new();
     if let Ok(managers) = storage_managers.read() {
         for sm in managers.values() {
             let sm = sm.read().unwrap();
             if sm.meta.network_id == network {
-                for (owner_key, bytes) in sm.bytes_by_owner() {
+                for (owner_key, bytes) in sm.bytes_by_owner(charged) {
                     if let Ok((_, owner)) = crate::identity::parse_user_key(&owner_key) {
                         *held.entry(owner).or_default() += bytes;
                     }

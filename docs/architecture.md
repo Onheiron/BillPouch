@@ -209,10 +209,21 @@ leaves or is expelled stops counting. Every 60 s each Pouch looks at the
 registered files of its layers: a file with fewer live holders than planned
 lacks that many, and among the Pouches of the layer that do not hold it, the
 ones ranked first by a hash of the file and the Pouch, as many as are lacking,
-rebuild every chunk of it, so nothing is rebuilt twice and a file with all its
-holders gets no extra copies. Once it has every chunk, the Pouch registers
-itself as a holder (`Hold`). Deleting a file `Drop`s it. Rebuilding is a
-**recoding chain**: `k` live holders in turn add `c · own fragment` (random `c`
+rebuild every chunk of it, so nothing is rebuilt twice. Once it has every
+chunk, the Pouch registers itself as a holder (`Hold`). Deleting a file
+`Drop`s it.
+
+**Newcomers hold real fragments.** A Pouch with free space (free plus filler)
+beyond half of what it offers volunteers for up to 2 files per round that it
+does not hold, those with fewest live holders first, as long as the file fits
+in the space beyond that half. It rebuilds them like a repair and registers
+with `Hold`: a file that already has all its planned holders takes it as an
+**extra** holder. Extra holders are not charged to the owner's quota, and the
+first live one takes the place of a charged holder that `Release`s. Real
+fragments evict filler, so a new Pouch stores redundancy that serves instead
+of random data.
+
+Rebuilding is a **recoding chain**: `k` live holders in turn add `c · own fragment` (random `c`
 in GF(2⁸)) to the running sum and
 pass it on, and the last one hands the result to the new Pouch, which stores it
 with the chunk's owner. The result is a fresh RLNC fragment; nobody sees more
@@ -291,7 +302,7 @@ signed ops from the genesis entry and the creator's device certificate:
 | `ProposeExpel` / `ApproveExpel` | Expulsion vote |
 | `Leave` | The author leaves: no longer a member, weight removed, rotation due |
 | `Place` | Owner registers a file: chunks, `k`, layer and the holders it was planned with |
-| `Hold` / `Release` | A user's device starts or stops holding a file's fragments |
+| `Hold` / `Release` | A user's device starts or stops holding a file's fragments, as a charged or an extra holder |
 | `Drop` | Owner deletes a file from the registry |
 | `RotateKey` | New network key, wrapped for every current member |
 
