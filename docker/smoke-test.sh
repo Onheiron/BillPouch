@@ -302,7 +302,15 @@ if [ "${CREDITED}" = true ]; then
 else
     fail "marco-bill's Pouch was never credited"
 fi
-if grep -q "PoS challenge result.*passed=true" <<< "$(docker logs bp-pouch 2>&1 | sed 's/\x1b\[[0-9;]*m//g')"; then
+CHALLENGED=false
+for _ in $(seq 1 24); do
+    if grep -q "PoS challenge result.*passed=true" <<< "$(docker logs bp-pouch 2>&1 | sed 's/\x1b\[[0-9;]*m//g')"; then
+        CHALLENGED=true
+        break
+    fi
+    sleep 5
+done
+if [ "${CHALLENGED}" = true ]; then
     pass "carlo-pouch's challenges to another user's Pouch pass"
 else
     fail "no passing challenge from carlo-pouch"
