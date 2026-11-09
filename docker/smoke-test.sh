@@ -243,13 +243,20 @@ else
     fail "carlo-laptop's Pouch holds no filler"
 fi
 
-info "Giving the laptop's new Pouch 70s, more than a repair round, to show it copies nothing..."
-sleep 70
+info "Waiting up to 150s for carlo-laptop's new Pouch to volunteer as an extra holder..."
+VOLUNTEERED=false
+for _ in $(seq 1 30); do
+    if grep -q "now holds a file" <<< "$(docker logs bp-laptop 2>&1 | sed 's/\x1b\[[0-9;]*m//g')"; then
+        VOLUNTEERED=true
+        break
+    fi
+    sleep 5
+done
 FRAGS=$(docker exec bp-laptop bash -c 'find ~/.local/share/billpouch/storage -name "*.frag" | wc -l' || echo 0)
-if [ "${FRAGS}" -eq 0 ] && ! grep -q "received a recoded fragment" <<< "$(docker logs bp-laptop 2>&1)"; then
-    pass "carlo-laptop's new Pouch copies nothing of files that already have all their holders"
+if [ "${VOLUNTEERED}" = true ] && [ "${FRAGS}" -gt 0 ]; then
+    pass "carlo-laptop's new Pouch holds ${FRAGS} real fragment(s) of files that already had their holders"
 else
-    fail "carlo-laptop's new Pouch took ${FRAGS} redundant fragment(s)"
+    fail "carlo-laptop's new Pouch never volunteered (${FRAGS} fragment(s))"
 fi
 
 UNSHARE_OUT=$(docker exec bp-pouch bp unshare "${CHUNK}" "${BILL_FP}" --network smoketest 2>&1) || true
@@ -324,7 +331,7 @@ docker exec bp-laptop bp farewell "${LAPTOP_POUCH}" --evict >/dev/null 2>&1 || t
 info "Waiting up to 240s for lucia-post's new Pouch to rebuild what carlo-laptop held..."
 REPAIRED=false
 for _ in $(seq 1 48); do
-    if grep -q "repaired a file and became its holder" <<< "$(docker logs bp-post 2>&1 | sed 's/\x1b\[[0-9;]*m//g')"; then
+    if grep -q "now holds a file" <<< "$(docker logs bp-post 2>&1 | sed 's/\x1b\[[0-9;]*m//g')"; then
         REPAIRED=true
         break
     fi

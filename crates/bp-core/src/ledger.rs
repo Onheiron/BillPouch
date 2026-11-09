@@ -90,6 +90,7 @@ pub struct Placement {
     pub chunks: Vec<String>,
     pub planned: usize,
     pub holders: BTreeSet<String>,
+    pub extra: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -330,6 +331,7 @@ impl Ledger {
         placement
             .holders
             .iter()
+            .chain(&placement.extra)
             .filter(|device| self.holds_for_member(device))
             .collect()
     }
@@ -588,25 +590,51 @@ impl Ledger {
                         chunks: chunks.clone(),
                         planned: holders.len(),
                         holders: holders.clone(),
+                        extra: BTreeSet::new(),
                     },
                 );
             }
             Op::Hold { file_id, device } => {
                 let owned = self.device_owner(device) == Some(author.as_str());
-                match self.placements.get_mut(file_id) {
-                    Some(p) if owned && !p.holders.contains(device) => {
-                        p.holders.insert(device.clone());
-                    }
-                    _ => return Err(invalid("invalid holder")),
+                let Some(p) = self.placements.get(file_id) else {
+                    return Err(invalid("no such file"));
+                };
+                if !owned || p.holders.contains(device) || p.extra.contains(device) {
+                    return Err(invalid("invalid holder"));
+                }
+                let charged = p
+                    .holders
+                    .iter()
+                    .filter(|d| self.holds_for_member(d))
+                    .count();
+                let full = charged >= p.planned;
+                let p = self.placements.get_mut(file_id).expect("checked above");
+                if full {
+                    p.extra.insert(device.clone());
+                } else {
+                    p.holders.insert(device.clone());
                 }
             }
             Op::Release { file_id, device } => {
                 let owned = self.device_owner(device) == Some(author.as_str());
-                match self.placements.get_mut(file_id) {
-                    Some(p) if owned && p.holders.contains(device) => {
-                        p.holders.remove(device);
-                    }
-                    _ => return Err(invalid("invalid release")),
+                let Some(p) = self.placements.get(file_id) else {
+                    return Err(invalid("no such file"));
+                };
+                if !owned || !(p.holders.contains(device) || p.extra.contains(device)) {
+                    return Err(invalid("invalid release"));
+                }
+                let promoted = p
+                    .extra
+                    .iter()
+                    .find(|d| self.holds_for_member(d))
+                    .cloned()
+                    .filter(|_| p.holders.contains(device));
+                let p = self.placements.get_mut(file_id).expect("checked above");
+                p.holders.remove(device);
+                p.extra.remove(device);
+                if let Some(next) = promoted {
+                    p.extra.remove(&next);
+                    p.holders.insert(next);
                 }
             }
             Op::Drop { file_id } => {
@@ -1231,6 +1259,15 @@ mod tests {
             "already a holder"
         );
         net.commit(0, t, vec![sign(2, hold(&d2))]).unwrap();
+        let p = &net.ledger.placements["f"];
+        assert!(
+            p.extra.contains(&d2),
+            "a full file takes newcomers as extra"
+        );
+        assert!(
+            net.commit(0, t, vec![sign(2, hold(&d2))]).is_err(),
+            "already an extra holder"
+        );
 
         let release = Op::Release {
             file_id: "f".into(),
@@ -1239,6 +1276,10 @@ mod tests {
         net.commit(0, t, vec![sign(1, release)]).unwrap();
         let p = &net.ledger.placements["f"];
         assert_eq!(net.ledger.live_holders(p).len(), 2);
+        assert!(
+            p.holders.contains(&d2) && p.extra.is_empty(),
+            "an extra holder takes the place of a charged one"
+        );
 
         let leave = sign(2, Op::Leave);
         net.commit(0, t, vec![leave]).unwrap();

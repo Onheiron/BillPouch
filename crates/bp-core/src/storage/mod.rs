@@ -119,10 +119,10 @@ impl StorageManager {
         serde_json::from_slice(&bytes).ok()
     }
 
-    pub fn bytes_by_owner(&self) -> BTreeMap<String, u64> {
+    pub fn bytes_by_owner(&self, charged: impl Fn(&str) -> bool) -> BTreeMap<String, u64> {
         let mut by_owner = BTreeMap::new();
         for chunk in self.index.chunk_ids() {
-            if let Some(owner) = self.owner_of(chunk) {
+            if let Some(owner) = self.owner_of(chunk).filter(|o| charged(&o.file_id)) {
                 let bytes: u64 = self
                     .index
                     .fragments_for_chunk(chunk)
