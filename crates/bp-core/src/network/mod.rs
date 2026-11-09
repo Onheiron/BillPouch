@@ -244,7 +244,7 @@ pub async fn run_network_loop(
     mut swarm: Swarm<BillPouchBehaviour>,
     mut cmd_rx: mpsc::Receiver<NetworkCommand>,
     state: Arc<RwLock<NetworkState>>,
-    listen_addr: Multiaddr,
+    listen_addr: Option<Multiaddr>,
     storage_managers: StorageManagerMap,
     remote_fragment_index: Arc<RwLock<fragment_gossip::RemoteFragmentIndex>>,
     chains: Chains,
@@ -253,11 +253,15 @@ pub async fn run_network_loop(
     file_gossip: FileGossip,
     listen_addrs: ListenAddrs,
 ) -> BpResult<()> {
-    swarm
-        .listen_on(listen_addr.clone())
-        .map_err(|e| BpError::Network(e.to_string()))?;
-
-    tracing::info!("Network listening on {}", listen_addr);
+    match listen_addr {
+        Some(addr) => {
+            swarm
+                .listen_on(addr.clone())
+                .map_err(|e| BpError::Network(e.to_string()))?;
+            tracing::info!("Network listening on {}", addr);
+        }
+        None => tracing::info!("Client only: not listening, dialing out only"),
+    }
 
     let mut networks: HashMap<String, ([u8; 32], gossipsub::IdentTopic)> = HashMap::new();
     let mut topics: Topics = HashMap::new();

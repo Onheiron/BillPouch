@@ -51,6 +51,16 @@ least two users with a Pouch each before anyone can upload.
 
 To try a whole network on one machine: `./playground.sh up` (Docker, 6 nodes, built from this checkout), then `./playground.sh app` for the web app.
 
+## Android
+
+`android/` is the Android app: your phone as another device of yours, running a
+**Bill** only. It dials out and never listens, so it needs no open port and holds
+nothing for the others. The [Android workflow](.github/workflows/android.yml)
+builds the APK (artifact `billpouch-android`). On first launch give it the same
+SSH private key as your computer and the token from
+`bp invite <network> "<your SSH public key>"` there; it shows the same web app,
+with files picked and saved through Android's own dialogs.
+
 ## Documentation
 
 | Page | Contents |

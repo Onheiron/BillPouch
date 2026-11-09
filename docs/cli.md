@@ -62,5 +62,5 @@ started automatically when missing.
 | Variable | Effect |
 |----------|--------|
 | `BP_PASSPHRASE` | Passphrase for an encrypted identity |
-| `BP_LISTEN_PORT` | Fixed TCP listen port for the daemon (default: random) |
+| `BP_LISTEN_PORT` | Fixed TCP listen port for the daemon (default: random); `off` makes a client-only node that only dials out, enough for a Bill |
 | `RUST_LOG` | Log filter, e.g. `bp_core=debug` |
