@@ -25,11 +25,21 @@ class ApiError extends Error {
   }
 }
 
+const native = window.__TAURI__ ? window.__TAURI__.core : null;
+
+async function call(path, options) {
+  if (!native) {
+    return fetch(path, {
+      ...options,
+      headers: { Authorization: "Session " + session(), ...(options.headers || {}) },
+    });
+  }
+  const reply = await native.invoke("api", { method: options.method || "GET", path, body: options.body ?? null });
+  return new Response(reply.body, { status: reply.status, headers: { "Content-Type": "application/json" } });
+}
+
 async function api(path, options = {}) {
-  const response = await fetch(path, {
-    ...options,
-    headers: { Authorization: "Session " + session(), ...(options.headers || {}) },
-  });
+  const response = await call(path, options);
   if (!response.ok) {
     let message = response.statusText;
     try {
@@ -403,6 +413,15 @@ async function uploadAll(files) {
 }
 
 async function download(id, network, name) {
+  if (native) {
+    try {
+      toast(`Fetching ${name}…`);
+      if (await native.invoke("save_file", { fileId: id, network, name })) toast(`${name} saved`, "ok");
+    } catch (e) {
+      toast(`Cannot download ${name}: ${e}`, "error");
+    }
+    return;
+  }
   try {
     toast(`Fetching ${name}…`);
     const response = await api(`/files/${encodeURIComponent(id)}?network=${encodeURIComponent(network)}`);
@@ -531,6 +550,23 @@ $("files").addEventListener("click", (e) => {
   if (b.dataset.delete) remove(b.dataset.delete, b.dataset.network, b.dataset.name);
 });
 
+$("picker").addEventListener("click", async (e) => {
+  if (!native) return;
+  e.preventDefault();
+  const network = uploadNetwork();
+  if (!network) {
+    toast("Pick a network first, at the top of the page.", "error");
+    return;
+  }
+  try {
+    const stored = await native.invoke("upload_files", { network });
+    if (stored.length) toast(`Stored ${stored.join(", ")}`, "ok");
+  } catch (e) {
+    toast(`Upload failed: ${e}`, "error");
+  }
+  refresh();
+});
+
 $("picker").addEventListener("change", (e) => {
   uploadAll([...e.target.files]);
   e.target.value = "";
@@ -557,9 +593,69 @@ panel.addEventListener("drop", (e) => {
   uploadAll([...e.dataTransfer.files].filter((f) => f.size > 0 || f.type));
 });
 
-if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("/sw.js").catch(() => {});
+function showOnly(id) {
+  for (const el of ["onboarding", "unlock", "main"]) $(el).hidden = el !== id;
 }
 
-refresh();
-setInterval(refresh, REFRESH_MS);
+async function start() {
+  if (!native) {
+    if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+    refresh();
+    setInterval(refresh, REFRESH_MS);
+    return;
+  }
+  document.body.classList.add("native");
+  $("service-button").hidden = true;
+  $("dropzone").hidden = true;
+  const app = await native.invoke("app_state");
+  if (!app.identity || (app.running && !app.member)) {
+    showOnly("onboarding");
+  } else if (!app.running) {
+    showOnly("unlock");
+  } else {
+    showOnly("main");
+    refresh();
+    setInterval(refresh, REFRESH_MS);
+  }
+}
+
+$("pick-key").addEventListener("click", async () => {
+  try {
+    const key = await native.invoke("pick_key");
+    if (key) $("key").value = key;
+  } catch (e) {
+    toast(`Cannot read the key: ${e}`, "error");
+  }
+});
+
+$("onboarding").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const button = e.target.querySelector("button[type=submit]");
+  button.disabled = true;
+  button.textContent = "Joining…";
+  try {
+    await native.invoke("setup", {
+      alias: $("alias").value,
+      key: $("key").value,
+      passphrase: $("passphrase").value,
+      token: $("token").value,
+    });
+    location.reload();
+  } catch (err) {
+    toast(String(err), "error");
+    button.disabled = false;
+    button.textContent = "Join";
+  }
+});
+
+$("unlock").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  try {
+    await native.invoke("unlock", { passphrase: $("unlock-passphrase").value });
+    location.reload();
+  } catch (err) {
+    toast(String(err), "error");
+  }
+});
+
+start();

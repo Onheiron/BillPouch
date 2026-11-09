@@ -73,13 +73,17 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
     let swarm = network::build_swarm(identity.device.clone())
         .map_err(|e| BpError::Network(e.to_string()))?;
 
-    let listen_port: u16 = std::env::var("BP_LISTEN_PORT")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0);
-    let listen_addr = format!("/ip4/0.0.0.0/tcp/{listen_port}")
-        .parse()
-        .map_err(|e: libp2p::multiaddr::Error| BpError::Network(e.to_string()))?;
+    let listen_addr = match std::env::var("BP_LISTEN_PORT").ok().as_deref() {
+        Some("off") => None,
+        port => Some(
+            format!(
+                "/ip4/0.0.0.0/tcp/{}",
+                port.and_then(|p| p.parse::<u16>().ok()).unwrap_or(0)
+            )
+            .parse()
+            .map_err(|e: libp2p::multiaddr::Error| BpError::Network(e.to_string()))?,
+        ),
+    };
 
     let net_state = Arc::clone(&network_state);
     let net_storage = Arc::clone(&storage_managers);

@@ -69,3 +69,13 @@ git push origin main v0.4.0
 ```
 
 To publish an ad-hoc image run the Docker workflow manually from the Actions tab.
+
+## Android
+
+`android/` is a Tauri 2 app outside the Cargo workspace. It embeds the daemon
+with `BP_LISTEN_PORT=off` (a client-only Bill) and the `bp-api` router without
+sessions; the web app calls it through Tauri commands instead of HTTP. The
+`Android` workflow generates the icons and the Gradle project, builds a debug
+APK for arm64 and uploads it as an artifact; nothing in `android/gen` is
+committed.
+
