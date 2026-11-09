@@ -94,9 +94,12 @@ function banner(html) {
 }
 
 function bar(total, parts) {
-  return `<div class="bar">${parts
-    .filter(([value]) => value > 0 && total > 0)
-    .map(([value, cls]) => `<span class="${cls}" style="width:max(4px, ${Math.min(100, (value / total) * 100)}%)"></span>`)
+  const shown = parts.filter(([value]) => value > 0);
+  const sum = shown.reduce((a, [value]) => a + value, 0);
+  const rest = Math.max(0, total - sum);
+  return `<div class="bar">${[...shown, [rest, "rest"]]
+    .filter(([value]) => value > 0)
+    .map(([value, cls]) => `<span class="${cls}" style="flex:${value} 0 0"></span>`)
     .join("")}</div>`;
 }
 
@@ -197,7 +200,7 @@ function verification(node, data) {
   if (node.mine && node.peer === data.status.peer_id) {
     const c = data.storage.credits.find((c) => c.network_id === node.network) || {};
     if (!c.credit_bytes) return ["wait", "Waiting for the network to verify it"];
-    return ["ok", `Verified ${bytes(c.credit_bytes)} · your quota ${bytes(c.quota_verified_bytes)}`];
+    return ["ok", `All your Pouches: ${bytes(c.credit_bytes)} verified · quota ${bytes(c.quota_verified_bytes)}`];
   }
   if (node.mine) return ["idle", "Your other device: others challenge it"];
   const q = node.qos;
@@ -214,14 +217,18 @@ function renderSummary(data) {
   const offered = credits.reduce((a, c) => a + c.offered_bytes, 0);
   const quota = credits.reduce((a, c) => a + c.quota_bytes, 0);
   const verified = credits.reduce((a, c) => a + c.quota_verified_bytes, 0);
-  const used = Math.min(verified, credits.reduce((a, c) => a + c.quota_used_bytes, 0));
-  const free = Math.max(0, verified - used);
-  const pending = Math.max(0, quota - verified);
+  const verifiedShown = Math.min(verified, quota);
+  const used = Math.min(verifiedShown, credits.reduce((a, c) => a + c.quota_used_bytes, 0));
+  const free = Math.max(0, verifiedShown - used);
+  const pending = Math.max(0, quota - verifiedShown);
   const lost = Math.max(0, offered - quota);
   const rated = credits.filter((c) => c.rate);
   const rates = [...new Set(rated.map((c) => c.rate.join("/")))];
   const mine = data.storage.pouches.filter((p) => inNetwork(p.network_id));
-  const filled = mine.reduce((a, p) => a + p.fragment_bytes + p.filler_bytes, 0);
+  const local = mine.reduce((a, p) => a + p.quota_bytes, 0);
+  const data_ = mine.reduce((a, p) => a + p.fragment_bytes, 0);
+  const filler = mine.reduce((a, p) => a + p.filler_bytes, 0);
+  const filled = data_ + filler;
   const files = data.files.files.filter((f) => f.mine && inNetwork(f.network_id));
   const fileBytes = files.reduce((a, f) => a + f.size_bytes, 0);
   const all = nodes(data);
@@ -255,9 +262,10 @@ function renderSummary(data) {
     </div>
     <div class="card">
       <h3>Your Pouch setup</h3>
-      <div class="big">${mine.length ? pct(filled, offered) + "%" : "—"}</div>
-      ${bar(offered, [[filled, "filler"]])}
-      <div class="sub">${mine.length ? `${bytes(filled)} of ${bytes(offered)} filled and challenged by the network` : "No Pouch on this node yet."}</div>
+      <div class="big">${mine.length ? pct(filled, local) + "%" : "—"}</div>
+      ${bar(local, [[data_, "data"], [filler, "filler"]])}
+      ${mine.length ? legend([["data", `files ${bytes(data_)}`], ["filler", `filler ${bytes(filler)}`]]) : ""}
+      <div class="sub">${mine.length ? `${bytes(filled)} of the ${bytes(local)} this node offers, challenged by the network` : "No Pouch on this node yet."}</div>
     </div>
     <div class="card">
       <h3>Your files</h3>
@@ -323,6 +331,41 @@ function renderFiles(data) {
       .join("")}</tbody></table>`;
 }
 
+function renderNetwork(data) {
+  const shown = Object.entries(data.members).filter(([network]) => inNetwork(network));
+  if (!shown.length) {
+    $("network-info").innerHTML = `<div class="empty">You are in no network yet.</div>`;
+    return;
+  }
+  $("network-info").innerHTML = shown
+    .map(([network, m]) => {
+      const p = m.params;
+      const params = p
+        ? `<div class="params">target recovery <b>${(p.ph_ppm / 1e4).toFixed(2)}%</b> · trust prior <b>${(p.prior_ppm / 1e6).toFixed(2)}</b> · decay <b>${(p.decay_ppm / 1e6).toFixed(2)}</b> · bets last <b>${plural(p.horizon_epochs, "epoch", "epochs")}</b> · a silent device counts for <b>${plural(p.grace_epochs, "epoch", "epochs")}</b></div>`
+        : "";
+      const rows = m.members
+        .map(
+          (u) => `<tr class="${u.fingerprint === m.me ? "me-row" : ""}">
+            <td class="fname">${esc(u.name || short(u.fingerprint))}${u.fingerprint === m.me ? ' <span class="owner-you">you</span>' : ""}<small><code>${esc(short(u.fingerprint))}</code>${u.expel_approvals ? ` · expulsion: ${u.expel_approvals} approval(s)` : ""}</small></td>
+            <td>${esc(u.tier)} · ${u.weight}</td>
+            <td>${bytes(u.credit_bytes)}</td>
+            <td>${bytes(u.used_bytes)}</td>
+            <td class="${u.trust > 0 ? "up" : u.trust < 0 ? "down" : ""}">${u.trust >= 0 ? "+" : ""}${u.trust.toFixed(2)}${u.open_bets ? ` <small>${plural(u.open_bets, "open bet", "open bets")}</small>` : ""}</td>
+          </tr>`,
+        )
+        .join("");
+      return `<div class="network-block">
+        <h3>${esc(network)} <small>ledger height ${m.height} · epoch ${m.epoch}</small></h3>
+        ${params}
+        <table>
+          <thead><tr><th>Member</th><th>Tier · weight</th><th>Hosts</th><th>Stores</th><th>Trust</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+    })
+    .join("");
+}
+
 function renderHeader(data) {
   const s = data.status;
   const who = names(data);
@@ -343,6 +386,7 @@ function render() {
   renderHeader(state.data);
   renderSummary(state.data);
   renderNodes(state.data);
+  renderNetwork(state.data);
   renderFiles(state.data);
 }
 

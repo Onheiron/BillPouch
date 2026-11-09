@@ -204,6 +204,7 @@ pub struct MembersData {
     pub total_weight: u64,
     pub members: Vec<MemberInfo>,
     pub expelled: Vec<String>,
+    pub params: crate::ledger::Params,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -558,6 +558,7 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 total_weight: ledger.snapshot.total_weight(),
                 members,
                 expelled: ledger.expelled.iter().cloned().collect(),
+                params: ledger.params,
             })
         }
 
@@ -816,11 +817,26 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                     let chains = state.chains.read().unwrap();
                     let ledger = chains.get(&name)?.ledger();
                     let me = &state.identity.fingerprint;
+                    let my_peer = state.identity.peer_id.to_string();
+                    let elsewhere: u64 = state
+                        .network_state
+                        .read()
+                        .unwrap()
+                        .in_network(&name)
+                        .into_iter()
+                        .filter(|n| {
+                            n.service_type == ServiceType::Pouch
+                                && n.user_fingerprint == *me
+                                && n.peer_id != my_peer
+                        })
+                        .filter_map(|n| n.metadata.get("storage_bytes")?.as_u64())
+                        .sum();
                     let offered: u64 = pouches
                         .iter()
                         .filter(|p| p.network_id == name)
                         .map(|p| p.quota_bytes)
-                        .sum();
+                        .sum::<u64>()
+                        + elsewhere;
                     let (credit, used) = (ledger.credit(me), ledger.usage(me));
                     Some(CreditStat {
                         network_id: name.clone(),
