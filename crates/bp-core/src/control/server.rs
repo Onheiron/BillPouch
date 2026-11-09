@@ -1037,7 +1037,7 @@ fn release_holdings(state: &DaemonState, network_id: &str) {
         .ledger()
         .placements
         .iter()
-        .filter(|(_, p)| p.holders.contains(&me))
+        .filter(|(_, p)| p.holders.contains(&me) || p.extra.contains(&me))
         .map(|(file_id, _)| file_id.clone())
         .collect();
     for file_id in held {

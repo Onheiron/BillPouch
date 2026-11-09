@@ -410,13 +410,43 @@ impl Ledger {
         1 + usize::try_from(trust / TRUST_PER_BET).unwrap_or(usize::MAX)
     }
 
-    fn invited(&self, by: &str, user: &str) -> bool {
-        let (Some(by), Some(user)) = (self.members.get(by), self.members.get(user)) else {
-            return false;
+    fn promote(&mut self, file_id: &str) {
+        let Some(p) = self.placements.get(file_id) else {
+            return;
         };
-        self.entries
+        let charged = p
+            .holders
             .iter()
-            .any(|e| e.body.author == by.key && e.body.member == user.key)
+            .filter(|d| self.holds_for_member(d))
+            .count();
+        let promoted: Vec<String> = p
+            .extra
+            .iter()
+            .filter(|d| self.holds_for_member(d))
+            .take(p.planned.saturating_sub(charged))
+            .cloned()
+            .collect();
+        let p = self.placements.get_mut(file_id).expect("checked above");
+        for device in promoted {
+            p.extra.remove(&device);
+            p.holders.insert(device);
+        }
+    }
+
+    fn vacate(&mut self, user: &str) {
+        let gone: BTreeSet<String> = self
+            .devices
+            .iter()
+            .filter(|(_, d)| d.user == user)
+            .map(|(peer, _)| peer.clone())
+            .collect();
+        let files: Vec<String> = self.placements.keys().cloned().collect();
+        for file_id in files {
+            let p = self.placements.get_mut(&file_id).expect("listed above");
+            p.holders.retain(|d| !gone.contains(d));
+            p.extra.retain(|d| !gone.contains(d));
+            self.promote(&file_id);
+        }
     }
 
     pub fn may_trust(
@@ -434,8 +464,8 @@ impl Ledger {
         if !p.extra.contains(newcomer) || !self.is_member(other) {
             return Err("the newcomer is not an extra holder");
         }
-        if other == user || self.invited(user, other) {
-            return Err("you cannot trust yourself or whom you invited");
+        if other == user {
+            return Err("you cannot trust your own devices");
         }
         let open = self.bets.iter().filter(|b| b.file_id == file_id).count();
         if open + p.k >= p.planned {
@@ -697,6 +727,7 @@ impl Ledger {
             }
             Op::Leave => {
                 self.left.insert(author.clone());
+                self.vacate(&author);
                 self.expel_approvals.remove(&author);
                 self.snapshot.users.remove(&author);
                 self.rekey_since.get_or_insert(block.time);
@@ -759,19 +790,10 @@ impl Ledger {
                 if !owned || !(p.holders.contains(device) || p.extra.contains(device)) {
                     return Err(invalid("invalid release"));
                 }
-                let promoted = p
-                    .extra
-                    .iter()
-                    .find(|d| self.holds_for_member(d))
-                    .cloned()
-                    .filter(|_| p.holders.contains(device));
                 let p = self.placements.get_mut(file_id).expect("checked above");
                 p.holders.remove(device);
                 p.extra.remove(device);
-                if let Some(next) = promoted {
-                    p.extra.remove(&next);
-                    p.holders.insert(next);
-                }
+                self.promote(file_id);
             }
             Op::Drop { file_id } => {
                 if self.placements.get(file_id).map(|p| &p.owner) != Some(&author) {
@@ -855,6 +877,7 @@ impl Ledger {
         let approved_weight: u64 = approvals.iter().map(|m| self.snapshot.weight(m)).sum();
         if approved_weight * 3 > others_weight * 2 && approvals.len() * 2 >= others.len() {
             self.expelled.insert(member.to_string());
+            self.vacate(member);
             self.expel_approvals.remove(member);
             self.snapshot.users.remove(member);
             self.rekey_since.get_or_insert(time);
@@ -1478,6 +1501,44 @@ mod tests {
     }
 
     #[test]
+    fn an_extra_holder_replaces_a_user_who_is_gone() {
+        let mut net = Net::everyone_joined(3);
+        for who in 1..3 {
+            let op = SignedOp::sign(
+                &net.people[who],
+                Op::RegisterDevice {
+                    cert: net.people[who].cert.clone(),
+                },
+            )
+            .unwrap();
+            let t = net.now();
+            net.commit(0, t, vec![op]).unwrap();
+        }
+        let device = |i: usize| net.people[i].peer_id.to_string();
+        let (d0, d1, d2) = (device(0), device(1), device(2));
+        let people = net.people.clone();
+        let sign = |who: usize, op: Op| SignedOp::sign(&people[who], op).unwrap();
+        let t = net.now();
+        let place = Op::Place {
+            file_id: "f".into(),
+            k: 1,
+            layer: StorageTier::T1,
+            chunks: vec!["c".into()],
+            holders: [d0.clone(), d1.clone()].into(),
+        };
+        let hold = Op::Hold {
+            file_id: "f".into(),
+            device: d2.clone(),
+        };
+        net.commit(0, t, vec![sign(0, place), sign(2, hold)])
+            .unwrap();
+        net.commit(0, t, vec![sign(1, Op::Leave)]).unwrap();
+        let p = &net.ledger.placements["f"];
+        assert_eq!(p.holders, [d0, d2].into());
+        assert!(p.extra.is_empty());
+    }
+
+    #[test]
     fn trusting_a_newcomer_is_a_scored_bet() {
         let mut net = Net::everyone_joined(3);
         for who in 1..3 {
@@ -1516,8 +1577,8 @@ mod tests {
         net.commit(0, t, vec![sign(0, place("f")), sign(2, hold("f"))])
             .unwrap();
         assert!(
-            net.commit(0, t, vec![sign(0, trust("f", &d0))]).is_err(),
-            "nobody bets on whom they invited"
+            net.commit(0, t, vec![sign(0, trust("f", &d1))]).is_err(),
+            "only with a device of your own"
         );
         net.commit(0, t, vec![sign(1, trust("f", &d1))]).unwrap();
         let p = &net.ledger.placements["f"];
