@@ -117,9 +117,6 @@ pub enum NetworkCommand {
     Dial {
         addr: Multiaddr,
     },
-    Dial {
-        addr: Multiaddr,
-    },
     PushFragment {
         peer_id: PeerId,
         chunk_id: String,
@@ -348,11 +345,6 @@ pub async fn run_network_loop(
                         }
                         if let Err(e) = swarm.dial(addr.clone()) {
                             tracing::warn!(addr=%addr, "cannot dial: {e}");
-                        }
-                    }
-                    Some(NetworkCommand::Dial { addr }) => {
-                        if let Err(e) = swarm.dial(addr.clone()) {
-                            tracing::warn!("Dial {} failed: {}", addr, e);
                         }
                     }
                     Some(NetworkCommand::PushFragment {
