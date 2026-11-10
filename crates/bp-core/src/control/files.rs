@@ -725,7 +725,7 @@ pub async fn get_file(
     };
     let mut fragments_remote = 0;
     let mut fetched = futures::stream::iter(&manifest.chunks)
-        .map(|chunk_id| fetch_chunk(state, &network_id, chunk_id, &grant))
+        .map(|chunk_id: &String| fetch_chunk(state, &network_id, chunk_id, &grant))
         .buffered(fetch_parallel());
     while let Some(result) = fetched.next().await {
         let result = result.and_then(|(sealed, remote)| {

@@ -1422,7 +1422,7 @@ mod tests {
         let t = net.now();
         let about_self = net.observe(0, 0, 10, 10, t);
         assert!(net.commit(0, t, vec![about_self]).is_err());
-        let too_many = net.observe(0, 1, MAX_CHALLENGES_PER_DEVICE_PER_EPOCH + 1, 0, t);
+        let too_many = net.observe(0, 1, MAX_CHALLENGES_PER_DEVICE_PER_HOUR + 1, 0, t);
         assert!(net.commit(0, t, vec![too_many]).is_err());
         let first = net.observe(0, 1, 5, 5, t);
         net.commit(0, t, vec![first]).unwrap();
