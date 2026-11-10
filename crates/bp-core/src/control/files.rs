@@ -9,7 +9,7 @@ use crate::{
     },
     files::{
         new_file_id, Action, Grant, Head, Index, Manifest, Order, PendingShare, CHUNK_BYTES,
-        ORDER_RESENDS,
+        MIN_CHUNK_BYTES, ORDER_RESENDS,
     },
     membership::new_key,
     network::{
@@ -646,14 +646,22 @@ pub async fn put_file(
     network_id: String,
     file_name: Option<String>,
     tier: Option<StorageTier>,
+    chunk_bytes: Option<u64>,
 ) -> ControlResponse {
     let ph = ph.unwrap_or_else(|| network_ph(state, &network_id));
     let layer = tier.unwrap_or(StorageTier::T1);
+    let chunk_bytes = chunk_bytes.unwrap_or(CHUNK_BYTES as u64) as usize;
+    if !chunk_bytes.is_power_of_two() || !(MIN_CHUNK_BYTES..=CHUNK_BYTES).contains(&chunk_bytes) {
+        return ControlResponse::err(format!(
+            "the chunk size must be a power of two between {MIN_CHUNK_BYTES} and {CHUNK_BYTES} bytes"
+        ));
+    }
     let mut file = match tokio::fs::File::open(&path).await {
         Ok(f) => f,
         Err(e) => return ControlResponse::err(format!("cannot read {}: {e}", path.display())),
     };
     let size_on_disk = file.metadata().await.map(|m| m.len()).unwrap_or(0);
+    let streamed = size_on_disk == 0;
     if let Err(e) = check_allowance(state, &network_id, size_on_disk, ph, layer) {
         return ControlResponse::err(e);
     }
@@ -664,15 +672,21 @@ pub async fn put_file(
         Ok(g) => g,
         Err(e) => return ControlResponse::err(e.to_string()),
     };
-    let largest_chunk = (size_on_disk as usize).clamp(1, CHUNK_BYTES);
+    let largest_chunk = if streamed {
+        chunk_bytes
+    } else {
+        (size_on_disk as usize).clamp(1, chunk_bytes)
+    };
     let placement = match plan_file(state, &network_id, &file_id, largest_chunk, ph, layer) {
         Ok(f) => f,
         Err(e) => return ControlResponse::err(e),
     };
     let mut total = Stored::default();
     let mut size = 0u64;
+    let mut packed_bytes = 0u64;
+    let mut compress = true;
     loop {
-        let plain = match read_up_to(&mut file, CHUNK_BYTES).await {
+        let plain = match read_up_to(&mut file, chunk_bytes).await {
             Ok(p) => p,
             Err(e) => return ControlResponse::err(format!("cannot read {}: {e}", path.display())),
         };
@@ -682,9 +696,23 @@ pub async fn put_file(
         if plain.is_empty() {
             return ControlResponse::err(format!("{} is empty", path.display()));
         }
+        if streamed {
+            let so_far = size + plain.len() as u64;
+            if let Err(e) = check_allowance(state, &network_id, so_far, ph, layer) {
+                if !total.chunks.is_empty() {
+                    send_order(state, &network_id, &file_id, Action::Delete).await;
+                }
+                return ControlResponse::err(e);
+            }
+        }
         size += plain.len() as u64;
-        let last = plain.len() < CHUNK_BYTES;
-        let sealed = match cipher.encrypt(&plain) {
+        let last = plain.len() < chunk_bytes;
+        let (packed, squeezed) = crate::files::pack(&plain, compress);
+        if total.chunks.is_empty() {
+            compress = squeezed;
+        }
+        packed_bytes += packed.len() as u64 - 1;
+        let sealed = match cipher.encrypt(&packed) {
             Ok(c) => c,
             Err(e) => return ControlResponse::err(format!("Encryption error: {e}")),
         };
@@ -713,6 +741,7 @@ pub async fn put_file(
         size,
         &file_id,
         total.chunks.clone(),
+        chunk_bytes as u64,
         &key,
     ) {
         Ok(m) => m,
@@ -734,6 +763,7 @@ pub async fn put_file(
         local: placement.local,
         chunks: total.chunks.len(),
         size_bytes: size,
+        packed_bytes,
         k: total.k,
         n: total.n,
         ph,
@@ -765,7 +795,9 @@ pub async fn get_file(
     file_id: String,
     network_id: String,
     output: std::path::PathBuf,
+    range: Option<(u64, u64)>,
 ) -> ControlResponse {
+    use std::os::unix::fs::FileTypeExt;
     let Some(manifest) = manifest_of(state, &network_id, &file_id) else {
         return not_yours(&file_id, &network_id);
     };
@@ -776,50 +808,96 @@ pub async fn get_file(
         Ok(r) => r,
         Err(e) => return ControlResponse::err(e.to_string()),
     };
+    let size = manifest.size_bytes;
+    let (start, end) = match range {
+        None => (0, size),
+        Some((offset, len)) if offset < size && len > 0 => {
+            (offset, offset.saturating_add(len).min(size))
+        }
+        Some(_) => {
+            return ControlResponse::err(format!("the range is outside the file ({size} bytes)"))
+        }
+    };
+    let chunk = manifest.chunk_bytes.max(1);
+    let (first, last) = (
+        (start / chunk) as usize,
+        ((end.max(1) - 1) / chunk) as usize,
+    );
     let cipher = ChunkCipher::from_raw_key(key);
-    let partial = output.with_extension("bp-partial");
-    let mut out = match tokio::fs::File::create(&partial).await {
+    let streamed = std::fs::metadata(&output).is_ok_and(|m| m.file_type().is_fifo());
+    let direct = streamed || range.is_some();
+    let target = if direct {
+        output.clone()
+    } else {
+        output.with_extension("bp-partial")
+    };
+    let mut out = match tokio::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(!streamed)
+        .open(&target)
+        .await
+    {
         Ok(f) => f,
-        Err(e) => return ControlResponse::err(format!("cannot write {}: {e}", partial.display())),
+        Err(e) => return ControlResponse::err(format!("cannot write {}: {e}", target.display())),
     };
     let mut fragments_remote = 0;
     let (net, grant, file) = (&network_id, &grant, &manifest.file_id);
-    let mut fetched = futures::stream::iter(manifest.chunks.clone().into_iter().enumerate())
+    let wanted: Vec<(usize, String)> = manifest
+        .chunks
+        .iter()
+        .cloned()
+        .enumerate()
+        .skip(first)
+        .take(last + 1 - first)
+        .collect();
+    let mut fetched = futures::stream::iter(wanted)
         .map(|(i, hash)| async move {
             let chunk_id = crate::files::chunk_id(file, i);
-            fetch_chunk(state, net, &chunk_id, grant, Some(&hash)).await
+            (
+                i,
+                fetch_chunk(state, net, &chunk_id, grant, Some(&hash)).await,
+            )
         })
         .buffered(fetch_parallel());
-    while let Some(result) = fetched.next().await {
+    while let Some((i, result)) = fetched.next().await {
         let result = result.and_then(|(sealed, remote)| {
             fragments_remote += remote;
-            cipher
+            let packed = cipher
                 .decrypt(&sealed)
-                .map_err(|e| format!("Decryption failed: {e}"))
+                .map_err(|e| format!("Decryption failed: {e}"))?;
+            crate::files::unpack(&packed).map_err(|e| e.to_string())
         });
         let plain = match result {
             Ok(p) => p,
             Err(e) => {
-                let _ = tokio::fs::remove_file(&partial).await;
+                if !direct {
+                    let _ = tokio::fs::remove_file(&target).await;
+                }
                 return ControlResponse::err(e);
             }
         };
-        if let Err(e) = out.write_all(&plain).await {
-            return ControlResponse::err(format!("cannot write {}: {e}", partial.display()));
+        let at = i as u64 * chunk;
+        let from = (start.max(at) - at) as usize;
+        let to = ((end.min(at + plain.len() as u64)).saturating_sub(at) as usize).max(from);
+        if let Err(e) = out.write_all(&plain[from..to]).await {
+            return ControlResponse::err(format!("cannot write {}: {e}", target.display()));
         }
     }
     drop(fetched);
-    if let Err(e) = out
-        .flush()
-        .await
-        .and(tokio::fs::rename(&partial, &output).await)
-    {
-        return ControlResponse::err(format!("cannot write {}: {e}", output.display()));
+    if let Err(e) = out.flush().await {
+        return ControlResponse::err(format!("cannot write {}: {e}", target.display()));
+    }
+    if !direct {
+        if let Err(e) = tokio::fs::rename(&target, &output).await {
+            return ControlResponse::err(format!("cannot write {}: {e}", output.display()));
+        }
     }
     ControlResponse::ok(GetFileData {
         file_id,
         file_name: manifest.file_name,
         size_bytes: manifest.size_bytes,
+        bytes: end - start,
         chunks: manifest.chunks.len(),
         fragments_remote,
         output: output.display().to_string(),

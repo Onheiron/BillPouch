@@ -9,10 +9,41 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const CHUNK_BYTES: usize = 4 * 1024 * 1024;
+pub const MIN_CHUNK_BYTES: usize = 64 * 1024;
 pub const ORDER_RESENDS: u32 = 10;
 
 pub fn new_file_id() -> String {
     hex::encode(&new_key()[..8])
+}
+
+const RAW: u8 = 0;
+const ZSTD: u8 = 1;
+const ZSTD_LEVEL: i32 = 3;
+
+pub fn pack(plain: &[u8], compress: bool) -> (Vec<u8>, bool) {
+    if compress {
+        if let Ok(small) = zstd::bulk::compress(plain, ZSTD_LEVEL) {
+            if small.len() * 100 < plain.len() * 97 {
+                let mut out = Vec::with_capacity(small.len() + 1);
+                out.push(ZSTD);
+                out.extend_from_slice(&small);
+                return (out, true);
+            }
+        }
+    }
+    let mut out = Vec::with_capacity(plain.len() + 1);
+    out.push(RAW);
+    out.extend_from_slice(plain);
+    (out, false)
+}
+
+pub fn unpack(packed: &[u8]) -> BpResult<Vec<u8>> {
+    match packed.split_first() {
+        Some((&RAW, rest)) => Ok(rest.to_vec()),
+        Some((&ZSTD, rest)) => zstd::bulk::decompress(rest, CHUNK_BYTES)
+            .map_err(|e| BpError::Storage(format!("cannot decompress a chunk: {e}"))),
+        _ => Err(BpError::Storage("unknown chunk encoding".into())),
+    }
 }
 
 pub fn chunk_id(file_id: &str, index: usize) -> String {
@@ -122,6 +153,7 @@ impl Order {
 pub struct Manifest {
     pub file_id: String,
     pub chunks: Vec<String>,
+    pub chunk_bytes: u64,
     pub network: String,
     pub file_name: String,
     pub size_bytes: u64,
@@ -141,11 +173,13 @@ impl Manifest {
         size_bytes: u64,
         file_id: &str,
         chunks: Vec<String>,
+        chunk_bytes: u64,
         key: &[u8; 32],
     ) -> BpResult<Self> {
         Ok(Self {
             file_id: file_id.to_string(),
             chunks,
+            chunk_bytes,
             network: network.to_string(),
             file_name: file_name.to_string(),
             size_bytes,
@@ -433,9 +467,47 @@ impl FileStore {
 mod tests {
     use super::*;
 
+    #[test]
+    fn chunks_are_compressed_only_when_it_pays() {
+        let text = b"ciao come va ".repeat(10_000);
+        let (packed, compressed) = pack(&text, true);
+        assert!(compressed && packed.len() < text.len() / 10);
+        assert_eq!(unpack(&packed).unwrap(), text);
+
+        let noise: Vec<u8> = (0..100_000).map(|_| rand::random::<u8>()).collect();
+        let (packed, compressed) = pack(&noise, true);
+        assert!(!compressed);
+        assert_eq!(packed.len(), noise.len() + 1);
+        assert_eq!(unpack(&packed).unwrap(), noise);
+
+        let (packed, compressed) = pack(&text, false);
+        assert!(!compressed);
+        assert_eq!(unpack(&packed).unwrap(), text);
+        assert!(unpack(&[9, 1, 2]).is_err());
+    }
+
+    #[test]
+    fn chunk_ids_depend_on_the_file_and_the_position() {
+        assert_eq!(chunk_id("f", 0), chunk_id("f", 0));
+        assert_ne!(chunk_id("f", 0), chunk_id("f", 1));
+        assert_ne!(chunk_id("f", 0), chunk_id("g", 0));
+        assert_eq!(chunk_ids("f", 3).count(), 3);
+        assert_eq!(chunk_id("f", 0).len(), 16);
+    }
+
     fn manifest(owner: &Identity, file_id: &str) -> (Manifest, [u8; 32]) {
         let key = new_key();
-        let m = Manifest::new(owner, "amici", "x", 1, file_id, vec!["c1".into()], &key).unwrap();
+        let m = Manifest::new(
+            owner,
+            "amici",
+            "x",
+            1,
+            file_id,
+            vec!["c1".into()],
+            CHUNK_BYTES as u64,
+            &key,
+        )
+        .unwrap();
         (m, key)
     }
 
