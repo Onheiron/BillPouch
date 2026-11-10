@@ -36,7 +36,9 @@ const CATCH_UP_INTERVAL_SECS: u64 = 60;
 const MAX_REPAIRS_PER_ROUND: usize = 64;
 const MAX_VOLUNTEERS_PER_ROUND: usize = 2;
 
-const DEFAULT_TRUST_AT: f64 = 0.9;
+const DEFAULT_TRUST_AFTER_MINUTES: f64 = 360.0;
+
+const MAX_SURPLUS_BOOST: f64 = 4.0;
 
 const CLAIM_RETRY_SECS: u64 = 600;
 
@@ -504,12 +506,22 @@ impl Claims {
     }
 }
 
-fn trust_threshold() -> f64 {
-    std::env::var("BP_TRUST_AT")
+fn trust_after_rounds() -> f64 {
+    let minutes = std::env::var("BP_TRUST_AFTER")
         .ok()
         .and_then(|v| v.parse::<f64>().ok())
-        .filter(|v| (0.0..=1.0).contains(v))
-        .unwrap_or(DEFAULT_TRUST_AT)
+        .filter(|v| *v > 0.0)
+        .unwrap_or(DEFAULT_TRUST_AFTER_MINUTES);
+    minutes * 60.0 / CATCH_UP_INTERVAL_SECS as f64
+}
+
+fn trust_chance(confidence: f64, others: &[f64], k: usize, ph: f64, rounds: f64) -> f64 {
+    let without_me = crate::coding::params::recovery_probability(others, k);
+    if without_me < ph {
+        return 0.0;
+    }
+    let nines = (1.0 - without_me).max(1e-12).ln() / (1.0 - ph).ln();
+    (confidence * nines.min(MAX_SURPLUS_BOOST) / rounds).min(1.0)
 }
 
 fn run_trust_round(
@@ -542,13 +554,21 @@ fn run_trust_round(
                 if !p.holders.contains(&me) || claimed.pending(&format!("trust/{file_id}")) {
                     continue;
                 }
+                let others: Vec<String> = ledger
+                    .live_holders(p)
+                    .into_iter()
+                    .filter(|d| **d != me)
+                    .cloned()
+                    .collect();
                 for newcomer in &p.extra {
                     if ledger.may_trust(user, file_id, &me, newcomer).is_ok() {
                         offers.push((
                             network.clone(),
                             file_id.clone(),
                             newcomer.clone(),
-                            ledger.survival(newcomer),
+                            others.clone(),
+                            p.k,
+                            ledger.params.ph(),
                         ));
                     }
                 }
@@ -573,21 +593,23 @@ fn run_trust_round(
             }
         }
     }
-    let threshold = trust_threshold();
+    let rounds = trust_after_rounds();
     let mut chosen: std::collections::BTreeMap<String, (f64, String, String)> =
         std::collections::BTreeMap::new();
-    let seen = qos.read().ok();
-    for (network, file_id, newcomer, public) in offers {
-        let watched = seen.as_ref().map_or(0.0, |q| q.availability(&newcomer));
-        let confidence = public.max(watched);
-        let better = chosen
-            .get(&network)
-            .is_none_or(|(best, _, _)| confidence > *best);
-        if confidence >= threshold && better {
+    let Ok(q) = qos.read() else {
+        return;
+    };
+    for (network, file_id, newcomer, others, k, ph) in offers {
+        if chosen.contains_key(&network) {
+            continue;
+        }
+        let confidence = q.availability(&newcomer);
+        let others: Vec<f64> = others.iter().map(|d| q.availability(d)).collect();
+        if rand::random::<f64>() < trust_chance(confidence, &others, k, ph, rounds) {
             chosen.insert(network, (confidence, file_id, newcomer));
         }
     }
-    drop(seen);
+    drop(q);
     let mut all = chains.write().unwrap();
     for (network, (confidence, file_id, newcomer)) in chosen {
         let Some(chain) = all.get_mut(&network) else {
@@ -838,6 +860,25 @@ fn record_timeout(peer_id_str: &str, qos: &Arc<RwLock<QosRegistry>>) {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn trust_comes_sooner_for_better_newcomers_and_redundant_files() {
+        let rounds = 360.0;
+        let tight = [0.99, 0.99, 0.6];
+        let spare = [0.99, 0.99, 0.99, 0.99, 0.99];
+        assert_eq!(
+            trust_chance(0.6, &tight, 2, 0.999, rounds),
+            0.0,
+            "never below the target without my fragment"
+        );
+        let good = trust_chance(0.99, &[0.99, 0.99, 0.99], 1, 0.999, rounds);
+        let weak = trust_chance(0.5, &[0.99, 0.99, 0.5], 1, 0.999, rounds);
+        assert!(good > weak && weak > 0.0, "{good} {weak}");
+        let redundant = trust_chance(0.99, &spare, 1, 0.999, rounds);
+        assert!(redundant > good, "{redundant} {good}");
+        assert!(redundant <= 0.99 * MAX_SURPLUS_BOOST / rounds + 1e-12);
+    }
+
     use super::*;
 
     #[test]
