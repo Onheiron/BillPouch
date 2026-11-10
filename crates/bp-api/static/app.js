@@ -313,7 +313,7 @@ function renderFiles(data) {
     <tbody>${files
       .map(
         (f) => `<tr>
-          <td class="fname">${esc(f.file_name)}<small>${esc(f.network_id)} · ${f.chunks} chunk${f.chunks === 1 ? "" : "s"}${f.mine && f.shared_with ? ` · shared with ${f.shared_with}` : ""}</small></td>
+          <td class="fname">${esc(f.file_name)}<small>${esc(f.network_id)}${f.tier ? ` · 📁 ${esc(f.tier)}${f.local ? " (local only)" : ""}` : ""} · ${f.chunks} chunk${f.chunks === 1 ? "" : "s"}${f.mine && f.shared_with ? ` · shared with ${f.shared_with}` : ""}</small></td>
           <td>${bytes(f.size_bytes)}</td>
           <td>${f.mine ? '<span class="owner-you">you</span>' : esc(who[f.owner] || short(f.owner))}</td>
           <td>${new Date(f.uploaded_at * 1000).toLocaleString()}</td>
@@ -382,6 +382,7 @@ function render() {
   renderSummary(state.data);
   renderNodes(state.data);
   renderNetwork(state.data);
+  renderFolders(state.data);
   renderFiles(state.data);
 }
 
@@ -399,6 +400,36 @@ async function refresh() {
       banner(`Cannot reach the daemon: ${esc(e.message)}`);
     }
   }
+}
+
+function uploadFolder() {
+  return $("folder").value || "T1";
+}
+
+function renderFolders(data) {
+  const network = uploadNetwork();
+  const folders = data.storage.folders.filter((f) => f.network_id === network);
+  const select = $("folder");
+  const wanted = folders.map((f) => `<option value="${esc(f.tier)}">${esc(f.tier)}${f.active ? "" : " · local only"}</option>`).join("");
+  if (select.dataset.options !== wanted) {
+    const kept = select.value;
+    select.innerHTML = wanted || '<option value="T1">T1</option>';
+    select.dataset.options = wanted;
+    if (folders.some((f) => f.tier === kept)) select.value = kept;
+  }
+  $("folders").innerHTML = folders.length
+    ? folders
+        .map(
+          (f) => `<div class="folder ${f.active ? "" : "waiting"}">
+            <strong>📁 ${esc(f.tier)}</strong>
+            <span>${plural(f.users, "user", "users")} · ${plural(f.pouches, "Pouch", "Pouches")} · ${bytes(f.free_bytes)} free</span>
+            <span>${f.active ? `k/n ${f.k}/${f.n} · recovery ${(f.pe * 100).toFixed(2)}%` : "local only: files stay on your Pouches until 3 users have a Pouch here"}</span>
+          </div>`,
+        )
+        .join("")
+    : network
+      ? ""
+      : `<div class="empty">Pick a network at the top to see its folders.</div>`;
 }
 
 function uploadNetwork() {
@@ -422,7 +453,7 @@ function upload(file) {
   const label = row.querySelector(".status");
   return new Promise((resolve) => {
     const xhr = new XMLHttpRequest();
-    const query = new URLSearchParams({ network, name: file.name });
+    const query = new URLSearchParams({ network, name: file.name, tier: uploadFolder() });
     xhr.open("POST", "/files?" + query);
     xhr.setRequestHeader("Authorization", "Session " + session());
     xhr.upload.onprogress = (e) => {
@@ -437,7 +468,11 @@ function upload(file) {
       } catch (_) {}
       if (xhr.status === 201) {
         row.remove();
-        toast(`${file.name} stored in ${body.chunks} chunk(s) across ${body.n} Pouches`, "ok");
+        if (body.local) {
+          toast(`${file.name} is kept on your Pouches only: folder ${body.tier} needs 3 users with a Pouch before it spreads files`, "error");
+        } else {
+          toast(`${file.name} stored in folder ${body.tier}, ${body.chunks} chunk(s) across ${body.n} Pouches`, "ok");
+        }
       } else {
         row.classList.add("failed");
         label.textContent = body.error || xhr.statusText;
@@ -606,7 +641,7 @@ $("picker").addEventListener("click", async (e) => {
     return;
   }
   try {
-    const stored = await native.invoke("upload_files", { network });
+    const stored = await native.invoke("upload_files", { network, tier: uploadFolder() });
     if (stored.length) toast(`Stored ${stored.join(", ")}`, "ok");
   } catch (e) {
     toast(`Upload failed: ${e}`, "error");

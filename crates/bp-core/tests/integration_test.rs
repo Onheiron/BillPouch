@@ -294,6 +294,7 @@ async fn put_file_get_file_roundtrip() {
             ph: Some(0.99),
             network_id: "test-net".to_string(),
             file_name: None,
+            tier: None,
         },
     )
     .await;
@@ -388,6 +389,7 @@ async fn put_file_without_pouch_returns_error() {
             ph: None,
             network_id: "test-net".to_string(),
             file_name: None,
+            tier: None,
         },
     )
     .await;
@@ -484,6 +486,7 @@ async fn get_file_outside_your_index_returns_error() {
             ph: Some(0.99),
             network_id: "test-net".to_string(),
             file_name: None,
+            tier: None,
         },
     )
     .await;

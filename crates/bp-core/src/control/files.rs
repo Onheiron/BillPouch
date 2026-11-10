@@ -2,7 +2,8 @@ use crate::{
     coding::{params as coding_params, rlnc, rlnc::EncodedFragment},
     control::{
         protocol::{
-            ControlResponse, FileEntry, GetFileData, ListFilesData, PutFileData, ShareData,
+            ControlResponse, FileEntry, FolderInfo, GetFileData, ListFilesData, PutFileData,
+            ShareData,
         },
         server::DaemonState,
     },
@@ -58,6 +59,7 @@ async fn publish(state: &DaemonState, network_id: &str, message: Gossip) {
 
 pub struct LayerNode {
     pub peer: String,
+    pub user: String,
     pub tier: StorageTier,
     pub free: std::collections::BTreeMap<StorageTier, u64>,
 }
@@ -81,6 +83,7 @@ pub fn layer_nodes(state: &DaemonState, network_id: &str) -> Vec<LayerNode> {
                 .unwrap_or_default();
             Some(LayerNode {
                 peer: n.peer_id.clone(),
+                user: n.user_fingerprint.clone(),
                 tier,
                 free,
             })
@@ -91,6 +94,7 @@ pub fn layer_nodes(state: &DaemonState, network_id: &str) -> Vec<LayerNode> {
         if sm.meta.network_id == network_id {
             nodes.push(LayerNode {
                 peer: me.clone(),
+                user: state.identity.fingerprint.clone(),
                 tier: sm.meta.tier,
                 free: sm
                     .meta
@@ -115,35 +119,70 @@ fn availabilities(state: &DaemonState, network_id: &str, peers: &[String]) -> Ve
         .collect()
 }
 
+pub const MIN_FOLDER_USERS: usize = 3;
+
+pub struct Placing {
+    pub holders: Vec<String>,
+    pub plan: coding_params::Plan,
+    pub local: bool,
+}
+
+pub fn folder_users(nodes: &[LayerNode], layer: StorageTier) -> usize {
+    nodes
+        .iter()
+        .filter(|n| n.tier >= layer)
+        .map(|n| n.user.as_str())
+        .collect::<HashSet<_>>()
+        .len()
+}
+
 pub fn choose_layer(
     nodes: &[LayerNode],
     file_id: &str,
     availabilities: impl Fn(&[String]) -> Vec<f64>,
     data_len: usize,
     ph: f64,
-) -> Result<(StorageTier, Vec<String>, coding_params::Plan), String> {
-    if nodes.is_empty() {
-        return Err("no Pouch available — hatch a Pouch or wait for Pouch peers to join".into());
-    }
-    for layer in StorageTier::all().iter().copied() {
-        let mut members: Vec<&LayerNode> = nodes.iter().filter(|n| n.tier >= layer).collect();
+    layer: StorageTier,
+    me: &str,
+) -> Result<Placing, String> {
+    let fits = |n: &LayerNode, bytes: u64| n.free.get(&layer).copied().unwrap_or(0) >= bytes;
+    let mut members: Vec<&LayerNode> = nodes.iter().filter(|n| n.tier >= layer).collect();
+    let users = folder_users(nodes, layer);
+    if users < MIN_FOLDER_USERS {
+        members.retain(|n| n.user == me);
         if members.is_empty() {
-            break;
+            return Err(format!(
+                "folder {layer} has {users} of the {MIN_FOLDER_USERS} users with a Pouch it needs, and none of your Pouches reaches it: hatch a Pouch of tier {layer} or higher to keep files there until it fills up"
+            ));
         }
-        members.sort_by_key(|n| blake3::hash(format!("{file_id}/{}", n.peer).as_bytes()).to_hex());
-        let peers: Vec<String> = members.iter().map(|n| n.peer.clone()).collect();
-        let (plan, chosen) =
-            coding_params::best_plan(&availabilities(&peers), ph).map_err(|e| e.to_string())?;
-        let fragment = (data_len.div_ceil(plan.k) + plan.k + 16) as u64;
-        if chosen
-            .iter()
-            .all(|&i| members[i].free.get(&layer).copied().unwrap_or(0) >= fragment)
-        {
-            let holders = chosen.into_iter().map(|i| peers[i].clone()).collect();
-            return Ok((layer, holders, plan));
+        let holders: Vec<String> = members.iter().map(|n| n.peer.clone()).collect();
+        if !members.iter().all(|n| fits(n, data_len as u64 + 16)) {
+            return Err(format!("your Pouches have no room left in folder {layer}"));
         }
+        let pe = coding_params::recovery_probability(&availabilities(&holders), 1);
+        return Ok(Placing {
+            plan: coding_params::Plan {
+                k: 1,
+                n: holders.len(),
+                pe,
+            },
+            holders,
+            local: true,
+        });
     }
-    Err("every layer of the network is full".into())
+    members.sort_by_key(|n| blake3::hash(format!("{file_id}/{}", n.peer).as_bytes()).to_hex());
+    let peers: Vec<String> = members.iter().map(|n| n.peer.clone()).collect();
+    let (plan, chosen) =
+        coding_params::best_plan(&availabilities(&peers), ph).map_err(|e| e.to_string())?;
+    let fragment = (data_len.div_ceil(plan.k) + plan.k + 16) as u64;
+    if !chosen.iter().all(|&i| fits(members[i], fragment)) {
+        return Err(format!("folder {layer} is full"));
+    }
+    Ok(Placing {
+        holders: chosen.into_iter().map(|i| peers[i].clone()).collect(),
+        plan,
+        local: false,
+    })
 }
 
 pub struct Rate {
@@ -171,15 +210,22 @@ pub fn quota_rate(
     network_id: &str,
     size: u64,
     ph: f64,
+    layer: StorageTier,
 ) -> Result<Rate, String> {
     let nodes = layer_nodes(state, network_id);
     let sample = (size as usize).clamp(1, CHUNK_BYTES);
-    let (_, peers, plan) = choose_layer(
+    let Placing {
+        holders: peers,
+        plan,
+        ..
+    } = choose_layer(
         &nodes,
         "",
         |p| availabilities(state, network_id, p),
         sample,
         ph,
+        layer,
+        &state.identity.fingerprint,
     )?;
     let chains = state.chains.read().unwrap();
     let ledger = chains
@@ -211,6 +257,7 @@ pub fn default_rate(state: &DaemonState, network_id: &str) -> Option<Rate> {
         network_id,
         CHUNK_BYTES as u64,
         network_ph(state, network_id),
+        StorageTier::T1,
     )
     .ok()
 }
@@ -220,8 +267,9 @@ fn check_allowance(
     network_id: &str,
     size: u64,
     ph: f64,
+    layer: StorageTier,
 ) -> Result<(), String> {
-    let rate = quota_rate(state, network_id, size, ph)?;
+    let rate = quota_rate(state, network_id, size, ph, layer)?;
     if rate.others == 0 {
         return Ok(());
     }
@@ -247,6 +295,7 @@ pub struct FilePlan {
     layer: StorageTier,
     holders: Vec<String>,
     plan: coding_params::Plan,
+    local: bool,
 }
 
 fn plan_file(
@@ -255,18 +304,22 @@ fn plan_file(
     file_id: &str,
     largest_chunk: usize,
     ph: f64,
+    layer: StorageTier,
 ) -> Result<FilePlan, String> {
-    let (layer, holders, plan) = choose_layer(
+    let placing = choose_layer(
         &layer_nodes(state, network_id),
         file_id,
         |peers| availabilities(state, network_id, peers),
         largest_chunk,
         ph,
+        layer,
+        &state.identity.fingerprint,
     )?;
     Ok(FilePlan {
         layer,
-        holders,
-        plan,
+        holders: placing.holders,
+        plan: placing.plan,
+        local: placing.local,
     })
 }
 
@@ -590,14 +643,16 @@ pub async fn put_file(
     ph: Option<f64>,
     network_id: String,
     file_name: Option<String>,
+    tier: Option<StorageTier>,
 ) -> ControlResponse {
     let ph = ph.unwrap_or_else(|| network_ph(state, &network_id));
+    let layer = tier.unwrap_or(StorageTier::T1);
     let mut file = match tokio::fs::File::open(&path).await {
         Ok(f) => f,
         Err(e) => return ControlResponse::err(format!("cannot read {}: {e}", path.display())),
     };
     let size_on_disk = file.metadata().await.map(|m| m.len()).unwrap_or(0);
-    if let Err(e) = check_allowance(state, &network_id, size_on_disk, ph) {
+    if let Err(e) = check_allowance(state, &network_id, size_on_disk, ph, layer) {
         return ControlResponse::err(e);
     }
     let key = new_key();
@@ -608,7 +663,7 @@ pub async fn put_file(
         Err(e) => return ControlResponse::err(e.to_string()),
     };
     let largest_chunk = (size_on_disk as usize).clamp(1, CHUNK_BYTES);
-    let placement = match plan_file(state, &network_id, &file_id, largest_chunk, ph) {
+    let placement = match plan_file(state, &network_id, &file_id, largest_chunk, ph, layer) {
         Ok(f) => f,
         Err(e) => return ControlResponse::err(e),
     };
@@ -666,13 +721,15 @@ pub async fn put_file(
     publish_index(state, &network_id).await;
     ControlResponse::ok(PutFileData {
         message: format!(
-            "Stored {} chunk(s) of '{name}': {} fragment(s) on this node, {} pushed to {} Pouch(es) — file_id: {file_id}",
+            "Stored {} chunk(s) of '{name}' in folder {layer}: {} fragment(s) on this node, {} pushed to {} Pouch(es) — file_id: {file_id}",
             total.chunks.len(),
             total.stored,
             total.distributed,
             total.peers
         ),
         file_id,
+        tier: layer.to_string(),
+        local: placement.local,
         chunks: total.chunks.len(),
         size_bytes: size,
         k: total.k,
@@ -939,23 +996,83 @@ fn apply_order(state: &DaemonState, order: &Order) {
     }
 }
 
+pub fn folders(state: &DaemonState, network_id: &str) -> Vec<FolderInfo> {
+    let nodes = layer_nodes(state, network_id);
+    let me = &state.identity.fingerprint;
+    let ph = network_ph(state, network_id);
+    StorageTier::all()
+        .iter()
+        .copied()
+        .filter(|layer| nodes.iter().any(|n| n.tier >= *layer))
+        .map(|layer| {
+            let members: Vec<&LayerNode> = nodes.iter().filter(|n| n.tier >= layer).collect();
+            let users = folder_users(&nodes, layer);
+            let placing = choose_layer(
+                &nodes,
+                "",
+                |p| availabilities(state, network_id, p),
+                1,
+                ph,
+                layer,
+                me,
+            );
+            let (k, n, pe) = placing.map_or((0, 0, 0.0), |p| (p.plan.k, p.plan.n, p.plan.pe));
+            FolderInfo {
+                network_id: network_id.to_string(),
+                tier: layer.to_string(),
+                users,
+                pouches: members.len(),
+                active: users >= MIN_FOLDER_USERS,
+                k,
+                n,
+                pe,
+                free_bytes: members
+                    .iter()
+                    .map(|m| m.free.get(&layer).copied().unwrap_or(0))
+                    .sum(),
+            }
+        })
+        .collect()
+}
+
 pub fn list_files(state: &DaemonState, network_id: &str) -> ListFilesData {
-    let files = state.files.read().unwrap();
-    let entries: Vec<FileEntry> = files
+    let manifests: Vec<Manifest> = state
+        .files
+        .read()
+        .unwrap()
         .indexes
         .iter()
         .filter(|(network, _)| network_id.is_empty() || network.as_str() == network_id)
-        .flat_map(|(_, index)| index.files.values())
-        .map(|m| FileEntry {
-            file_name: m.file_name.clone(),
-            size_bytes: m.size_bytes,
-            file_id: m.file_id.clone(),
-            chunks: m.chunks.len(),
-            network_id: m.network.clone(),
-            uploaded_at: m.uploaded_at,
-            owner: m.owner.clone(),
-            mine: m.owner == state.identity.fingerprint,
-            shared_with: m.wraps.len().saturating_sub(1),
+        .flat_map(|(_, index)| index.files.values().cloned())
+        .collect();
+    let chains = state.chains.read().unwrap();
+    let placed = |m: &Manifest| {
+        let ledger = chains.get(&m.network)?.ledger();
+        let p = ledger.placements.get(&m.file_id)?;
+        let local = p
+            .holders
+            .iter()
+            .chain(&p.extra)
+            .all(|d| ledger.device_owner(d) == Some(m.owner.as_str()));
+        Some((p.layer.to_string(), local))
+    };
+    let entries: Vec<FileEntry> = manifests
+        .iter()
+        .map(|m| {
+            let placement = placed(m);
+            FileEntry {
+                file_name: m.file_name.clone(),
+                size_bytes: m.size_bytes,
+                file_id: m.file_id.clone(),
+                chunks: m.chunks.len(),
+                network_id: m.network.clone(),
+                uploaded_at: m.uploaded_at,
+                owner: m.owner.clone(),
+                mine: m.owner == state.identity.fingerprint,
+                shared_with: m.wraps.len().saturating_sub(1),
+                local: placement.as_ref().is_some_and(|p| p.1),
+                tier: placement.map(|p| p.0),
+            }
         })
         .collect();
     ListFilesData {
@@ -1013,6 +1130,7 @@ pub async fn publish_index(state: &DaemonState, network_id: &str) {
         &file_id,
         blob.len().clamp(1, CHUNK_BYTES),
         network_ph(state, network_id),
+        StorageTier::T1,
     ) {
         Ok(f) => f,
         Err(e) => return tracing::warn!(network = %network_id, "cannot store the file index: {e}"),
@@ -1181,6 +1299,90 @@ pub async fn on_gossip(state: &DaemonState, network_id: &str, gossip: Gossip) {
     }
 }
 
+async fn spread_local_file(state: &DaemonState, network_id: &str) {
+    let me = state.identity.fingerprint.clone();
+    let nodes = layer_nodes(state, network_id);
+    let local = {
+        let chains = state.chains.read().unwrap();
+        let Some(ledger) = chains.get(network_id).map(|c| c.ledger()) else {
+            return;
+        };
+        ledger.placements.iter().find_map(|(file_id, p)| {
+            let mine = p.owner == me
+                && !p.holders.is_empty()
+                && p.holders
+                    .iter()
+                    .chain(&p.extra)
+                    .all(|d| ledger.device_owner(d) == Some(me.as_str()));
+            (mine && folder_users(&nodes, p.layer) >= MIN_FOLDER_USERS)
+                .then(|| (file_id.clone(), p.clone()))
+        })
+    };
+    let Some((file_id, placement)) = local else {
+        return;
+    };
+    let ph = network_ph(state, network_id);
+    let size = placement.bytes;
+    if let Err(e) = check_allowance(state, network_id, size, ph, placement.layer) {
+        return tracing::debug!(file_id = %file_id, "a local file waits for quota: {e}");
+    }
+    let plan = match plan_file(
+        state,
+        network_id,
+        &file_id,
+        (size as usize).clamp(1, CHUNK_BYTES),
+        ph,
+        placement.layer,
+    ) {
+        Ok(p) if !p.local => p,
+        Ok(_) => return,
+        Err(e) => return tracing::debug!(file_id = %file_id, "cannot spread a local file yet: {e}"),
+    };
+    let grant = match Grant::sign(&state.identity, &file_id, &me) {
+        Ok(g) => g,
+        Err(e) => return tracing::warn!("cannot sign a grant to spread a file: {e}"),
+    };
+    let own = state
+        .storage_managers
+        .read()
+        .unwrap()
+        .values()
+        .find(|sm| sm.read().unwrap().meta.network_id == network_id)
+        .cloned();
+    let mut total = Stored::default();
+    let mut stale = Vec::new();
+    for chunk_id in &placement.chunks {
+        let sealed = match fetch_chunk(state, network_id, chunk_id, &grant).await {
+            Ok((sealed, _)) => sealed,
+            Err(e) => {
+                return tracing::warn!(file_id = %file_id, "cannot read a local file to spread it: {e}")
+            }
+        };
+        if let Some(sm) = &own {
+            let sm = sm.read().unwrap();
+            stale.extend(
+                sm.index
+                    .fragments_for_chunk(chunk_id)
+                    .iter()
+                    .map(|m| (chunk_id.clone(), m.fragment_id.clone())),
+            );
+        }
+        if let Err(e) = store_chunk(state, network_id, &sealed, &grant, &plan, &mut total).await {
+            return tracing::warn!(file_id = %file_id, "cannot spread a local file: {e}");
+        }
+    }
+    register_placement(state, network_id, &file_id, &plan, &total);
+    if let Some(sm) = &own {
+        let mut sm = sm.write().unwrap();
+        for (chunk_id, fragment_id) in stale {
+            if let Err(e) = sm.remove_fragment(&chunk_id, &fragment_id) {
+                tracing::warn!(chunk_id = %chunk_id, "cannot drop a local copy: {e}");
+            }
+        }
+    }
+    tracing::info!(file_id = %file_id, layer = %placement.layer, k = plan.plan.k, n = plan.plan.n, "spread a local file over its folder");
+}
+
 pub async fn sync_cycle(state: &DaemonState) {
     let networks: Vec<String> = state.networks.read().unwrap().clone();
     let me = state.identity.fingerprint.clone();
@@ -1197,6 +1399,7 @@ pub async fn sync_cycle(state: &DaemonState) {
         if let Some(head) = own_head_is_newer(state, &network_id) {
             pull_own_index(state, &network_id, &head).await;
         }
+        spread_local_file(state, &network_id).await;
         let head = state.files.read().unwrap().head(&network_id, &me).cloned();
         let message = match head {
             Some(head) => Gossip::Head {
@@ -1267,36 +1470,72 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
 
-    fn node(peer: &str, tier: StorageTier, free: u64) -> LayerNode {
+    fn node(peer: &str, user: &str, tier: StorageTier, free: u64) -> LayerNode {
         LayerNode {
             peer: peer.into(),
+            user: user.into(),
             tier,
             free: tier.layers().map(|l| (l, free)).collect::<BTreeMap<_, _>>(),
         }
     }
 
     #[test]
-    fn files_go_to_the_lowest_layer_with_room_on_every_node() {
+    fn a_folder_spreads_files_over_every_pouch_that_reaches_it() {
         let mut nodes: Vec<LayerNode> = (0..6)
-            .map(|i| node(&format!("t1-{i}"), StorageTier::T1, 1 << 30))
+            .map(|i| {
+                node(
+                    &format!("t1-{i}"),
+                    &format!("u{i}"),
+                    StorageTier::T1,
+                    1 << 30,
+                )
+            })
             .collect();
-        nodes.extend((0..3).map(|i| node(&format!("t2-{i}"), StorageTier::T2, 1 << 30)));
+        nodes.extend((0..3).map(|i| {
+            node(
+                &format!("t2-{i}"),
+                &format!("v{i}"),
+                StorageTier::T2,
+                1 << 30,
+            )
+        }));
         let even = |peers: &[String]| vec![0.95; peers.len()];
 
-        let (layer, peers, plan) = choose_layer(&nodes, "f", even, 4 << 20, 0.999).unwrap();
-        assert_eq!(layer, StorageTier::T1);
-        assert_eq!(peers.len(), 9, "T1 holds every node, T2 ones included");
-        assert_eq!(plan.n, 9);
+        let t1 = choose_layer(&nodes, "f", even, 4 << 20, 0.999, StorageTier::T1, "u0").unwrap();
+        assert!(!t1.local);
+        assert_eq!(t1.holders.len(), 9, "T1 holds every node, T2 ones included");
 
-        nodes[0].free.insert(StorageTier::T1, 10);
-        let (layer, peers, _) = choose_layer(&nodes, "f", even, 4 << 20, 0.999).unwrap();
-        assert_eq!(layer, StorageTier::T2);
-        assert!(peers.iter().all(|p| p.starts_with("t2-")));
+        let t2 = choose_layer(&nodes, "f", even, 4 << 20, 0.999, StorageTier::T2, "u0").unwrap();
+        assert!(!t2.local);
+        assert!(t2.holders.iter().all(|p| p.starts_with("t2-")));
 
-        for n in nodes.iter_mut() {
-            n.free.insert(StorageTier::T2, 10);
-        }
-        assert!(choose_layer(&nodes, "f", even, 4 << 20, 0.999).is_err());
-        assert!(choose_layer(&[], "f", even, 1, 0.999).is_err());
+        nodes[6].free.insert(StorageTier::T2, 10);
+        assert!(choose_layer(&nodes, "f", even, 4 << 20, 0.999, StorageTier::T2, "u0").is_err());
+        assert!(choose_layer(&[], "f", even, 1, 0.999, StorageTier::T1, "u0").is_err());
+    }
+
+    #[test]
+    fn a_folder_with_fewer_than_three_users_keeps_files_on_your_pouches() {
+        let nodes = vec![
+            node("a1", "alice", StorageTier::T3, 1 << 40),
+            node("a2", "alice", StorageTier::T3, 1 << 40),
+            node("b1", "bob", StorageTier::T3, 1 << 40),
+            node("c1", "carol", StorageTier::T1, 1 << 30),
+        ];
+        let even = |peers: &[String]| vec![0.9; peers.len()];
+        assert_eq!(folder_users(&nodes, StorageTier::T1), 3);
+        assert_eq!(folder_users(&nodes, StorageTier::T3), 2);
+
+        let t3 = choose_layer(&nodes, "f", even, 4 << 20, 0.999, StorageTier::T3, "alice").unwrap();
+        assert!(t3.local);
+        assert_eq!(t3.holders, vec!["a1".to_string(), "a2".to_string()]);
+        assert_eq!((t3.plan.k, t3.plan.n), (1, 2));
+
+        assert!(
+            choose_layer(&nodes, "f", even, 4 << 20, 0.999, StorageTier::T3, "carol").is_err(),
+            "no Pouch of carol's reaches T3"
+        );
+        let t1 = choose_layer(&nodes, "f", even, 4 << 20, 0.999, StorageTier::T1, "carol").unwrap();
+        assert!(!t1.local);
     }
 }

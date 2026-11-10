@@ -79,11 +79,13 @@
   <section class="panel files-panel" id="files-panel">
     <div class="panel-head">
       <h2>Files</h2>
+      <label class="folder-pick"><span>Folder</span><select id="folder"></select></label>
       <label class="button accent">
         <input type="file" id="picker" multiple hidden>
         Upload files
       </label>
     </div>
+    <div class="folders" id="folders"></div>
     <div class="dropzone" id="dropzone">
       <strong>Drop files here</strong>
       <span>They are encrypted on this device, split and spread across the Pouches of the network.</span>

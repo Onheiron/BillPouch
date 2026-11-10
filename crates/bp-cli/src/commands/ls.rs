@@ -42,10 +42,10 @@ fn print_ls(d: &ListFilesData) {
     }
 
     println!(
-        "  {:<32}  {:>10}  {:<18}  {:<16}  Uploaded",
-        "Name", "Size", "file_id", "Owner"
+        "  {:<32}  {:>10}  {:<9}  {:<18}  {:<16}  Uploaded",
+        "Name", "Size", "Folder", "file_id", "Owner"
     );
-    println!("  {}", "─".repeat(96));
+    println!("  {}", "─".repeat(107));
 
     for f in &d.files {
         let ts = Utc
@@ -68,10 +68,16 @@ fn print_ls(d: &ListFilesData) {
         } else {
             f.owner.chars().take(16).collect()
         };
+        let folder = match (&f.tier, f.local) {
+            (Some(tier), true) => format!("{tier} local"),
+            (Some(tier), false) => tier.clone(),
+            (None, _) => "?".to_string(),
+        };
         println!(
-            "  {:<32}  {:>10}  {:<18}  {:<16}  {}",
+            "  {:<32}  {:>10}  {:<9}  {:<18}  {:<16}  {}",
             name,
             fmt_bytes(f.size_bytes),
+            folder,
             f.file_id,
             owner,
             ts

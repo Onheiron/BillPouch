@@ -65,6 +65,7 @@ pub enum ControlRequest {
         ph: Option<f64>,
         network_id: String,
         file_name: Option<String>,
+        tier: Option<crate::storage::StorageTier>,
     },
     GetFile {
         file_id: String,
@@ -151,6 +152,8 @@ pub struct StatusData {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PutFileData {
     pub file_id: String,
+    pub tier: String,
+    pub local: bool,
     pub chunks: usize,
     pub size_bytes: u64,
     pub k: usize,
@@ -257,8 +260,22 @@ pub struct NetworkQosSummary {
 pub struct StorageInfoData {
     pub pouches: Vec<PouchStat>,
     pub credits: Vec<CreditStat>,
+    pub folders: Vec<FolderInfo>,
     pub files_uploaded: usize,
     pub uploaded_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FolderInfo {
+    pub network_id: String,
+    pub tier: String,
+    pub users: usize,
+    pub pouches: usize,
+    pub active: bool,
+    pub k: usize,
+    pub n: usize,
+    pub pe: f64,
+    pub free_bytes: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -272,6 +289,8 @@ pub struct FileEntry {
     pub owner: String,
     pub mine: bool,
     pub shared_with: usize,
+    pub tier: Option<String>,
+    pub local: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
