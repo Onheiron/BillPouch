@@ -233,17 +233,31 @@ free or filler, it gives up one extra file per round (`Release`), so charged
 fragments always find room.
 
 **Proof of Trust.** A charged holder can hand its place to an extra holder of
-another user with `Trust`, stating its own confidence that the newcomer keeps
-the file for the whole bet. Its Pouch then deletes its copy. The `Trust` is a
-bet that settles after `horizon` epochs, won if the newcomer still holds the
-file, or as soon as the newcomer releases it or stops counting as live, lost.
-It is scored with the Brier rule against the ledger's public forecast at the
-time of the bet, the survival `((a + 1)/(a + 2))^horizon` with `a` the epochs
-that device has proven its storage since it registered: `(public − o)² −
-(confidence − o)²` with `o` = 1 if won, 0 if lost. Honest forecasts pay best,
-a confident loss costs most, and betting on a device the ledger already
-trusts earns nothing: trust is earned by trusting before the network does,
-and being right.
+another user with `Trust`: it trusts that the fragment the newcomer already
+has is safe and deletes its own. It states its confidence, its forecast of the
+share of challenges the newcomer will pass during the bet, which is its own
+availability estimate of that Pouch. The bet settles after `horizon` epochs:
+the outcome is the share of challenges the newcomer's device passed in the
+meantime, or 0 as soon as it releases the file or stops counting as live (a
+bet on a device nobody challenged is void). It is scored with the Brier rule
+against the ledger's public estimate of that device at the time of the bet,
+`(passed + 1)/(challenged + 2)` over its whole history: `(public − o)² −
+(confidence − o)²`. Honest forecasts pay best, a confident miss costs most,
+and betting what the ledger already knows earns nothing: trust is earned by
+seeing better than the network. A device that is often offline, such as a
+laptop that sleeps at night, fails the challenges of those hours and is
+forecast, and scored, accordingly.
+
+**When to trust** is a random event: every minute a holder trusts a given
+newcomer with chance `confidence × surplus / rounds`, so the wait is roughly
+exponential. `rounds` is the mean wait for a good newcomer, set by
+`BP_TRUST_AFTER` (minutes, default 360). `surplus` measures how much the file
+can spare: the recovery probability of the file without this holder's
+fragment, with every other live holder (the newcomer included) at its
+estimated availability, expressed in nines relative to `ph` (capped at 4).
+Below `ph` the chance is 0, so a file never drops under its target, and a
+file with many more holders than it needs is let go of sooner. Random waits
+also keep the holders of a file from all trusting the same newcomer at once.
 
 A member's **trust** is the sum of these scores, multiplied by `decay` at each
 settled bet, plus what their invitations earned; it is not voting weight.
@@ -255,10 +269,8 @@ scored, so nobody farms trust on users they brought in. Every open bet and
 invitation locks 0.25 of trust: a member has at most `8 + trust / 0.25` of
 them open together. Safety floor: a file has at most `n − k` open bets, so it
 survives every untested newcomer vanishing. Nobody bets on their own devices.
-Each node's confidence is the higher of the public forecast and its own
-availability estimate of that Pouch, and it trusts only once that reaches
-`BP_TRUST_AT` (default 0.9), at most one file per network per round. A
-dropped file voids its bets. A proposal the ledger does not take is retried
+A node trusts at most one file per network per round. A dropped file voids
+its bets. A proposal the ledger does not take is retried
 after 10 minutes.
 
 Rebuilding is a **recoding chain**: `k` live holders in turn add `c · own fragment` (random `c`

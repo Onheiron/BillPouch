@@ -148,6 +148,8 @@ pub struct Bet {
     pub newcomer: String,
     pub confidence_ppm: u32,
     pub baseline_ppm: u32,
+    pub sent_before: u64,
+    pub passed_before: u64,
     pub until_epoch: u64,
 }
 
@@ -307,6 +309,7 @@ pub struct Ledger {
     pub usage_at: BTreeMap<String, u64>,
     pub placements: BTreeMap<String, Placement>,
     pub proven: BTreeMap<String, u64>,
+    pub challenges: BTreeMap<String, (u64, u64)>,
     pub last_proof: u64,
     pub params: Params,
     pub param_votes: BTreeMap<String, Params>,
@@ -367,6 +370,7 @@ impl Ledger {
             usage_at: BTreeMap::new(),
             placements: BTreeMap::new(),
             proven: BTreeMap::new(),
+            challenges: BTreeMap::new(),
             last_proof: 0,
             params: Params::default(),
             param_votes: BTreeMap::new(),
@@ -412,16 +416,9 @@ impl Ledger {
         self.is_member(&d.user) && seen + self.params.grace_epochs >= self.last_proof
     }
 
-    pub fn survival(&self, device: &str) -> f64 {
-        let Some(d) = self.devices.get(device) else {
-            return 0.0;
-        };
-        let lived = self
-            .proven
-            .get(device)
-            .map_or(0, |&e| e.saturating_sub(d.since)) as f64;
-        let horizon = i32::try_from(self.params.horizon_epochs).unwrap_or(i32::MAX);
-        ((lived + 1.0) / (lived + 2.0)).powi(horizon)
+    pub fn availability(&self, device: &str) -> f64 {
+        let (sent, passed) = self.challenges.get(device).copied().unwrap_or_default();
+        (passed as f64 + 1.0) / (sent as f64 + 2.0)
     }
 
     pub fn live_holders<'a>(&'a self, placement: &'a Placement) -> Vec<&'a String> {
@@ -551,7 +548,21 @@ impl Ledger {
             if self.invited(&bet.user, newcomer) {
                 continue;
             }
-            let outcome = if holding { PPM } else { 0 };
+            let (sent, passed) = self
+                .challenges
+                .get(&bet.newcomer)
+                .copied()
+                .unwrap_or_default();
+            let sent = sent.saturating_sub(bet.sent_before);
+            let outcome = match (holding, sent) {
+                (false, _) => 0,
+                (true, 0) => continue,
+                (true, sent) => {
+                    let passed = passed.saturating_sub(bet.passed_before).min(sent);
+                    i64::try_from(u128::from(passed) * PPM as u128 / u128::from(sent))
+                        .unwrap_or(PPM)
+                }
+            };
             let baseline = i64::from(bet.baseline_ppm);
             let forecast = i64::from(bet.confidence_ppm);
             let skill = ((baseline - outcome).pow(2) - (forecast - outcome).pow(2)) / PPM;
@@ -740,7 +751,13 @@ impl Ledger {
                     let member = self.members.get_mut(&o.user).expect("checked member");
                     member.sent += u64::from(o.sent);
                     member.passed += u64::from(o.passed);
-                    if o.passed > 0 && self.device_owner(&o.device) == Some(o.user.as_str()) {
+                    if self.device_owner(&o.device) != Some(o.user.as_str()) {
+                        continue;
+                    }
+                    let counts = self.challenges.entry(o.device.clone()).or_default();
+                    counts.0 += u64::from(o.sent);
+                    counts.1 += u64::from(o.passed);
+                    if o.passed > 0 {
                         self.proven.insert(o.device.clone(), *epoch);
                         self.last_proof = self.last_proof.max(*epoch);
                     }
@@ -920,7 +937,9 @@ impl Ledger {
                     released: released.clone(),
                     newcomer: newcomer.clone(),
                     confidence_ppm: *confidence_ppm,
-                    baseline_ppm: (self.survival(newcomer) * PPM as f64) as u32,
+                    baseline_ppm: (self.availability(newcomer) * PPM as f64) as u32,
+                    sent_before: self.challenges.get(newcomer).map_or(0, |c| c.0),
+                    passed_before: self.challenges.get(newcomer).map_or(0, |c| c.1),
                     until_epoch: block.epoch() + self.params.horizon_epochs,
                 });
             }
@@ -1687,7 +1706,7 @@ mod tests {
         let p = &net.ledger.placements["f"];
         assert!(p.holders.contains(&d2) && p.extra.is_empty());
         assert_eq!(net.ledger.live_holders(p).len(), 2);
-        assert!(net.ledger.survival(&d2) > net.ledger.survival(&d1));
+        assert!(net.ledger.availability(&d2) > net.ledger.availability(&d1));
     }
 
     #[test]
@@ -1742,12 +1761,19 @@ mod tests {
             .unwrap();
         for _ in 0..net.ledger.params.horizon_epochs {
             net.next_epoch();
+            let t = net.now();
+            let seen = vec![
+                net.observe(0, 2, 10, 9, t),
+                net.observe(1, 0, 5, 5, t),
+                net.observe(2, 1, 5, 5, t),
+            ];
+            net.commit(0, t, seen).unwrap();
         }
         assert!(net.ledger.bets.is_empty());
         assert_eq!(
             net.ledger.trust[&net.fp(1)],
-            974_437,
-            "it beat the ledger's forecast"
+            160_000,
+            "a forecast of 0.9 for a newcomer that passed 90% of its challenges, against the ledger's 0.5"
         );
 
         let t = net.now();
@@ -1757,7 +1783,7 @@ mod tests {
             net.ledger.bets.is_empty(),
             "a vanished newcomer loses the bet"
         );
-        assert_eq!(net.ledger.trust[&net.fp(1)], 876_993 - 809_938);
+        assert_eq!(net.ledger.trust[&net.fp(1)], 144_000 - 19_878);
     }
 
     #[test]

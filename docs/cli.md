@@ -64,5 +64,5 @@ started automatically when missing.
 |----------|--------|
 | `BP_PASSPHRASE` | Passphrase for an encrypted identity |
 | `BP_LISTEN_PORT` | Fixed TCP listen port for the daemon (default: random); `off` makes a client-only node that only dials out, enough for a Bill |
-| `BP_TRUST_AT` | Confidence (the higher of the ledger's survival forecast and this node's availability estimate) a newcomer's Pouch must reach before this node hands it a file it holds (default 0.9; 1 never trusts) |
+| `BP_TRUST_AFTER` | Mean minutes this node waits before handing a file it holds to a reliable newcomer (default 360); sooner for files with more holders than they need, never when the file would fall below `ph` |
 | `RUST_LOG` | Log filter, e.g. `bp_core=debug` |
