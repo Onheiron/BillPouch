@@ -57,11 +57,18 @@ Audio and video files are served with their media type, and an open-ended
 range (`bytes=A-`) returns at most 8 MiB, so playback starts without waiting
 for the whole file.
 
-The web app is a progressive web app: your identity and network, your quota
-(used, free, not verified yet and lost to redundancy, on the scale of what you
-offer), your Pouch's setup, your files and how many Pouches they survive losing, every node (Pouches, Bills and
-Roosts) with its setup and challenge results, and your files, which you can
-download, delete or upload by picking or dropping them. Browsers only register
+The web app is a progressive web app with a sidebar (a bottom bar on phones):
+**Fish**, the folders of each network with their users, Pouches, free space and
+k/n, and your files, which you upload into the selected folder by picking or
+dropping them, play, download or delete; **Flock**, the network: members,
+nodes, space offered and availability, live charts of the nodes online and of
+the average availability, what each member hosts and stores, members and trust,
+every node with its challenge results, and an invitation form; **Nest**, your
+quota, files, devices, reputation in each network and the services you can
+start on this node; **Roost**, this node: its services with maintenance, stop
+and evict, how far its ledgers are synchronized, its addresses and leaving a
+network; **Gossip**, the community, still empty; and, at the bottom, your avatar
+with your profile and settings. Browsers only register
 its service worker over a trusted certificate, so with the self-signed one it
 works as a page you can install but not offline.
 
