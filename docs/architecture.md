@@ -88,20 +88,28 @@ A daemon can be in several networks at once. Gossip messages are `Node` (NodeInf
 
 ## Storing a file
 
-`bp put` passes the file's path to the daemon, which streams it in 4 MiB
-chunks; only one chunk is in memory at a time. Each file gets a random
-`file_id` and a random key.
+`bp put` passes the file's path to the daemon, which streams it in chunks of
+4 MiB (or `--chunk-size`, a power of two from 64 KiB: smaller chunks start
+streaming sooner); only one chunk is in memory at a time. `bp put -` reads
+stdin through a named pipe, so the size need not be known: the quota is then
+checked chunk by chunk. Each file gets a random `file_id` and a random key.
 
-1. **Encrypt.** Each chunk is sealed with ChaCha20-Poly1305 under the file key.
+1. **Compress.** Each chunk is compressed with zstd (level 3) when that saves
+   at least 3 %; a first chunk that does not compress turns compression off
+   for the file (photos, videos and archives are already compressed). A byte
+   in front of each chunk says which, so streaming and ranges keep working.
+2. **Encrypt.** Each chunk is sealed with ChaCha20-Poly1305 under the file key.
    The key is wrapped (X25519 + ChaCha20-Poly1305, as for the network key) for
-   your SSH key and put in the file's manifest: `file_id`, the ordered
-   `chunk_id`s, name, size, owner, one wrap and one grant per authorized user.
-   Pouches only ever see ciphertext.
-2. **The folder** (see *Storage tiers*) is the layer you put the file in
-   (`--tier`, default T1). `chunk_id` is a 16-hex-char BLAKE3 prefix of the
-   ciphertext. Every chosen holder must still have room for one fragment in
+   your SSH key and put in the file's manifest: `file_id`, the chunk size, a
+   hash of each sealed chunk (checked after decoding), name, size, owner, one
+   wrap and one grant per authorized user. Pouches only ever see ciphertext.
+   The id of chunk `i` is derived from the file, `BLAKE3("billpouch/chunk/" ‖
+   file_id ‖ "/" ‖ i)`, so the ledger records only how many chunks a file has,
+   whatever their size.
+3. **The folder** (see *Storage tiers*) is the layer you put the file in
+   (`--tier`, default T1). Every chosen holder must still have room for one fragment in
    that layer's slice, or the folder is full.
-3. **Choose k and the holders** (`coding/params.rs`). With `X_i` = Pouch `i`
+4. **Choose k and the holders** (`coding/params.rs`). With `X_i` = Pouch `i`
    reachable, with probability `p_i` (its conservative availability, below),
    the recovery probability `Pe = P(Σ X_i ≥ k)` over `n` holders is computed
    exactly by dynamic programming, and for a given set of holders `k` is the
@@ -115,7 +123,7 @@ chunks; only one chunk is in memory at a time. Each file gets a random
    that of a full copy on every Pouch of the layer, so a Pouch too new to
    add anything gets nothing; if even that is hopeless (a loss chance above
    one half), every Pouch gets a full copy (`k = 1`). `Pe` is reported.
-4. **Encode and place.** Systematic RLNC over GF(2⁸): `n` fragments, any `k` of
+5. **Encode and place.** Systematic RLNC over GF(2⁸): `n` fragments, any `k` of
    which decode. Your own fragment is stored locally; the others are pushed to
    their Pouches with your **owner grant** and the layer. The placement is gossiped as an
    `Index` message and recorded for Proof-of-Storage.
@@ -129,7 +137,9 @@ fragment index and finally every other Pouch. It asks as many as it lacks plus
 candidate whenever one fails or nothing arrives within three times the nearest
 round trip (between 1 and 5 s). With `k` fragments it decodes, checks the
 `chunk_id` and decrypts; the output is written as `.bp-partial` and renamed at
-the end.
+the end. With `--range A-B` (or an HTTP `Range` header) only the chunks
+holding those bytes are fetched; with `-` as the output (or a named pipe) the
+file is written as it arrives, for streaming.
 
 **Grants.** A grant `(file_id, owner key, grantee fingerprint)` is signed with
 the owner's SSH key. A Pouch accepts a fragment only from a device of a member

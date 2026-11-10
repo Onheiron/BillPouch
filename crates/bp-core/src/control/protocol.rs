@@ -66,11 +66,13 @@ pub enum ControlRequest {
         network_id: String,
         file_name: Option<String>,
         tier: Option<crate::storage::StorageTier>,
+        chunk_bytes: Option<u64>,
     },
     GetFile {
         file_id: String,
         network_id: String,
         output: std::path::PathBuf,
+        range: Option<(u64, u64)>,
     },
     DeleteFile {
         file_id: String,
@@ -152,6 +154,7 @@ pub struct StatusData {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PutFileData {
     pub file_id: String,
+    pub packed_bytes: u64,
     pub tier: String,
     pub local: bool,
     pub chunks: usize,
@@ -170,6 +173,7 @@ pub struct GetFileData {
     pub file_id: String,
     pub file_name: String,
     pub size_bytes: u64,
+    pub bytes: u64,
     pub chunks: usize,
     pub fragments_remote: usize,
     pub output: String,

@@ -77,9 +77,9 @@ Errors are `{"error": "…"}` with 401 (missing, expired or foreign session), 50
 | POST | `/networks/:id/expulsions` | `{member}` (fingerprint) | `expel` |
 | POST | `/networks/leave` | `{network_id, force?}` | `leave` |
 | GET | `/files` | `?network=<id>` (all if omitted) | `list_files` |
-| POST | `/files` | raw file as the body, `?network=<id>&name=<file name>&ph=<p>?` → 201 | `put_file` (streamed to a temporary file) |
+| POST | `/files` | raw file as the body, `?network=<id>&name=<file name>&ph=<p>?&tier=<T1…T5>?&chunk=<bytes>?` → 201 | `put_file` (streamed to a temporary file) |
 | GET | `/storage` | `?network=<id>` (all if omitted) | `storage_info` |
-| GET | `/files/:file_id` | `?network=<id>` → the raw file, as an attachment named after it | `get_file` |
+| GET | `/files/:file_id` | `?network=<id>` → the raw file, as an attachment named after it; a `Range: bytes=A-B` header returns 206 with only those bytes (`Accept-Ranges: bytes`) | `get_file` |
 | DELETE | `/files/:file_id` | `?network=<id>` | `delete_file` |
 | POST | `/files/:file_id/shares` | `{network_id, member}` | `share` |
 | DELETE | `/files/:file_id/shares/:member` | `?network=<id>` | `unshare` |

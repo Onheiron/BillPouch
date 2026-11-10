@@ -1,7 +1,7 @@
 use axum::{
     body::Body,
     extract::{Path, Query, State},
-    http::{header, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
     Json, Router,
@@ -369,6 +369,7 @@ struct PutFileQuery {
     name: Option<String>,
     ph: Option<f64>,
     tier: Option<bp_core::storage::StorageTier>,
+    chunk: Option<u64>,
 }
 
 fn scratch_file() -> std::io::Result<PathBuf> {
@@ -409,6 +410,7 @@ async fn put_file(
         ph: query.ph,
         file_name: query.name,
         tier: query.tier,
+        chunk_bytes: query.chunk,
     };
     let response = respond(&state, req, StatusCode::CREATED).await;
     let _ = tokio::fs::remove_file(&path).await;
@@ -461,20 +463,40 @@ fn attachment(name: &str) -> String {
     format!("attachment; filename*=UTF-8''{encoded}")
 }
 
+fn requested_range(headers: &HeaderMap) -> Option<(u64, u64)> {
+    let spec = headers
+        .get(header::RANGE)?
+        .to_str()
+        .ok()?
+        .strip_prefix("bytes=")?;
+    let (from, to) = spec.split_once('-')?;
+    let from: u64 = from.trim().parse().ok()?;
+    let to = to.trim();
+    let len = if to.is_empty() {
+        u64::MAX - from
+    } else {
+        to.parse::<u64>().ok()?.checked_sub(from)? + 1
+    };
+    Some((from, len))
+}
+
 #[instrument(skip_all)]
 async fn get_file(
     State(state): State<AppState>,
     Path(file_id): Path<String>,
     Query(query): Query<FileQuery>,
+    headers: HeaderMap,
 ) -> Response {
     let output = match scratch_file() {
         Ok(p) => p,
         Err(e) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     };
+    let range = requested_range(&headers);
     let req = ControlRequest::GetFile {
         file_id,
         network_id: query.network,
         output: output.clone(),
+        range,
     };
     let data = match call_daemon(&state, req).await {
         Ok(data) => data,
@@ -498,15 +520,28 @@ async fn get_file(
             Err(e) => Some((Err(e), file)),
         }
     });
-    (
+    let mut response = (
         [
             (header::CONTENT_TYPE, "application/octet-stream".to_string()),
-            (header::CONTENT_LENGTH, meta.size_bytes.to_string()),
+            (header::CONTENT_LENGTH, meta.bytes.to_string()),
             (header::CONTENT_DISPOSITION, attachment(&meta.file_name)),
+            (header::ACCEPT_RANGES, "bytes".to_string()),
         ],
         Body::from_stream(stream),
     )
-        .into_response()
+        .into_response();
+    if let Some((from, _)) = range {
+        *response.status_mut() = StatusCode::PARTIAL_CONTENT;
+        let range = format!(
+            "bytes {from}-{}/{}",
+            from + meta.bytes.saturating_sub(1),
+            meta.size_bytes
+        );
+        if let Ok(value) = header::HeaderValue::from_str(&range) {
+            response.headers_mut().insert(header::CONTENT_RANGE, value);
+        }
+    }
+    response
 }
 
 #[instrument(skip_all)]

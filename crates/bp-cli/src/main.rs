@@ -1,5 +1,6 @@
 mod client;
 mod commands;
+mod pipe;
 
 use clap::{Parser, Subcommand};
 use std::collections::HashMap;
@@ -203,7 +204,7 @@ enum Cmd {
 
     #[command(about = "Store a local file in the active Pouch (RLNC erasure-coded)")]
     Put {
-        #[arg(help = "Path to the file to store")]
+        #[arg(help = "Path to the file to store, or - to read it from stdin")]
         file: std::path::PathBuf,
 
         #[arg(help = "Network that stores the file")]
@@ -227,6 +228,12 @@ enum Cmd {
         )]
         #[arg(long, default_value = "T1")]
         tier: bp_core::storage::StorageTier,
+
+        #[arg(
+            help = "Chunk size, a power of two from 64KiB to 4MiB (default 4MiB): smaller chunks start streaming sooner"
+        )]
+        #[arg(long, value_parser = parse_size)]
+        chunk_size: Option<u64>,
     },
 
     #[command(about = "Fetch, decrypt and write one of your files (or one shared with you)")]
@@ -234,12 +241,16 @@ enum Cmd {
         #[arg(help = "The file_id printed by `bp put` or `bp ls`")]
         file_id: String,
 
-        #[arg(help = "Where to write the recovered file")]
+        #[arg(help = "Where to write the recovered file, or - to stream it to stdout")]
         output: std::path::PathBuf,
 
         #[arg(help = "Network that stores the file")]
         #[arg(long, short)]
         network: String,
+
+        #[arg(help = "Only these bytes, e.g. 0-1048575 (both ends included)")]
+        #[arg(long, value_parser = parse_range)]
+        range: Option<(u64, u64)>,
     },
 
     #[command(
@@ -365,6 +376,24 @@ enum NetworkAction {
         #[arg(help = "Name of the network, e.g. friends")]
         name: String,
     },
+}
+
+fn parse_range(text: &str) -> Result<(u64, u64), String> {
+    let (from, to) = text
+        .split_once('-')
+        .ok_or_else(|| format!("'{text}' is not a range like 0-1048575"))?;
+    let from: u64 = from
+        .trim()
+        .parse()
+        .map_err(|_| format!("bad start in '{text}'"))?;
+    let to: u64 = to
+        .trim()
+        .parse()
+        .map_err(|_| format!("bad end in '{text}'"))?;
+    if to < from {
+        return Err(format!("'{text}' ends before it starts"));
+    }
+    Ok((from, to - from + 1))
 }
 
 fn parse_size(text: &str) -> Result<u64, String> {
@@ -517,16 +546,18 @@ async fn main() -> anyhow::Result<()> {
             ph,
             name,
             tier,
+            chunk_size,
         }) => {
-            commands::put::put(file, network, ph, name, tier).await?;
+            commands::put::put(file, network, ph, name, tier, chunk_size).await?;
         }
 
         Some(Cmd::Get {
             file_id,
             output,
             network,
+            range,
         }) => {
-            commands::get::get(file_id, network, output).await?;
+            commands::get::get(file_id, network, output, range).await?;
         }
 
         Some(Cmd::Ls { network }) => {

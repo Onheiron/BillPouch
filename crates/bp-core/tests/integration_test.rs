@@ -295,6 +295,7 @@ async fn put_file_get_file_roundtrip() {
             network_id: "test-net".to_string(),
             file_name: None,
             tier: None,
+            chunk_bytes: None,
         },
     )
     .await;
@@ -312,6 +313,7 @@ async fn put_file_get_file_roundtrip() {
             file_id: put_data.file_id.clone(),
             network_id: "test-net".to_string(),
             output: output.clone(),
+            range: None,
         },
     )
     .await;
@@ -359,6 +361,7 @@ async fn put_file_get_file_roundtrip() {
             file_id: put_data.file_id.clone(),
             network_id: "test-net".to_string(),
             output: output.clone(),
+            range: None,
         },
     )
     .await;
@@ -390,6 +393,7 @@ async fn put_file_without_pouch_returns_error() {
             network_id: "test-net".to_string(),
             file_name: None,
             tier: None,
+            chunk_bytes: None,
         },
     )
     .await;
@@ -439,6 +443,7 @@ async fn get_file_unknown_chunk_returns_error() {
             file_id: "deadbeef12345678".to_string(),
             network_id: "test-net".to_string(),
             output: std::env::temp_dir().join("bp-never-written"),
+            range: None,
         },
     )
     .await;
@@ -487,6 +492,7 @@ async fn get_file_outside_your_index_returns_error() {
             network_id: "test-net".to_string(),
             file_name: None,
             tier: None,
+            chunk_bytes: None,
         },
     )
     .await;
@@ -501,6 +507,7 @@ async fn get_file_outside_your_index_returns_error() {
             file_id: put_data.file_id.clone(),
             network_id: "test-net".to_string(),
             output: std::env::temp_dir().join("bp-never-written"),
+            range: None,
         },
     )
     .await;

@@ -229,6 +229,7 @@ async fn upload_files(
             network_id: network.clone(),
             file_name: Some(name.clone()),
             tier: Some(tier),
+            chunk_bytes: None,
         })
         .await;
         let _ = std::fs::remove_file(&temp);
@@ -250,6 +251,7 @@ async fn save_file(
         file_id,
         network_id: network,
         output: temp.clone(),
+        range: None,
     })
     .await?;
     let chooser = app.clone();

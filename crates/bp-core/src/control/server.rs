@@ -775,13 +775,15 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             network_id,
             file_name,
             tier,
-        } => files::put_file(state, path, ph, network_id, file_name, tier).await,
+            chunk_bytes,
+        } => files::put_file(state, path, ph, network_id, file_name, tier, chunk_bytes).await,
 
         ControlRequest::GetFile {
             file_id,
             network_id,
             output,
-        } => files::get_file(state, file_id, network_id, output).await,
+            range,
+        } => files::get_file(state, file_id, network_id, output, range).await,
 
         ControlRequest::DeleteFile {
             file_id,

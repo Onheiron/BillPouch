@@ -43,8 +43,8 @@ started automatically when missing.
 
 | Command | Description |
 |---------|-------------|
-| `bp put <file> --network <id> [--tier T1] [--ph <p>] [--name <name>]` | Stream a file in 4 MiB chunks into a folder (`--tier`, default T1): encrypt, encode and spread fragments over the folder's Pouches; prints its `file_id`. A folder with fewer than 3 users with a Pouch keeps the file on your own Pouches until it fills up. `--ph` = target recovery probability (default: the network's `ph`, see `bp params`) |
-| `bp get <file_id> <output> --network <id>` | Fetch, decode and decrypt one of your files or one shared with you, chunk by chunk |
+| `bp put <file\|-> --network <id> [--tier T1] [--chunk-size 4MiB] [--ph <p>] [--name <name>]` | Stream a file (or stdin with `-`) in chunks into a folder (`--tier`, default T1): compress when it pays, encrypt, encode and spread fragments over the folder's Pouches; prints its `file_id`. `--chunk-size` is a power of two from 64KiB to 4MiB; smaller chunks start streaming sooner. A folder with fewer than 3 users with a Pouch keeps the file on your own Pouches until it fills up. `--ph` = target recovery probability (default: the network's `ph`, see `bp params`) |
+| `bp get <file_id> <output\|-> --network <id> [--range A-B]` | Fetch, decode, decrypt and decompress one of your files or one shared with you, several chunks at once; `-` streams it to stdout as it arrives, `--range` fetches only bytes A to B |
 | `bp rm <file_id> --network <id>` | Delete one of your files (every Pouch drops its fragments), or remove a shared file from your list |
 | `bp ls [--network <id>]` | Your files and the ones shared with you, from your index (synced across your devices), with their folder (`local` while it keeps them on your Pouches) |
 | `bp unshare <file_id> <fingerprint> --network <id>` | Withdraw a member's access: Pouches refuse them the fragments and the file leaves their list |
