@@ -268,7 +268,7 @@ mod tests {
         set.push(repaired);
         set.extend(fragments[..1].iter().cloned());
         assert_eq!(decode(&set).unwrap(), data);
-        let other = encode(b"something else entirely", 4, 4).unwrap();
+        let other = encode("fedcba9876543210", b"something else entirely", 4, 4).unwrap();
         assert!(mix(Some(fragments[0].clone()), &other[0]).is_err());
     }
 
@@ -276,7 +276,7 @@ mod tests {
 
     #[test]
     fn encode_produces_n_fragments() {
-        let frags = encode(TEST_CHUNK, 4, 8).unwrap();
+        let frags = encode("0123456789abcdef", TEST_CHUNK, 4, 8).unwrap();
         assert_eq!(frags.len(), 8);
         for f in &frags {
             assert_eq!(f.k, 4);
@@ -289,7 +289,7 @@ mod tests {
     #[test]
     fn decode_exact_k_fragments() {
         let k = 4;
-        let frags = encode(TEST_CHUNK, k, k + 4).unwrap();
+        let frags = encode("0123456789abcdef", TEST_CHUNK, k, k + 4).unwrap();
         let recovered = decode(&frags[..k]).unwrap();
         assert!(recovered.starts_with(TEST_CHUNK));
     }
@@ -297,7 +297,7 @@ mod tests {
     #[test]
     fn decode_any_k_subset() {
         let k = 4;
-        let frags = encode(TEST_CHUNK, k, k + 4).unwrap();
+        let frags = encode("0123456789abcdef", TEST_CHUNK, k, k + 4).unwrap();
         let reversed: Vec<_> = frags[..k].iter().cloned().rev().collect();
         let recovered = decode(&reversed).unwrap();
         assert!(recovered.starts_with(TEST_CHUNK));
@@ -306,7 +306,7 @@ mod tests {
     #[test]
     fn recode_produces_valid_fragments() {
         let k = 4;
-        let frags = encode(TEST_CHUNK, k, k + 4).unwrap();
+        let frags = encode("0123456789abcdef", TEST_CHUNK, k, k + 4).unwrap();
         let recoded = recode(&frags[..2], 3).unwrap();
         assert_eq!(recoded.len(), 3);
         for f in &recoded {
@@ -322,7 +322,7 @@ mod tests {
     #[test]
     fn decode_from_recoded_fragments() {
         let k = 4;
-        let frags = encode(TEST_CHUNK, k, k).unwrap();
+        let frags = encode("0123456789abcdef", TEST_CHUNK, k, k).unwrap();
         let chunk_id = frags[0].chunk_id.clone();
 
         let recoded: Vec<EncodedFragment> = (0..k)
@@ -347,7 +347,7 @@ mod tests {
     #[test]
     fn decode_only_recoded_no_originals() {
         let k = 3;
-        let frags = encode(TEST_CHUNK, k, k).unwrap();
+        let frags = encode("0123456789abcdef", TEST_CHUNK, k, k).unwrap();
         let chunk_id = frags[0].chunk_id.clone();
 
         let recoded: Vec<EncodedFragment> = (0..k)
@@ -375,7 +375,7 @@ mod tests {
 
     #[test]
     fn serialization_roundtrip() {
-        let frags = encode(TEST_CHUNK, 3, 5).unwrap();
+        let frags = encode("0123456789abcdef", TEST_CHUNK, 3, 5).unwrap();
         let f = &frags[0];
         let bytes = f.to_bytes();
         let back = EncodedFragment::from_bytes(f.id.clone(), f.chunk_id.clone(), &bytes).unwrap();
@@ -391,12 +391,12 @@ mod tests {
 
     #[test]
     fn encode_error_n_less_than_k() {
-        assert!(encode(TEST_CHUNK, 4, 2).is_err());
+        assert!(encode("0123456789abcdef", TEST_CHUNK, 4, 2).is_err());
     }
 
     #[test]
     fn decode_error_too_few_fragments() {
-        let frags = encode(TEST_CHUNK, 4, 6).unwrap();
+        let frags = encode("0123456789abcdef", TEST_CHUNK, 4, 6).unwrap();
         assert!(decode(&frags[..2]).is_err());
     }
 
