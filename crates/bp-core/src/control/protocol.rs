@@ -210,6 +210,8 @@ pub struct MembersData {
     pub me: String,
     pub height: u64,
     pub epoch: u64,
+    pub time: u64,
+    pub pending_ops: usize,
     pub total_weight: u64,
     pub members: Vec<MemberInfo>,
     pub expelled: Vec<String>,

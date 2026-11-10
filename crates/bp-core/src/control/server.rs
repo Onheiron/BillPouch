@@ -557,6 +557,8 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 me: state.identity.fingerprint.clone(),
                 height: ledger.height,
                 epoch: ledger.snapshot.epoch,
+                time: ledger.time,
+                pending_ops: chain.engine.pending_ops(),
                 total_weight: ledger.snapshot.total_weight(),
                 members,
                 expelled: ledger.expelled.iter().cloned().collect(),

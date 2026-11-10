@@ -2,8 +2,18 @@
 
 const SESSION_KEY = "bp-session";
 const NETWORK_KEY = "bp-network";
-const REFRESH_MS = 5000;
+const VIEW_KEY = "bp-view";
+const RATE_KEY = "bp-refresh";
 const MIB = 1 << 20;
+const HISTORY = 120;
+const VIEWS = {
+  fish: "Fish",
+  flock: "Flock",
+  nest: "Nest",
+  roost: "Roost",
+  gossip: "Gossip",
+  profile: "You",
+};
 
 const fragment = new URLSearchParams(location.hash.slice(1));
 if (fragment.get("session")) {
@@ -12,10 +22,34 @@ if (fragment.get("session")) {
 }
 
 const $ = (id) => document.getElementById(id);
-const state = { kind: "all", network: localStorage.getItem(NETWORK_KEY) || "", data: null };
+
+function stored(key, fallback) {
+  try {
+    return localStorage.getItem(key) || fallback;
+  } catch (_) {
+    return fallback;
+  }
+}
+
+function remember(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch (_) {}
+}
+
+const state = {
+  kind: "all",
+  network: stored(NETWORK_KEY, ""),
+  view: VIEWS[stored(VIEW_KEY, "fish")] ? stored(VIEW_KEY, "fish") : "fish",
+  folder: "",
+  rate: Number(stored(RATE_KEY, "5000")),
+  data: null,
+  history: [],
+  timer: null,
+};
 
 function session() {
-  return localStorage.getItem(SESSION_KEY) || "";
+  return stored(SESSION_KEY, "");
 }
 
 class ApiError extends Error {
@@ -52,13 +86,23 @@ async function api(path, options = {}) {
 
 const json = async (path) => (await api(path)).json();
 
+async function send(path, method, body) {
+  const response = await api(path, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  return response.json().catch(() => ({}));
+}
+
 function esc(value) {
   return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 }
 
 function bytes(n) {
   n = Number(n) || 0;
-  if (n >= 1 << 30) return (n / (1 << 30)).toFixed(1) + " GiB";
+  if (n >= 2 ** 40) return (n / 2 ** 40).toFixed(1) + " TiB";
+  if (n >= 2 ** 30) return (n / 2 ** 30).toFixed(1) + " GiB";
   if (n >= MIB) return (n / MIB).toFixed(1) + " MiB";
   if (n >= 1024) return (n / 1024).toFixed(1) + " KiB";
   return n + " B";
@@ -72,11 +116,16 @@ function ago(seconds) {
   const s = Math.max(0, Math.round(Date.now() / 1000 - seconds));
   if (s < 60) return s + " s ago";
   if (s < 3600) return Math.round(s / 60) + " min ago";
-  return Math.round(s / 3600) + " h ago";
+  if (s < 86400) return Math.round(s / 3600) + " h ago";
+  return Math.round(s / 86400) + " days ago";
 }
 
 function short(id) {
   return id ? id.slice(0, 12) + "…" : "";
+}
+
+function plural(n, one, many) {
+  return `${n} ${n === 1 ? one : many}`;
 }
 
 function toast(message, kind = "") {
@@ -103,21 +152,18 @@ function bar(total, parts) {
     .join("")}</div>`;
 }
 
-function plural(n, one, many) {
-  return `${n} ${n === 1 ? one : many}`;
-}
-
 function legend(items) {
   return `<div class="legend">${items.map(([cls, text]) => `<span><i class="${cls}"></i>${text}</span>`).join("")}</div>`;
 }
 
+function card(title, big, body = "") {
+  return `<div class="card"><h3>${title}</h3><div class="big">${big}</div>${body}</div>`;
+}
+
+/* ---------- data ---------- */
+
 async function load() {
-  const [status, flock, storage, files] = await Promise.all([
-    json("/status"),
-    json("/peers"),
-    json("/storage"),
-    json("/files"),
-  ]);
+  const [status, flock, storage, files] = await Promise.all([json("/status"), json("/peers"), json("/storage"), json("/files")]);
   const members = {};
   await Promise.all(
     status.networks.map(async (network) => {
@@ -137,22 +183,34 @@ function names(data) {
   return out;
 }
 
+function myName(data) {
+  return names(data)[data.status.fingerprint] || data.status.alias || "you";
+}
+
 function inNetwork(network) {
   return !state.network || state.network === network;
+}
+
+function currentNetwork() {
+  if (state.network) return state.network;
+  const networks = state.data ? state.data.status.networks : [];
+  return networks.length === 1 ? networks[0] : null;
 }
 
 function nodes(data) {
   const me = data.status.fingerprint;
   const who = names(data);
   const qos = Object.fromEntries(data.flock.qos.map((q) => [q.peer_id, q]));
+  const counted = Object.assign({}, ...Object.values(data.members).map((m) => m.availability || {}));
   const local = data.status.local_services.map((svc) => {
     const stat = data.storage.pouches.find((p) => p.service_id === svc.id);
     return {
       kind: svc.service_type,
       network: svc.network_id,
       owner: me,
-      name: who[me] || data.status.alias || "you",
+      name: myName(data),
       mine: true,
+      here: true,
       peer: data.status.peer_id,
       paused: svc.status !== "running",
       quota: stat ? stat.quota_bytes : 0,
@@ -161,15 +219,16 @@ function nodes(data) {
       tier: stat ? stat.tier : svc.metadata.tier,
       seen: null,
       qos: null,
+      counted: counted[data.status.peer_id],
     };
   });
-  const counted = Object.assign({}, ...Object.values(data.members).map((m) => m.availability || {}));
   const remote = data.flock.known_peers.map((n) => ({
     kind: n.service_type,
     network: n.network_id,
     owner: n.user_fingerprint,
     name: who[n.user_fingerprint] || n.user_alias || short(n.user_fingerprint),
     mine: n.user_fingerprint === me,
+    here: false,
     peer: n.peer_id,
     paused: Boolean(n.metadata.paused),
     evicting: Boolean(n.metadata.evicting),
@@ -191,7 +250,7 @@ function verification(node, data) {
   }
   if (node.evicting) return ["bad", "Leaving the network"];
   if (node.paused) return ["wait", "In maintenance"];
-  if (node.mine && node.peer === data.status.peer_id) {
+  if (node.here) {
     const c = data.storage.credits.find((c) => c.network_id === node.network) || {};
     if (!c.credit_bytes) return ["wait", "Waiting for the network to verify it"];
     return ["ok", `All your Pouches: ${bytes(c.credit_bytes)} verified · quota ${bytes(c.quota_verified_bytes)}`];
@@ -207,92 +266,18 @@ function verification(node, data) {
   return ["bad", detail];
 }
 
-function renderSummary(data) {
-  const credits = data.storage.credits.filter((c) => inNetwork(c.network_id));
-  const offered = credits.reduce((a, c) => a + c.offered_bytes, 0);
-  const quota = credits.reduce((a, c) => a + c.quota_bytes, 0);
-  const verified = credits.reduce((a, c) => a + c.quota_verified_bytes, 0);
-  const verifiedShown = Math.min(verified, quota);
-  const used = Math.min(verifiedShown, credits.reduce((a, c) => a + c.quota_used_bytes, 0));
-  const free = Math.max(0, verifiedShown - used);
-  const pending = Math.max(0, quota - verifiedShown);
-  const lost = Math.max(0, offered - quota);
-  const rated = credits.filter((c) => c.rate);
-  const rates = [...new Set(rated.map((c) => c.rate.join("/")))];
-  const mine = data.storage.pouches.filter((p) => inNetwork(p.network_id));
-  const local = mine.reduce((a, p) => a + p.quota_bytes, 0);
-  const data_ = mine.reduce((a, p) => a + p.fragment_bytes, 0);
-  const filler = mine.reduce((a, p) => a + p.filler_bytes, 0);
-  const filled = data_ + filler;
-  const files = data.files.files.filter((f) => f.mine && inNetwork(f.network_id));
-  const fileBytes = files.reduce((a, f) => a + f.size_bytes, 0);
-  const all = nodes(data);
-  const count = (kind) => all.filter((n) => n.kind === kind).length;
-  const survive = rated
-    .map((c) => {
-      const spare = c.rate[1] - c.rate[0];
-      const text = spare === 1 ? "1 Pouch" : `${spare} Pouches`;
-      return `${rated.length > 1 ? esc(c.network_id) + ": " : ""}they survive ${text} going offline (k/n ${c.rate.join("/")})`;
-    })
-    .join("<br>");
-
-  const quotaCard = !offered
-    ? `<div class="big">—</div>${bar(1, [])}<div class="sub">Offer space with <b>＋ Service</b> to get a quota.</div>`
-    : !rates.length
-      ? `<div class="big">—</div>${bar(offered, [[offered, "pending"]])}<div class="sub">Waiting for enough Pouches to set k/n.</div>`
-      : `<div class="big">${bytes(free)} <small>free</small></div>
-         ${bar(offered, [[used, "used"], [free, "left"], [pending, "pending"], [lost, "lost"]])}
-         ${legend([
-           ["used", `used ${bytes(used)}`],
-           ["left", `free ${bytes(free)}`],
-           ["pending", `not verified yet ${bytes(pending)}`],
-           ["lost", `lost to redundancy ${bytes(lost)} (${pct(lost, offered)}%)`],
-         ])}
-         <div class="sub">Quota ${bytes(quota)} of the ${bytes(offered)} you offer · k/n ${rates.join(", ")}</div>`;
-
-  $("summary").innerHTML = `
-    <div class="card">
-      <h3>Your quota</h3>
-      ${quotaCard}
-    </div>
-    <div class="card">
-      <h3>Your Pouch setup</h3>
-      <div class="big">${mine.length ? pct(filled, local) + "%" : "—"}</div>
-      ${bar(local, [[data_, "data"], [filler, "filler"]])}
-      ${mine.length ? legend([["data", `files ${bytes(data_)}`], ["filler", `filler ${bytes(filler)}`]]) : ""}
-      <div class="sub">${mine.length ? `${bytes(filled)} of the ${bytes(local)} this node offers, challenged by the network` : "No Pouch on this node yet."}</div>
-    </div>
-    <div class="card">
-      <h3>Your files</h3>
-      <div class="big">${files.length}</div>
-      <div class="sub">${bytes(fileBytes)} stored${survive ? "<br>" + survive : ""}</div>
-    </div>
-    <div class="card">
-      <h3>Nodes</h3>
-      <div class="big">${all.length}</div>
-      <div class="sub">${plural(count("pouch"), "Pouch", "Pouches")} · ${plural(count("bill"), "Bill", "Bills")} · ${plural(count("post"), "Roost", "Roosts")}</div>
-    </div>`;
-}
-
-function renderNodes(data) {
-  const list = nodes(data)
-    .filter((n) => state.kind === "all" || n.kind === state.kind)
-    .sort((a, b) => Number(b.mine) - Number(a.mine) || a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name));
-  if (!list.length) {
-    $("nodes").innerHTML = `<div class="empty">No nodes here yet.</div>`;
-    return;
-  }
-  $("nodes").innerHTML = list
+function nodeCards(list, data) {
+  if (!list.length) return `<div class="empty">No nodes here yet.</div>`;
+  return list
     .map((n) => {
       const [cls, text] = verification(n, data);
-      const label = n.kind === "post" ? "roost" : n.kind;
       const setup =
         n.kind === "pouch"
           ? `${bar(n.quota, [[n.data, "data"], [Math.max(0, n.stored - n.data), "filler"]])}
              <div class="meta">${n.tier ? esc(n.tier) + " · " : ""}setup ${pct(n.stored, n.quota)}% — ${bytes(n.stored)} of ${bytes(n.quota)}</div>`
           : "";
       return `<div class="node ${n.mine ? "mine" : ""}">
-        <div class="node-top"><span class="name">${esc(n.name)}</span>${n.mine ? '<span class="you">you</span>' : ""}<span class="kind">${label}</span></div>
+        <div class="node-top"><span class="name">${esc(n.name)}</span>${n.here ? '<span class="you">this node</span>' : n.mine ? '<span class="you">you</span>' : ""}<span class="kind">${esc(n.kind)}</span></div>
         <div class="meta">${esc(n.network)} · <code>${esc(short(n.peer))}</code></div>
         ${setup}
         <div class="state ${cls}">${esc(text)}</div>
@@ -301,11 +286,60 @@ function renderNodes(data) {
     .join("");
 }
 
-function renderFiles(data) {
+function quota(data) {
+  const credits = data.storage.credits.filter((c) => inNetwork(c.network_id));
+  const offered = credits.reduce((a, c) => a + c.offered_bytes, 0);
+  const total = credits.reduce((a, c) => a + c.quota_bytes, 0);
+  const verified = Math.min(total, credits.reduce((a, c) => a + c.quota_verified_bytes, 0));
+  const used = Math.min(verified, credits.reduce((a, c) => a + c.quota_used_bytes, 0));
+  const rates = [...new Set(credits.filter((c) => c.rate).map((c) => c.rate.join("/")))];
+  return {
+    offered,
+    total,
+    used,
+    free: Math.max(0, verified - used),
+    pending: Math.max(0, total - verified),
+    lost: Math.max(0, offered - total),
+    rates,
+  };
+}
+
+/* ---------- Fish ---------- */
+
+function renderFish(data) {
+  const network = currentNetwork();
+  const folders = data.storage.folders.filter((f) => !network || f.network_id === network);
+  if (state.folder && !folders.some((f) => f.tier === state.folder)) state.folder = "";
+  const all = `<button class="folder ${state.folder ? "" : "selected"}" data-folder="">
+      <strong>📂 All folders</strong>
+      <span>${plural(data.files.files.filter((f) => inNetwork(f.network_id)).length, "file", "files")}</span>
+    </button>`;
+  $("folders").innerHTML =
+    all +
+    folders
+      .map(
+        (f) => `<button class="folder ${f.active ? "" : "waiting"} ${state.folder === f.tier ? "selected" : ""}" data-folder="${esc(f.tier)}">
+          <strong>📁 ${esc(f.tier)}${network ? "" : ` <small>${esc(f.network_id)}</small>`}</strong>
+          <span>${plural(f.users, "user", "users")} · ${plural(f.pouches, "Pouch", "Pouches")} · ${bytes(f.free_bytes)} free</span>
+          <span>${f.active ? `k/n ${f.k}/${f.n} · recovery ${(f.pe * 100).toFixed(2)}%` : "local only until 3 users have a Pouch here"}</span>
+        </button>`,
+      )
+      .join("");
+
+  const q = quota(data);
+  $("quota-line").innerHTML = q.rates.length ? `quota <b>${bytes(q.free)}</b> free of ${bytes(q.total)}` : "";
+  const target = state.folder || "T1";
+  $("files-title").textContent = state.folder ? `Folder ${state.folder}` : "All files";
+  $("drop-hint").textContent = network
+    ? `Uploads go to folder ${target} of ${network}. They are compressed and encrypted on this device, split and spread across its Pouches.`
+    : "Pick a network at the top to upload.";
+
   const who = names(data);
-  const files = data.files.files.filter((f) => inNetwork(f.network_id)).sort((a, b) => b.uploaded_at - a.uploaded_at);
+  const files = data.files.files
+    .filter((f) => inNetwork(f.network_id) && (!state.folder || f.tier === state.folder))
+    .sort((a, b) => b.uploaded_at - a.uploaded_at);
   if (!files.length) {
-    $("files").innerHTML = `<div class="empty">No files yet. Drop one above.</div>`;
+    $("files").innerHTML = `<div class="empty">No files here yet. Drop one above.</div>`;
     return;
   }
   $("files").innerHTML = `<table>
@@ -313,7 +347,7 @@ function renderFiles(data) {
     <tbody>${files
       .map(
         (f) => `<tr>
-          <td class="fname">${esc(f.file_name)}<small>${esc(f.network_id)}${f.tier ? ` · 📁 ${esc(f.tier)}${f.local ? " (local only)" : ""}` : ""} · ${f.chunks} chunk${f.chunks === 1 ? "" : "s"}${f.mine && f.shared_with ? ` · shared with ${f.shared_with}` : ""}</small></td>
+          <td class="fname">${esc(f.file_name)}<small>${esc(f.network_id)}${f.tier ? ` · 📁 ${esc(f.tier)}${f.local ? " (local only)" : ""}` : ""} · ${plural(f.chunks, "chunk", "chunks")}${f.mine && f.shared_with ? ` · shared with ${f.shared_with}` : ""}</small></td>
           <td>${bytes(f.size_bytes)}</td>
           <td>${f.mine ? '<span class="owner-you">you</span>' : esc(who[f.owner] || short(f.owner))}</td>
           <td>${new Date(f.uploaded_at * 1000).toLocaleString()}</td>
@@ -327,26 +361,120 @@ function renderFiles(data) {
       .join("")}</tbody></table>`;
 }
 
-function renderNetwork(data) {
-  const shown = Object.entries(data.members).filter(([network]) => inNetwork(network));
-  if (!shown.length) {
-    $("network-info").innerHTML = `<div class="empty">You are in no network yet.</div>`;
+/* ---------- Flock ---------- */
+
+function networkAvailability(data) {
+  const values = Object.entries(data.members)
+    .filter(([network]) => inNetwork(network))
+    .flatMap(([, m]) => Object.values(m.availability || {}));
+  return values.length ? values.reduce((a, v) => a + v, 0) / values.length : null;
+}
+
+function sample(data) {
+  const online = nodes(data).filter((n) => !n.paused && !n.evicting).length;
+  state.history.push({ at: Date.now(), online, availability: networkAvailability(data) });
+  if (state.history.length > HISTORY) state.history.shift();
+}
+
+function lineChart(el, points, format, max) {
+  const values = points.map((p) => p.value).filter((v) => v !== null);
+  if (values.length < 2) {
+    el.innerHTML = `<div class="chart-value">${values.length ? format(values[0]) : "—"}</div><div class="empty">Collecting live data…</div>`;
     return;
   }
-  $("network-info").innerHTML = shown
+  const w = 600;
+  const h = 180;
+  const pad = { l: 40, r: 10, t: 10, b: 22 };
+  const top = max ?? Math.max(1, ...values) * 1.15;
+  const x = (i) => pad.l + (i / (points.length - 1)) * (w - pad.l - pad.r);
+  const y = (v) => pad.t + (1 - v / top) * (h - pad.t - pad.b);
+  const kept = points.map((p, i) => [i, p.value]).filter(([, v]) => v !== null);
+  const path = kept.map(([i, v], n) => `${n ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join("");
+  const area = `${path}L${x(kept[kept.length - 1][0]).toFixed(1)},${y(0)}L${x(kept[0][0]).toFixed(1)},${y(0)}Z`;
+  const ticks = [0, top / 2, top];
+  const last = kept[kept.length - 1];
+  el.innerHTML = `<div class="chart-value">${format(last[1])} <small>now</small></div>
+    <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="${esc(el.dataset.label || "")}">
+      ${ticks.map((t) => `<line class="grid" x1="${pad.l}" x2="${w - pad.r}" y1="${y(t)}" y2="${y(t)}"/><text class="tick" x="${pad.l - 6}" y="${y(t) + 4}" text-anchor="end">${format(t)}</text>`).join("")}
+      <line class="axis" x1="${pad.l}" x2="${w - pad.r}" y1="${y(0)}" y2="${y(0)}"/>
+      <path class="area" d="${area}"/>
+      <path class="line" d="${path}"/>
+      <circle class="dot" cx="${x(last[0])}" cy="${y(last[1])}" r="4"/>
+      <line class="cross" id="${el.id}-cross" y1="${pad.t}" y2="${y(0)}" visibility="hidden"/>
+      <rect x="${pad.l}" y="0" width="${w - pad.l - pad.r}" height="${h}" fill="transparent" data-hover="${el.id}"/>
+    </svg>`;
+  const svg = el.querySelector("svg");
+  const cross = el.querySelector(".cross");
+  svg.onmousemove = (e) => {
+    const box = svg.getBoundingClientRect();
+    const ratio = ((e.clientX - box.left) / box.width) * w;
+    const i = Math.round(((ratio - pad.l) / (w - pad.l - pad.r)) * (points.length - 1));
+    const p = points[Math.max(0, Math.min(points.length - 1, i))];
+    if (!p || p.value === null) return;
+    cross.setAttribute("x1", x(points.indexOf(p)));
+    cross.setAttribute("x2", x(points.indexOf(p)));
+    cross.setAttribute("visibility", "visible");
+    showTip(e, `${format(p.value)}<br><small>${new Date(p.at).toLocaleTimeString()}</small>`);
+  };
+  svg.onmouseleave = () => {
+    cross.setAttribute("visibility", "hidden");
+    hideTip();
+  };
+}
+
+function showTip(e, html) {
+  const tip = $("tooltip");
+  tip.innerHTML = html;
+  tip.hidden = false;
+  tip.style.left = Math.min(window.innerWidth - 160, e.clientX + 12) + "px";
+  tip.style.top = e.clientY + 12 + "px";
+}
+
+function hideTip() {
+  $("tooltip").hidden = true;
+}
+
+function memberBars(data) {
+  const rows = Object.entries(data.members)
+    .filter(([network]) => inNetwork(network))
+    .flatMap(([network, m]) => m.members.map((u) => ({ ...u, network })));
+  if (!rows.length) return `<div class="empty">No members yet.</div>`;
+  const top = Math.max(1, ...rows.flatMap((u) => [u.credit_bytes, u.used_bytes]));
+  const width = (v) => `${Math.max(0.5, (v / top) * 85)}%`;
+  return `${legend([
+    ["hosts", "hosts (verified by the others)"],
+    ["stores", "stores on the others"],
+  ])}<div class="hbars" style="margin-top:12px">${rows
+    .sort((a, b) => b.credit_bytes - a.credit_bytes)
+    .map(
+      (u) => `<div class="hbar">
+        <span class="who" title="${esc(u.fingerprint)}">${esc(u.name || short(u.fingerprint))}${state.network ? "" : ` <small>${esc(u.network)}</small>`}</span>
+        <span class="tracks">
+          <span class="track"><span class="fill hosts" style="width:${width(u.credit_bytes)}"></span>${bytes(u.credit_bytes)}</span>
+          <span class="track"><span class="fill stores" style="width:${width(u.used_bytes)}"></span>${bytes(u.used_bytes)}</span>
+        </span>
+      </div>`,
+    )
+    .join("")}</div>`;
+}
+
+function membersTable(data) {
+  const shown = Object.entries(data.members).filter(([network]) => inNetwork(network));
+  if (!shown.length) return `<div class="empty">You are in no network yet.</div>`;
+  return shown
     .map(([network, m]) => {
       const p = m.params;
       const params = p
-        ? `<div class="params">target recovery <b>${(p.ph_ppm / 1e4).toFixed(2)}%</b> · decay <b>${(p.decay_ppm / 1e6).toFixed(2)}</b> · bets last <b>${plural(p.horizon_epochs, "epoch", "epochs")}</b> · a silent device counts for <b>${plural(p.grace_epochs, "epoch", "epochs")}</b></div>`
+        ? `<div class="params">target recovery <b>${(p.ph_ppm / 1e4).toFixed(2)}%</b> · trust decay <b>${(p.decay_ppm / 1e6).toFixed(2)}</b> · bets last <b>${plural(p.horizon_epochs, "epoch", "epochs")}</b> · a silent device counts for <b>${plural(p.grace_epochs, "epoch", "epochs")}</b></div>`
         : "";
       const rows = m.members
         .map(
-          (u) => `<tr class="${u.fingerprint === m.me ? "me-row" : ""}">
-            <td class="fname">${esc(u.name || short(u.fingerprint))}${u.fingerprint === m.me ? ' <span class="owner-you">you</span>' : ""}<small><code>${esc(short(u.fingerprint))}</code>${u.expel_approvals ? ` · expulsion: ${u.expel_approvals} approval(s)` : ""}</small></td>
+          (u) => `<tr>
+            <td class="fname">${esc(u.name || short(u.fingerprint))}${u.fingerprint === m.me ? ' <span class="owner-you">you</span>' : ""}<small><code>${esc(short(u.fingerprint))}</code> · ${plural(u.devices, "device", "devices")}${u.expel_approvals ? ` · expulsion: ${u.expel_approvals} approval(s)` : ""}</small></td>
             <td>${esc(u.tier)} · ${u.weight}</td>
             <td>${bytes(u.credit_bytes)}</td>
             <td>${bytes(u.used_bytes)}</td>
-            <td class="${u.trust > 0 ? "up" : u.trust < 0 ? "down" : ""}">${u.trust >= 0 ? "+" : ""}${u.trust.toFixed(2)}${u.open_bets || u.sponsoring ? ` <small>${u.locked_trust.toFixed(2)} locked · ${plural(u.open_bets, "open bet", "open bets")} · ${plural(u.sponsoring, "invitation", "invitations")}</small>` : ""}</td>
+            <td class="${u.trust > 0 ? "up" : u.trust < 0 ? "down" : ""}">${u.trust >= 0 ? "+" : ""}${u.trust.toFixed(2)}${u.open_bets || u.sponsoring ? ` <small>${u.locked_trust.toFixed(2)} locked · ${plural(u.open_bets, "bet", "bets")} · ${plural(u.sponsoring, "invitation", "invitations")}</small>` : ""}</td>
           </tr>`,
         )
         .join("");
@@ -362,13 +490,290 @@ function renderNetwork(data) {
     .join("");
 }
 
-function renderHeader(data) {
+function renderFlock(data) {
+  const all = nodes(data);
+  const count = (kind) => all.filter((n) => n.kind === kind).length;
+  const members = Object.entries(data.members)
+    .filter(([network]) => inNetwork(network))
+    .reduce((a, [, m]) => a + m.members.length, 0);
+  const capacity = all.filter((n) => n.kind === "pouch").reduce((a, n) => a + n.quota, 0);
+  const stored = all.filter((n) => n.kind === "pouch").reduce((a, n) => a + n.stored, 0);
+  const availability = networkAvailability(data);
+  const ledgers = Object.entries(data.members).filter(([network]) => inNetwork(network));
+  $("flock-kpis").innerHTML = [
+    card("Members", members, `<div class="sub">${plural(ledgers.length, "network", "networks")}</div>`),
+    card("Nodes", all.length, `<div class="sub">${plural(count("pouch"), "Pouch", "Pouches")} · ${plural(count("bill"), "Bill", "Bills")} · ${plural(count("post"), "Post", "Posts")}</div>`),
+    card("Space offered", bytes(capacity), `${bar(capacity, [[stored, "data"]])}<div class="sub">${bytes(stored)} filled and challenged</div>`),
+    card("Availability", availability === null ? "—" : (availability * 100).toFixed(1) + "%", `<div class="sub">average the network counts for its devices</div>`),
+  ].join("");
+  lineChart(
+    $("chart-online"),
+    state.history.map((p) => ({ at: p.at, value: p.online })),
+    (v) => String(Math.round(v)),
+  );
+  lineChart(
+    $("chart-availability"),
+    state.history.map((p) => ({ at: p.at, value: p.availability })),
+    (v) => (v * 100).toFixed(1) + "%",
+    1,
+  );
+  $("chart-members").innerHTML = memberBars(data);
+  $("network-info").innerHTML = membersTable(data);
+  const list = all
+    .filter((n) => state.kind === "all" || n.kind === state.kind)
+    .sort((a, b) => Number(b.mine) - Number(a.mine) || a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name));
+  $("nodes").innerHTML = nodeCards(list, data);
+}
+
+/* ---------- Nest ---------- */
+
+function renderNest(data) {
+  const q = quota(data);
+  const quotaCard = !q.offered
+    ? card("Your quota", "—", `<div class="sub">Start a Pouch below to get a quota.</div>`)
+    : !q.rates.length
+      ? card("Your quota", "—", `${bar(q.offered, [[q.offered, "pending"]])}<div class="sub">Waiting for enough Pouches to set k/n.</div>`)
+      : card(
+          "Your quota",
+          `${bytes(q.free)} <small>free</small>`,
+          `${bar(q.offered, [[q.used, "used"], [q.free, "left"], [q.pending, "pending"], [q.lost, "lost"]])}
+           ${legend([
+             ["used", `used ${bytes(q.used)}`],
+             ["left", `free ${bytes(q.free)}`],
+             ["pending", `not verified yet ${bytes(q.pending)}`],
+             ["lost", `redundancy ${bytes(q.lost)} (${pct(q.lost, q.offered)}%)`],
+           ])}
+           <div class="sub">Quota ${bytes(q.total)} of the ${bytes(q.offered)} you offer · k/n ${q.rates.join(", ")}</div>`,
+        );
+  const mine = data.files.files.filter((f) => f.mine && inNetwork(f.network_id));
+  const local = mine.filter((f) => f.local).length;
+  const shared = mine.filter((f) => f.shared_with).length;
+  const own = nodes(data).filter((n) => n.mine);
+  const devices = new Set(own.map((n) => n.peer)).size;
+  $("nest-cards").innerHTML = [
+    quotaCard,
+    card("Your files", mine.length, `<div class="sub">${bytes(mine.reduce((a, f) => a + f.size_bytes, 0))} · ${plural(shared, "shared", "shared")}${local ? ` · ${local} local only` : ""}</div>`),
+    card("Your devices", devices, `<div class="sub">${plural(own.length, "service", "services")} running across them</div>`),
+  ].join("");
+
+  const me = data.status.fingerprint;
+  const rows = Object.entries(data.members)
+    .filter(([network]) => inNetwork(network))
+    .map(([network, m]) => [network, m.members.find((u) => u.fingerprint === me)])
+    .filter(([, u]) => u);
+  $("nest-reputation").innerHTML = rows.length
+    ? `<table><thead><tr><th>Network</th><th>Tier · weight</th><th>Hosts</th><th>Stores</th><th>Trust</th></tr></thead><tbody>${rows
+        .map(
+          ([network, u]) => `<tr>
+            <td class="fname">${esc(network)}<small>member since ${new Date(u.joined_at * 1000).toLocaleDateString()}</small></td>
+            <td>${esc(u.tier)} · ${u.weight}</td>
+            <td>${bytes(u.credit_bytes)}</td>
+            <td>${bytes(u.used_bytes)}</td>
+            <td class="${u.trust > 0 ? "up" : u.trust < 0 ? "down" : ""}">${u.trust >= 0 ? "+" : ""}${u.trust.toFixed(2)} <small>${u.locked_trust.toFixed(2)} locked · ${plural(u.open_bets, "bet", "bets")} · ${plural(u.sponsoring, "invitation", "invitations")}</small></td>
+          </tr>`,
+        )
+        .join("")}</tbody></table>`
+    : `<div class="empty">You are in no network yet.</div>`;
+  $("nest-nodes").innerHTML = nodeCards(own, data);
+  renderHatch(data);
+}
+
+const TIERS = [
+  ["T1", "10 GiB"],
+  ["T2", "100 GiB"],
+  ["T3", "500 GiB"],
+  ["T4", "1 TiB"],
+  ["T5", "5 TiB"],
+];
+
+const SIZES = [
+  ["", "Offer the whole tier"],
+  [String(512 * MIB), "Offer 512 MiB"],
+  [String(1024 * MIB), "Offer 1 GiB"],
+  [String(2048 * MIB), "Offer 2 GiB"],
+  [String(5120 * MIB), "Offer 5 GiB"],
+];
+
+function renderHatch(data) {
+  $("hatch-panel").hidden = Boolean(native);
+  const network = currentNetwork();
+  if (!network) {
+    $("hatch").innerHTML = `<div class="empty">Pick a network at the top first.</div>`;
+    return;
+  }
+  const running = (kind) => data.status.local_services.some((s) => s.service_type === kind && s.network_id === network);
+  const wanted = `${network}|${running("pouch")}|${running("bill")}`;
+  if ($("hatch").dataset.shown === wanted) return;
+  $("hatch").dataset.shown = wanted;
+  const pouch = running("pouch")
+    ? `<div class="option"><strong>Pouch</strong><span class="running">Running on this node</span></div>`
+    : `<div class="option"><strong>Pouch</strong><p>Offer disk space to ${esc(network)}. It is filled and challenged before it counts as credit.</p>
+        <div class="row"><select id="tier">${TIERS.map(([t, size]) => `<option value="${t}">${t} · ${size}</option>`).join("")}</select></div>
+        <div class="row"><select id="size">${SIZES.map(([b, label]) => `<option value="${b}">${label}</option>`).join("")}</select>
+        <button class="button accent small" data-hatch="pouch">Start</button></div></div>`;
+  const bill = running("bill")
+    ? `<div class="option"><strong>Bill</strong><span class="running">Running on this node</span></div>`
+    : `<div class="option"><strong>Bill</strong><p>Your access point to the files of ${esc(network)}.</p>
+        <div class="row"><button class="button accent small" data-hatch="bill">Start</button></div></div>`;
+  $("hatch").innerHTML = `<div class="hatch-options">${pouch}${bill}</div>`;
+}
+
+async function hatch(kind) {
+  const network = currentNetwork();
+  const metadata = {};
+  if (kind === "pouch") {
+    metadata.tier = $("tier").value;
+    if ($("size").value) metadata.size_bytes = Number($("size").value);
+  }
+  try {
+    await send("/services", "POST", { service_type: kind, network_id: network, metadata });
+    toast(`${kind === "pouch" ? "Pouch" : "Bill"} started on ${network}`, "ok");
+    $("hatch").dataset.shown = "";
+    refresh();
+  } catch (e) {
+    toast(`Cannot start the ${kind}: ${e.message}`, "error");
+  }
+}
+
+/* ---------- Roost ---------- */
+
+function renderRoost(data) {
   const s = data.status;
-  const who = names(data);
-  $("me").innerHTML = `<strong>${esc(who[s.fingerprint] || s.alias || "you")}</strong><br><code>${esc(s.fingerprint)}</code>`;
+  const services = s.local_services.filter((svc) => inNetwork(svc.network_id));
+  const oldest = s.local_services.reduce((a, svc) => Math.min(a, Date.parse(svc.started_at) / 1000), Infinity);
+  const qos = s.network_qos;
+  $("roost-cards").innerHTML = [
+    card("This node", esc(s.alias || myName(data)), `<div class="sub"><code>${esc(short(s.peer_id))}</code> · version ${esc(s.version)}</div>`),
+    card("Services", services.length, `<div class="sub">${Number.isFinite(oldest) ? "up since " + ago(oldest) : "none running"}</div>`),
+    card("Peers", s.known_peers, `<div class="sub">${qos ? `${plural(qos.observed_peers, "peer", "peers")} observed · ${(qos.avg_availability * 100).toFixed(1)}% available on average, as seen from here` : "none observed yet"}</div>`),
+  ].join("");
+
+  const ledgers = Object.entries(data.members).filter(([network]) => inNetwork(network));
+  $("roost-sync").innerHTML = ledgers.length
+    ? `<table><thead><tr><th>Network</th><th>Ledger height</th><th>Last block</th><th>Pending ops</th></tr></thead><tbody>${ledgers
+        .map(
+          ([network, m]) => `<tr>
+            <td class="fname">${esc(network)}<small>epoch ${m.epoch}</small></td>
+            <td>${m.height}</td>
+            <td>${m.time ? ago(m.time) : "—"}</td>
+            <td>${m.pending_ops ? `<span class="state wait">${m.pending_ops} waiting for a block</span>` : '<span class="state ok">in sync</span>'}</td>
+          </tr>`,
+        )
+        .join("")}</tbody></table>`
+    : `<div class="empty">You are in no network yet.</div>`;
+
+  $("roost-services").innerHTML = services.length
+    ? services
+        .map((svc) => {
+          const paused = svc.status !== "running";
+          const stat = data.storage.pouches.find((p) => p.service_id === svc.id);
+          const detail = stat
+            ? `${esc(stat.tier)} · ${bytes(stat.fragment_bytes)} of files and ${bytes(stat.filler_bytes)} of filler in ${bytes(stat.quota_bytes)}`
+            : `started ${ago(Date.parse(svc.started_at) / 1000)}`;
+          return `<div class="service">
+            <span class="what">${esc(svc.service_type)} on ${esc(svc.network_id)}<small>${detail}</small><span class="state ${paused ? "wait" : "ok"}">${paused ? "in maintenance" : "running"}</span></span>
+            <span class="row">
+              ${paused ? `<button class="button small" data-resume="${esc(svc.id)}">Resume</button>` : `<button class="button small" data-pause="${esc(svc.id)}">Maintenance</button>`}
+              <button class="button small danger" data-stop="${esc(svc.id)}">Stop</button>
+              ${svc.service_type === "pouch" ? `<button class="button small danger" data-evict="${esc(svc.id)}">Evict</button>` : ""}
+            </span>
+          </div>`;
+        })
+        .join("")
+    : `<div class="empty">No service runs on this node${state.network ? " in this network" : ""}. Start one from Nest.</div>`;
+
+  $("roost-addresses").innerHTML = s.addresses.length
+    ? `<ul class="addresses">${s.addresses.map((a) => `<li><code>${esc(a)}</code></li>`).join("")}</ul>`
+    : `<div class="empty">This node only dials out.</div>`;
+  $("leave-row").innerHTML = s.networks
+    .filter((n) => inNetwork(n))
+    .map((n) => `<button class="button danger" data-leave="${esc(n)}">Leave ${esc(n)}</button>`)
+    .join("");
+}
+
+async function serviceAction(button) {
+  const { pause, resume, stop, evict } = button.dataset;
+  try {
+    if (pause) {
+      const eta = prompt("Maintenance for how many minutes?", "30");
+      if (eta === null) return;
+      await send(`/services/${encodeURIComponent(pause)}/pause`, "POST", { eta_minutes: Number(eta) || 30 });
+      toast("In maintenance: the others know you will be back", "ok");
+    } else if (resume) {
+      await send(`/services/${encodeURIComponent(resume)}/resume`, "POST");
+      toast("Back online", "ok");
+    } else if (stop) {
+      if (!confirm("Stop this service?")) return;
+      await send(`/services/${encodeURIComponent(stop)}`, "DELETE");
+      toast("Service stopped", "ok");
+    } else if (evict) {
+      if (!confirm("Evict this Pouch? Its fragments are deleted and the network repairs what it held.")) return;
+      await send(`/services/${encodeURIComponent(evict)}?evict=true`, "DELETE");
+      toast("Pouch evicted", "ok");
+    }
+    refresh();
+  } catch (e) {
+    toast(e.message, "error");
+  }
+}
+
+async function leave(network) {
+  if (!confirm(`Leave ${network}? Your Pouches are evicted and your files there are deleted.`)) return;
+  try {
+    await send("/networks/leave", "POST", { network_id: network, force: true });
+    toast(`You left ${network}`, "ok");
+    refresh();
+  } catch (e) {
+    toast(e.message, "error");
+  }
+}
+
+/* ---------- You ---------- */
+
+function initials(name) {
+  return (
+    String(name)
+      .split(/[\s._-]+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((w) => w[0].toUpperCase())
+      .join("") || "?"
+  );
+}
+
+function renderMe(data) {
+  const name = myName(data);
+  $("avatar").textContent = initials(name);
+  $("me-name").textContent = name;
+  $("me-fp").textContent = short(data.status.fingerprint);
+}
+
+function renderProfile(data) {
+  const s = data.status;
+  const name = myName(data);
+  const rows = Object.entries(data.members)
+    .map(([network, m]) => [network, m.members.find((u) => u.fingerprint === s.fingerprint)])
+    .filter(([, u]) => u);
+  $("profile").innerHTML = `
+    <span class="avatar big">${esc(initials(name))}</span>
+    <span><h2>${esc(name)}</h2><code>${esc(s.fingerprint)}</code></span>
+    <div class="networks files">${
+      rows.length
+        ? `<table><thead><tr><th>Network</th><th>Tier</th><th>Trust</th><th>Devices</th></tr></thead><tbody>${rows
+            .map(([network, u]) => `<tr><td class="fname">${esc(network)}</td><td>${esc(u.tier)}</td><td>${u.trust >= 0 ? "+" : ""}${u.trust.toFixed(2)}</td><td>${u.devices}</td></tr>`)
+            .join("")}</tbody></table>`
+        : `<div class="empty">You are in no network yet.</div>`
+    }</div>`;
+  $("refresh-rate").value = String(state.rate);
+  $("sign-out").hidden = Boolean(native);
+}
+
+/* ---------- shell ---------- */
+
+function renderNetworkPicker(data) {
   const select = $("network");
-  const options = ["", ...s.networks];
-  if (state.network && !s.networks.includes(state.network)) state.network = "";
+  const options = ["", ...data.status.networks];
+  if (state.network && !data.status.networks.includes(state.network)) state.network = "";
   const wanted = options.map((n) => `<option value="${esc(n)}">${n ? esc(n) : "All networks"}</option>`).join("");
   if (select.dataset.options !== wanted) {
     select.innerHTML = wanted;
@@ -377,19 +782,28 @@ function renderHeader(data) {
   select.value = state.network;
 }
 
+function showView(view) {
+  state.view = view;
+  remember(VIEW_KEY, view);
+  for (const id of Object.keys(VIEWS)) $("view-" + id).hidden = id !== view;
+  for (const b of document.querySelectorAll(".nav")) b.classList.toggle("active", b.dataset.view === view);
+  $("view-title").textContent = VIEWS[view];
+  render();
+}
+
 function render() {
-  if (!state.data) return;
-  renderHeader(state.data);
-  renderSummary(state.data);
-  renderNodes(state.data);
-  renderNetwork(state.data);
-  renderFolders(state.data);
-  renderFiles(state.data);
+  const data = state.data;
+  if (!data) return;
+  renderNetworkPicker(data);
+  renderMe(data);
+  const renderers = { fish: renderFish, flock: renderFlock, nest: renderNest, roost: renderRoost, profile: renderProfile };
+  if (renderers[state.view]) renderers[state.view](data);
 }
 
 async function refresh() {
   try {
     state.data = await load();
+    sample(state.data);
     $("live").classList.add("ok");
     banner("");
     render();
@@ -403,64 +817,34 @@ async function refresh() {
   }
 }
 
-function uploadFolder() {
-  return $("folder").value || "T1";
+function schedule() {
+  clearInterval(state.timer);
+  state.timer = setInterval(refresh, state.rate);
 }
 
-function renderFolders(data) {
-  const network = uploadNetwork();
-  const folders = data.storage.folders.filter((f) => f.network_id === network);
-  const select = $("folder");
-  const wanted = folders.map((f) => `<option value="${esc(f.tier)}">${esc(f.tier)}${f.active ? "" : " · local only"}</option>`).join("");
-  if (select.dataset.options !== wanted) {
-    const kept = select.value;
-    select.innerHTML = wanted || '<option value="T1">T1</option>';
-    select.dataset.options = wanted;
-    if (folders.some((f) => f.tier === kept)) select.value = kept;
-  }
-  $("folders").innerHTML = folders.length
-    ? folders
-        .map(
-          (f) => `<div class="folder ${f.active ? "" : "waiting"}">
-            <strong>📁 ${esc(f.tier)}</strong>
-            <span>${plural(f.users, "user", "users")} · ${plural(f.pouches, "Pouch", "Pouches")} · ${bytes(f.free_bytes)} free</span>
-            <span>${f.active ? `k/n ${f.k}/${f.n} · recovery ${(f.pe * 100).toFixed(2)}%` : "local only: files stay on your Pouches until 3 users have a Pouch here"}</span>
-          </div>`,
-        )
-        .join("")
-    : network
-      ? ""
-      : `<div class="empty">Pick a network at the top to see its folders.</div>`;
-}
-
-function uploadNetwork() {
-  if (state.network) return state.network;
-  const networks = state.data ? state.data.status.networks : [];
-  if (networks.length === 1) return networks[0];
-  return null;
-}
+/* ---------- files ---------- */
 
 function upload(file) {
-  const network = uploadNetwork();
+  const network = currentNetwork();
   if (!network) {
     toast("Pick a network first, at the top of the page.", "error");
     return Promise.resolve();
   }
   const row = document.createElement("div");
   row.className = "upload";
-  row.innerHTML = `<span>${esc(file.name)}</span><span class="status">${bytes(file.size)}</span><div class="bar"><span class="used" style="width:0%"></span></div>`;
+  row.innerHTML = `<span>${esc(file.name)}</span><span class="status">${bytes(file.size)}</span><div class="bar"><span class="used" style="flex:0 0 0%"></span></div>`;
   $("uploads").append(row);
   const fill = row.querySelector(".bar span");
   const label = row.querySelector(".status");
   return new Promise((resolve) => {
     const xhr = new XMLHttpRequest();
-    const query = new URLSearchParams({ network, name: file.name, tier: uploadFolder() });
+    const query = new URLSearchParams({ network, name: file.name, tier: state.folder || "T1" });
     xhr.open("POST", "/files?" + query);
     xhr.setRequestHeader("Authorization", "Session " + session());
     xhr.upload.onprogress = (e) => {
       if (!e.lengthComputable) return;
-      fill.style.width = (e.loaded / e.total) * 100 + "%";
-      label.textContent = e.loaded < e.total ? `${pct(e.loaded, e.total)}%` : "Encrypting and spreading…";
+      fill.style.flexBasis = (e.loaded / e.total) * 100 + "%";
+      label.textContent = e.loaded < e.total ? `${pct(e.loaded, e.total)}%` : "Compressing, encrypting and spreading…";
     };
     xhr.onload = () => {
       let body = {};
@@ -518,11 +902,6 @@ function closePlayer() {
   $("player").hidden = true;
 }
 
-$("player-close").addEventListener("click", closePlayer);
-$("player").addEventListener("click", (e) => {
-  if (e.target === $("player")) closePlayer();
-});
-
 async function download(id, network, name) {
   if (native) {
     try {
@@ -558,99 +937,24 @@ async function remove(id, network, name) {
   }
 }
 
-const TIERS = [
-  ["T1", "10 GiB"],
-  ["T2", "100 GiB"],
-  ["T3", "500 GiB"],
-  ["T4", "1 TiB"],
-  ["T5", "5 TiB"],
-];
+/* ---------- events ---------- */
 
-const SIZES = [
-  ["", "Offer the whole tier"],
-  [String(512 * MIB), "Offer 512 MiB"],
-  [String(1024 * MIB), "Offer 1 GiB"],
-  [String(2048 * MIB), "Offer 2 GiB"],
-  [String(5120 * MIB), "Offer 5 GiB"],
-];
-
-function renderMenu() {
-  const menu = $("service-menu");
-  if (!state.data) return;
-  const network = uploadNetwork();
-  if (!network) {
-    menu.innerHTML = `<h4>Services</h4><p class="sub">Pick a network at the top first.</p>`;
-    return;
-  }
-  const running = (kind) => state.data.status.local_services.some((s) => s.service_type === kind && s.network_id === network);
-  const pouch = running("pouch")
-    ? `<div class="option"><strong>Pouch</strong><span class="running">Running on this node</span></div>`
-    : `<div class="option"><strong>Pouch</strong><p>Offer disk space to the network. It is filled and challenged before it counts as credit.</p>
-        <div class="row"><select id="tier">${TIERS.map(([t, size]) => `<option value="${t}">${t} · ${size}</option>`).join("")}</select></div>
-        <div class="row"><select id="size">${SIZES.map(([bytes, label]) => `<option value="${bytes}">${label}</option>`).join("")}</select>
-        <button class="button accent small" data-hatch="pouch">Start</button></div></div>`;
-  const bill = running("bill")
-    ? `<div class="option"><strong>Bill</strong><span class="running">Running on this node</span></div>`
-    : `<div class="option"><strong>Bill</strong><p>Your access point to the network's files.</p>
-        <div class="row"><button class="button accent small" data-hatch="bill">Start</button></div></div>`;
-  menu.innerHTML = `<h4>Services on ${esc(network)}</h4>${pouch}${bill}`;
-}
-
-async function hatch(kind) {
-  const network = uploadNetwork();
-  const metadata = {};
-  if (kind === "pouch") {
-    metadata.tier = $("tier").value;
-    if ($("size").value) metadata.size_bytes = Number($("size").value);
-  }
-  try {
-    await api("/services", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ service_type: kind, network_id: network, metadata }),
-    });
-    toast(`${kind === "pouch" ? "Pouch" : "Bill"} started on ${network}`, "ok");
-    toggleMenu(false);
-    refresh();
-  } catch (e) {
-    toast(`Cannot start the ${kind}: ${e.message}`, "error");
-  }
-}
-
-function toggleMenu(open) {
-  const menu = $("service-menu");
-  menu.hidden = !open;
-  $("service-button").setAttribute("aria-expanded", String(open));
-  if (open) renderMenu();
-}
-
-$("service-button").addEventListener("click", (e) => {
-  e.stopPropagation();
-  toggleMenu($("service-menu").hidden);
+$("sidebar").addEventListener("click", (e) => {
+  const b = e.target.closest(".nav");
+  if (b) showView(b.dataset.view);
 });
-
-$("service-menu").addEventListener("click", (e) => {
-  e.stopPropagation();
-  const b = e.target.closest("button[data-hatch]");
-  if (b) {
-    b.disabled = true;
-    hatch(b.dataset.hatch).finally(() => (b.disabled = false));
-  }
-});
-
-document.addEventListener("click", () => toggleMenu(false));
 
 $("network").addEventListener("change", (e) => {
   state.network = e.target.value;
-  localStorage.setItem(NETWORK_KEY, state.network);
+  remember(NETWORK_KEY, state.network);
+  state.folder = "";
   render();
 });
 
-$("node-tabs").addEventListener("click", (e) => {
-  const kind = e.target.dataset.kind;
-  if (!kind) return;
-  state.kind = kind;
-  for (const b of $("node-tabs").children) b.classList.toggle("active", b.dataset.kind === kind);
+$("folders").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-folder]");
+  if (!b) return;
+  state.folder = b.dataset.folder;
   render();
 });
 
@@ -662,19 +966,80 @@ $("files").addEventListener("click", (e) => {
   if (b.dataset.delete) remove(b.dataset.delete, b.dataset.network, b.dataset.name);
 });
 
-$("picker").addEventListener("click", async (e) => {
-  if (!native) return;
+$("node-tabs").addEventListener("click", (e) => {
+  const kind = e.target.dataset.kind;
+  if (!kind) return;
+  state.kind = kind;
+  for (const b of $("node-tabs").children) b.classList.toggle("active", b.dataset.kind === kind);
+  render();
+});
+
+$("hatch").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-hatch]");
+  if (!b) return;
+  b.disabled = true;
+  hatch(b.dataset.hatch).finally(() => (b.disabled = false));
+});
+
+$("roost-services").addEventListener("click", (e) => {
+  const b = e.target.closest("button");
+  if (b) serviceAction(b);
+});
+
+$("leave-row").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-leave]");
+  if (b) leave(b.dataset.leave);
+});
+
+$("invite-form").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const network = uploadNetwork();
+  const network = currentNetwork();
   if (!network) {
     toast("Pick a network first, at the top of the page.", "error");
     return;
   }
   try {
-    const stored = await native.invoke("upload_files", { network, tier: uploadFolder() });
+    const data = await send(`/networks/${encodeURIComponent(network)}/invites`, "POST", { member_key: $("invite-key").value.trim() });
+    $("invite-token").textContent = data.token;
+    $("invite-token").hidden = false;
+    toast("Token created: send it to them, they join with bp join <token>", "ok");
+  } catch (err) {
+    toast(`Cannot invite: ${err.message}`, "error");
+  }
+});
+
+$("refresh-rate").addEventListener("change", (e) => {
+  state.rate = Number(e.target.value);
+  remember(RATE_KEY, String(state.rate));
+  schedule();
+});
+
+$("sign-out").addEventListener("click", () => {
+  try {
+    localStorage.removeItem(SESSION_KEY);
+  } catch (_) {}
+  banner("Signed out. Run <code>bp dashboard</code> on this device to open a new session.");
+  clearInterval(state.timer);
+});
+
+$("player-close").addEventListener("click", closePlayer);
+$("player").addEventListener("click", (e) => {
+  if (e.target === $("player")) closePlayer();
+});
+
+$("picker").addEventListener("click", async (e) => {
+  if (!native) return;
+  e.preventDefault();
+  const network = currentNetwork();
+  if (!network) {
+    toast("Pick a network first, at the top of the page.", "error");
+    return;
+  }
+  try {
+    const stored = await native.invoke("upload_files", { network, tier: state.folder || "T1" });
     if (stored.length) toast(`Stored ${stored.join(", ")}`, "ok");
-  } catch (e) {
-    toast(`Upload failed: ${e}`, "error");
+  } catch (err) {
+    toast(`Upload failed: ${err}`, "error");
   }
   refresh();
 });
@@ -705,19 +1070,21 @@ panel.addEventListener("drop", (e) => {
   uploadAll([...e.dataTransfer.files].filter((f) => f.size > 0 || f.type));
 });
 
+/* ---------- start ---------- */
+
 function showOnly(id) {
   for (const el of ["onboarding", "unlock", "main"]) $(el).hidden = el !== id;
 }
 
 async function start() {
+  showView(state.view);
   if (!native) {
     if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
     refresh();
-    setInterval(refresh, REFRESH_MS);
+    schedule();
     return;
   }
   document.body.classList.add("native");
-  $("service-button").hidden = true;
   $("dropzone").hidden = true;
   const app = await native.invoke("app_state");
   if (!app.identity || (app.running && !app.member)) {
@@ -727,7 +1094,7 @@ async function start() {
   } else {
     showOnly("main");
     refresh();
-    setInterval(refresh, REFRESH_MS);
+    schedule();
   }
 }
 

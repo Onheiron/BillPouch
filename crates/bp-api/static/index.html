@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#1e88e5">
+<meta name="theme-color" content="#0d5aa7">
 <title>BillPouch</title>
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
@@ -11,24 +11,126 @@
 <link rel="stylesheet" href="/app.css">
 </head>
 <body>
-<header class="topbar">
-  <div class="brand">
-    <img src="/icon.svg" alt="" width="34" height="34">
-    <span>BillPouch</span>
-  </div>
-  <label class="network-pick">
-    <span>Network</span>
-    <select id="network"></select>
-  </label>
-  <div class="service-menu">
-    <button class="button accent small" id="service-button" aria-haspopup="true" aria-expanded="false">＋ Service</button>
-    <div class="menu" id="service-menu" hidden></div>
-  </div>
-  <div class="me" id="me"></div>
-  <span class="live" id="live" title="Daemon connection"></span>
-</header>
+<div class="shell" id="main">
+  <nav class="sidebar" id="sidebar">
+    <div class="brand">
+      <img src="/icon.svg" alt="" width="32" height="32">
+      <span>BillPouch</span>
+    </div>
+    <button class="nav" data-view="fish"><span class="icon">🐟</span><span class="label">Fish<small>Files and folders</small></span></button>
+    <button class="nav" data-view="flock"><span class="icon">🕊️</span><span class="label">Flock<small>The network</small></span></button>
+    <button class="nav" data-view="nest"><span class="icon">🪺</span><span class="label">Nest<small>Your nodes and services</small></span></button>
+    <button class="nav" data-view="roost"><span class="icon">🏠</span><span class="label">Roost<small>This node</small></span></button>
+    <button class="nav" data-view="gossip"><span class="icon">💬</span><span class="label">Gossip<small>Community</small></span></button>
+    <div class="spacer"></div>
+    <button class="nav me" data-view="profile">
+      <span class="avatar" id="avatar"></span>
+      <span class="label"><strong id="me-name"></strong><small id="me-fp"></small></span>
+      <span class="live" id="live" title="Daemon connection"></span>
+    </button>
+  </nav>
 
-<div class="banner" id="banner" hidden></div>
+  <div class="content">
+    <header class="topbar">
+      <h1 id="view-title"></h1>
+      <label class="network-pick"><span>Network</span><select id="network"></select></label>
+    </header>
+    <div class="banner" id="banner" hidden></div>
+
+    <section class="view" id="view-fish" hidden>
+      <div class="folders" id="folders"></div>
+      <section class="panel files-panel" id="files-panel">
+        <div class="panel-head">
+          <h2 id="files-title">Files</h2>
+          <div class="quota-line" id="quota-line"></div>
+          <label class="button accent">
+            <input type="file" id="picker" multiple hidden>
+            Upload files
+          </label>
+        </div>
+        <div class="dropzone" id="dropzone">
+          <strong>Drop files here</strong>
+          <span id="drop-hint">They are compressed and encrypted on this device, split and spread across the Pouches of the folder.</span>
+        </div>
+        <div class="uploads" id="uploads"></div>
+        <div class="files" id="files"></div>
+      </section>
+    </section>
+
+    <section class="view" id="view-flock" hidden>
+      <section class="cards" id="flock-kpis"></section>
+      <section class="charts">
+        <div class="panel chart-panel"><h2>Nodes online</h2><div class="chart" id="chart-online"></div></div>
+        <div class="panel chart-panel"><h2>Average availability</h2><div class="chart" id="chart-availability"></div></div>
+      </section>
+      <section class="panel"><div class="panel-head"><h2>What each member hosts and stores</h2></div><div id="chart-members"></div></section>
+      <section class="panel"><div class="panel-head"><h2>Members and trust</h2></div><div class="files network-info" id="network-info"></div></section>
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Nodes</h2>
+          <div class="tabs" id="node-tabs">
+            <button data-kind="all" class="active">All</button>
+            <button data-kind="pouch">Pouches</button>
+            <button data-kind="bill">Bills</button>
+            <button data-kind="post">Posts</button>
+          </div>
+        </div>
+        <div class="nodes" id="nodes"></div>
+      </section>
+      <section class="panel">
+        <div class="panel-head"><h2>Invite someone</h2></div>
+        <form class="inline-form" id="invite-form">
+          <input id="invite-key" placeholder="ssh-ed25519 AAAA… their public key" autocomplete="off" spellcheck="false">
+          <button class="button accent" type="submit">Create token</button>
+        </form>
+        <pre class="token" id="invite-token" hidden></pre>
+      </section>
+    </section>
+
+    <section class="view" id="view-nest" hidden>
+      <section class="cards" id="nest-cards"></section>
+      <section class="panel"><div class="panel-head"><h2>Your reputation</h2></div><div class="files" id="nest-reputation"></div></section>
+      <section class="panel"><div class="panel-head"><h2>Your nodes</h2></div><div class="nodes" id="nest-nodes"></div></section>
+      <section class="panel" id="hatch-panel"><div class="panel-head"><h2>Start a service on this node</h2></div><div id="hatch"></div></section>
+    </section>
+
+    <section class="view" id="view-roost" hidden>
+      <section class="cards" id="roost-cards"></section>
+      <section class="panel"><div class="panel-head"><h2>Synchronization</h2></div><div class="files" id="roost-sync"></div></section>
+      <section class="panel"><div class="panel-head"><h2>Services on this node</h2></div><div id="roost-services"></div></section>
+      <section class="panel"><div class="panel-head"><h2>Addresses</h2></div><div id="roost-addresses"></div></section>
+      <section class="panel danger-zone">
+        <div class="panel-head"><h2>Leave</h2></div>
+        <p class="sub">Leaving a network evicts this node's Pouches, stops its other services, deletes your files from it and rotates the network key without you.</p>
+        <div class="row" id="leave-row"></div>
+      </section>
+    </section>
+
+    <section class="view" id="view-gossip" hidden>
+      <section class="panel empty-view">
+        <h2>💬 Gossip</h2>
+        <p>The community of your network lives here: chat, roles and badges are coming soon.</p>
+      </section>
+    </section>
+
+    <section class="view" id="view-profile" hidden>
+      <section class="panel profile" id="profile"></section>
+      <section class="panel">
+        <div class="panel-head"><h2>Settings</h2></div>
+        <div class="settings">
+          <label>Refresh every
+            <select id="refresh-rate">
+              <option value="2000">2 seconds</option>
+              <option value="5000">5 seconds</option>
+              <option value="15000">15 seconds</option>
+            </select>
+          </label>
+          <button class="button danger" id="sign-out">Sign out of this browser</button>
+        </div>
+      </section>
+    </section>
+  </div>
+</div>
 
 <form class="onboarding" id="onboarding" hidden>
   <h2>Join your network</h2>
@@ -53,48 +155,6 @@
   <button type="submit" class="button accent">Unlock</button>
 </form>
 
-<main id="main">
-  <section class="cards" id="summary"></section>
-
-  <section class="panel">
-    <div class="panel-head">
-      <h2>Nodes</h2>
-      <div class="tabs" id="node-tabs">
-        <button data-kind="all" class="active">All</button>
-        <button data-kind="pouch">Pouches</button>
-        <button data-kind="bill">Bills</button>
-        <button data-kind="post">Roosts</button>
-      </div>
-    </div>
-    <div class="nodes" id="nodes"></div>
-  </section>
-
-  <section class="panel">
-    <div class="panel-head">
-      <h2>Members and trust</h2>
-    </div>
-    <div class="files network-info" id="network-info"></div>
-  </section>
-
-  <section class="panel files-panel" id="files-panel">
-    <div class="panel-head">
-      <h2>Files</h2>
-      <label class="folder-pick"><span>Folder</span><select id="folder"></select></label>
-      <label class="button accent">
-        <input type="file" id="picker" multiple hidden>
-        Upload files
-      </label>
-    </div>
-    <div class="folders" id="folders"></div>
-    <div class="dropzone" id="dropzone">
-      <strong>Drop files here</strong>
-      <span>They are encrypted on this device, split and spread across the Pouches of the network.</span>
-    </div>
-    <div class="uploads" id="uploads"></div>
-    <div class="files" id="files"></div>
-  </section>
-</main>
-
 <div class="player" id="player" hidden>
   <div class="player-box">
     <div class="player-head"><strong id="player-title"></strong><button class="button small" id="player-close">Close</button></div>
@@ -102,6 +162,7 @@
   </div>
 </div>
 
+<div class="tooltip" id="tooltip" hidden></div>
 <div class="toasts" id="toasts"></div>
 <script src="/app.js"></script>
 </body>
