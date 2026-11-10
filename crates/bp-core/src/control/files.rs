@@ -781,8 +781,9 @@ pub async fn get_file(
         Err(e) => return ControlResponse::err(format!("cannot write {}: {e}", partial.display())),
     };
     let mut fragments_remote = 0;
-    let mut fetched = futures::stream::iter(&manifest.chunks)
-        .map(|chunk_id: &String| fetch_chunk(state, &network_id, chunk_id, &grant))
+    let (net, grant) = (&network_id, &grant);
+    let mut fetched = futures::stream::iter(manifest.chunks.clone())
+        .map(|chunk_id| async move { fetch_chunk(state, net, &chunk_id, grant).await })
         .buffered(fetch_parallel());
     while let Some(result) = fetched.next().await {
         let result = result.and_then(|(sealed, remote)| {
