@@ -389,11 +389,9 @@ async fn run_catch_up(
                     file_id: file_id.clone(),
                     layer: placement.layer,
                 };
-                let missing: Vec<&String> = {
+                let missing: Vec<String> = {
                     let sm = sm.read().unwrap();
-                    placement
-                        .chunks
-                        .iter()
+                    crate::files::chunk_ids(file_id, placement.chunks)
                         .filter(|c| !sm.has_chunk(c))
                         .collect()
                 };
@@ -401,7 +399,7 @@ async fn run_catch_up(
                     complete.push(file_id.clone());
                 }
                 for chunk in missing {
-                    recodes.push((chunk.clone(), owner.clone(), live.clone(), placement.k));
+                    recodes.push((chunk, owner.clone(), live.clone(), placement.k));
                 }
             }
         }
@@ -653,7 +651,7 @@ fn volunteers(
                     .any(|b| b.file_id == **file_id && b.released == me)
         })
         .map(|(file_id, p)| {
-            let started = p.chunks.iter().any(|c| sm.has_chunk(c));
+            let started = crate::files::chunk_ids(file_id, p.chunks).any(|c| sm.has_chunk(&c));
             let size = p.bytes;
             let rank = blake3::hash(format!("{file_id}/{me}").as_bytes())
                 .to_hex()

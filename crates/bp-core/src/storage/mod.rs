@@ -547,7 +547,7 @@ mod tests {
             let mut sm =
                 StorageManager::init("net".into(), "svc".into(), StorageTier::T1, 1_000_000)
                     .unwrap();
-            let frags = rlnc::encode(CHUNK, 4, 6).unwrap();
+            let frags = rlnc::encode("0123456789abcdef", CHUNK, 4, 6).unwrap();
 
             sm.store_fragment(&frags[0], &owner("carlo"), &commit(&frags[0]))
                 .unwrap();
@@ -566,7 +566,7 @@ mod tests {
             let mut sm =
                 StorageManager::init("net".into(), "svc".into(), StorageTier::T1, 1_000_000)
                     .unwrap();
-            let frags = rlnc::encode(CHUNK, 2, 3).unwrap();
+            let frags = rlnc::encode("0123456789abcdef", CHUNK, 2, 3).unwrap();
             sm.store_fragment(&frags[0], &owner("carlo"), &commit(&frags[0]))
                 .unwrap();
             assert!(sm
@@ -586,7 +586,7 @@ mod tests {
             let mut sm =
                 StorageManager::init("net".into(), "svc".into(), StorageTier::T1, 1_000_000)
                     .unwrap();
-            let frags = rlnc::encode(CHUNK, 2, 2).unwrap();
+            let frags = rlnc::encode("0123456789abcdef", CHUNK, 2, 2).unwrap();
             sm.store_fragment(&frags[0], &owner("carlo"), &commit(&frags[0]))
                 .unwrap();
             sm.store_fragment(&frags[1], &owner("carlo"), &commit(&frags[1]))
@@ -609,7 +609,7 @@ mod tests {
     #[cfg(unix)]
     fn fragments_push_fillers_out_and_both_can_be_proven() {
         with_temp_home_storage(|| {
-            let frags = rlnc::encode(CHUNK, 1, 1).unwrap();
+            let frags = rlnc::encode("0123456789abcdef", CHUNK, 1, 1).unwrap();
             let size = frags[0].to_bytes().len() as u64;
             let mut sm =
                 StorageManager::init("net".into(), "svc".into(), StorageTier::T1, size + 10)
@@ -650,7 +650,7 @@ mod tests {
             let mut sm =
                 StorageManager::init("net".into(), "svc".into(), StorageTier::T1, 1_000_000)
                     .unwrap();
-            let frags = rlnc::encode(CHUNK, 2, 2).unwrap();
+            let frags = rlnc::encode("0123456789abcdef", CHUNK, 2, 2).unwrap();
             assert!(sm
                 .store_fragment(&frags[0], &owner("carlo"), &commit(&frags[1]))
                 .is_err());
@@ -666,7 +666,7 @@ mod tests {
                 StorageManager::init("net".into(), "svc".into(), StorageTier::T1, 1_000_000)
                     .unwrap();
             assert_eq!(sm.meta.tier, StorageTier::T1);
-            let frags = rlnc::encode(CHUNK, 1, 2).unwrap();
+            let frags = rlnc::encode("0123456789abcdef", CHUNK, 1, 2).unwrap();
             let mut upper = owner("carlo");
             upper.layer = StorageTier::T2;
             assert!(sm
@@ -689,7 +689,7 @@ mod tests {
         with_temp_home_storage(|| {
             let mut sm =
                 StorageManager::init("net".into(), "svc".into(), StorageTier::T1, 1).unwrap();
-            let frags = rlnc::encode(CHUNK, 4, 4).unwrap();
+            let frags = rlnc::encode("0123456789abcdef", CHUNK, 4, 4).unwrap();
             assert!(sm
                 .store_fragment(&frags[0], &owner("carlo"), &commit(&frags[0]))
                 .is_err());
@@ -702,7 +702,7 @@ mod tests {
         with_temp_home_storage(|| {
             let network_id = "net";
             let service_id = "svc";
-            let frags = rlnc::encode(CHUNK, 4, 4).unwrap();
+            let frags = rlnc::encode("0123456789abcdef", CHUNK, 4, 4).unwrap();
 
             {
                 let mut sm = StorageManager::init(

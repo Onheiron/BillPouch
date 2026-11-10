@@ -334,7 +334,7 @@ fn register_placement(
         file_id: file_id.to_string(),
         k: file.plan.k,
         layer: file.layer,
-        chunks: stored.chunks.clone(),
+        chunks: stored.chunks.len() as u64,
         bytes: stored.fragment_bytes,
         holders: file.holders.iter().cloned().collect(),
     };
@@ -361,9 +361,10 @@ async fn store_chunk(
         .find(|sm| sm.read().unwrap().meta.network_id == network_id)
         .cloned();
     let me = state.identity.peer_id.to_string();
-    let chunk_id = rlnc::chunk_hash(data);
+    let chunk_id = crate::files::chunk_id(&grant.file_id, total.chunks.len());
     let (layer, nodes, plan) = (file.layer, &file.holders, &file.plan);
-    let fragments = rlnc::encode(data, plan.k, plan.n).map_err(|e| format!("Encode error: {e}"))?;
+    let fragments =
+        rlnc::encode(&chunk_id, data, plan.k, plan.n).map_err(|e| format!("Encode error: {e}"))?;
     total.fragment_bytes += fragments.first().map_or(0, |f| f.to_bytes().len() as u64);
     let owner = crate::storage::ChunkOwner {
         owner_key: grant.owner_key.clone(),
@@ -446,7 +447,7 @@ async fn store_chunk(
         total.pe = plan.pe;
     }
     total.peers = total.peers.max(nodes.len());
-    total.chunks.push(chunk_id.clone());
+    total.chunks.push(rlnc::chunk_hash(data));
     Ok(chunk_id)
 }
 
@@ -546,6 +547,7 @@ pub async fn fetch_chunk(
     network_id: &str,
     chunk_id: &str,
     grant: &Grant,
+    expected: Option<&str>,
 ) -> Result<(Vec<u8>, usize), String> {
     let mut fragments: Vec<EncodedFragment> = Vec::new();
     for sm in state.storage_managers.read().unwrap().values() {
@@ -617,7 +619,7 @@ pub async fn fetch_chunk(
         ));
     }
     let data = rlnc::decode(&fragments).map_err(|e| format!("Decode failed: {e}"))?;
-    if rlnc::chunk_hash(&data) != chunk_id {
+    if expected.is_some_and(|hash| rlnc::chunk_hash(&data) != hash) {
         return Err(format!("chunk '{chunk_id}' decoded to different data"));
     }
     Ok((data, remote_count))
@@ -781,9 +783,12 @@ pub async fn get_file(
         Err(e) => return ControlResponse::err(format!("cannot write {}: {e}", partial.display())),
     };
     let mut fragments_remote = 0;
-    let (net, grant) = (&network_id, &grant);
-    let mut fetched = futures::stream::iter(manifest.chunks.clone())
-        .map(|chunk_id| async move { fetch_chunk(state, net, &chunk_id, grant).await })
+    let (net, grant, file) = (&network_id, &grant, &manifest.file_id);
+    let mut fetched = futures::stream::iter(manifest.chunks.clone().into_iter().enumerate())
+        .map(|(i, hash)| async move {
+            let chunk_id = crate::files::chunk_id(file, i);
+            fetch_chunk(state, net, &chunk_id, grant, Some(&hash)).await
+        })
         .buffered(fetch_parallel());
     while let Some(result) = fetched.next().await {
         let result = result.and_then(|(sealed, remote)| {
@@ -1176,8 +1181,9 @@ async fn pull_own_index(state: &DaemonState, network_id: &str, head: &Head) {
         Err(e) => return tracing::warn!("cannot sign a grant for own index: {e}"),
     };
     let mut blob = Vec::new();
-    for chunk_id in &head.chunks {
-        match fetch_chunk(state, network_id, chunk_id, &grant).await {
+    for (i, hash) in head.chunks.iter().enumerate() {
+        let chunk_id = crate::files::chunk_id(&head.file_id, i);
+        match fetch_chunk(state, network_id, &chunk_id, &grant, Some(hash)).await {
             Ok((piece, _)) => blob.extend_from_slice(&piece),
             Err(e) => {
                 return tracing::debug!(network = %network_id, "own index not reachable yet: {e}")
@@ -1352,8 +1358,8 @@ async fn spread_local_file(state: &DaemonState, network_id: &str) {
         .cloned();
     let mut total = Stored::default();
     let mut stale = Vec::new();
-    for chunk_id in &placement.chunks {
-        let sealed = match fetch_chunk(state, network_id, chunk_id, &grant).await {
+    for chunk_id in crate::files::chunk_ids(&file_id, placement.chunks) {
+        let sealed = match fetch_chunk(state, network_id, &chunk_id, &grant, None).await {
             Ok((sealed, _)) => sealed,
             Err(e) => {
                 return tracing::warn!(file_id = %file_id, "cannot read a local file to spread it: {e}")
@@ -1363,7 +1369,7 @@ async fn spread_local_file(state: &DaemonState, network_id: &str) {
             let sm = sm.read().unwrap();
             stale.extend(
                 sm.index
-                    .fragments_for_chunk(chunk_id)
+                    .fragments_for_chunk(&chunk_id)
                     .iter()
                     .map(|m| (chunk_id.clone(), m.fragment_id.clone())),
             );

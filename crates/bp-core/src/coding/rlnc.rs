@@ -46,7 +46,7 @@ impl EncodedFragment {
     }
 }
 
-pub fn encode(chunk: &[u8], k: usize, n: usize) -> BpResult<Vec<EncodedFragment>> {
+pub fn encode(chunk_id: &str, chunk: &[u8], k: usize, n: usize) -> BpResult<Vec<EncodedFragment>> {
     if chunk.is_empty() {
         return Err(BpError::Coding("Cannot encode empty chunk".into()));
     }
@@ -57,7 +57,7 @@ pub fn encode(chunk: &[u8], k: usize, n: usize) -> BpResult<Vec<EncodedFragment>
         return Err(BpError::Coding("k must be > 0".into()));
     }
 
-    let chunk_id = chunk_hash(chunk);
+    let chunk_id = chunk_id.to_string();
     let mut framed = Vec::with_capacity(8 + chunk.len());
     framed.extend_from_slice(&(chunk.len() as u64).to_le_bytes());
     framed.extend_from_slice(chunk);
@@ -258,7 +258,7 @@ mod tests {
     fn a_chain_of_k_mixes_makes_a_fragment_that_completes_any_k_minus_one() {
         let data: Vec<u8> = (0..5000).map(|i| (i * 7 % 251) as u8).collect();
         let k = 4;
-        let fragments = encode(&data, k, 6).unwrap();
+        let fragments = encode("0123456789abcdef", &data, k, 6).unwrap();
         let mut acc = None;
         for f in &fragments[..k] {
             acc = Some(mix(acc, f).unwrap());
@@ -386,7 +386,7 @@ mod tests {
 
     #[test]
     fn encode_error_on_empty_chunk() {
-        assert!(encode(&[], 4, 8).is_err());
+        assert!(encode("0123456789abcdef", &[], 4, 8).is_err());
     }
 
     #[test]
@@ -405,7 +405,7 @@ mod tests {
         for len in [1usize, 2, 7, 1000, 1028, 4097] {
             let chunk: Vec<u8> = (0..len).map(|i| (i * 31 % 251) as u8).collect();
             for k in 1..=5 {
-                let frags = encode(&chunk, k, 2 * k + 4).unwrap();
+                let frags = encode("0123456789abcdef", &chunk, k, 2 * k + 4).unwrap();
                 assert_eq!(decode(&frags[k..]).unwrap(), chunk, "len={len} k={k}");
             }
         }
@@ -414,7 +414,7 @@ mod tests {
     #[test]
     fn decode_skips_dependent_fragments() {
         let chunk = b"dependent fragments must not break decoding".to_vec();
-        let frags = encode(&chunk, 3, 6).unwrap();
+        let frags = encode("0123456789abcdef", &chunk, 3, 6).unwrap();
         let mut input = vec![frags[0].clone(), frags[0].clone()];
         input.extend_from_slice(&frags[1..3]);
         assert_eq!(decode(&input).unwrap(), chunk);
