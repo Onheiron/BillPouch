@@ -120,11 +120,16 @@ chunks; only one chunk is in memory at a time. Each file gets a random
    their Pouches with your **owner grant** and the layer. The placement is gossiped as an
    `Index` message and recorded for Proof-of-Storage.
 
-`bp get` looks the file up in your index and, chunk by chunk, collects local
-fragments, fetches more from the Pouches listed in the gossiped fragment index
-(falling back to every known Pouch) until it has `k`, decodes, checks the
-`chunk_id`, decrypts and appends to the output (written as `.bp-partial` and
-renamed at the end).
+`bp get` looks the file up in your index and fetches up to `BP_FETCH_PARALLEL`
+chunks at once (default 4), writing them in order. For each chunk it takes the
+fragments it has locally, then asks the file's live holders from the ledger,
+nearest first by measured round-trip time, then the Pouches of the gossiped
+fragment index and finally every other Pouch. It asks as many as it lacks plus
+`BP_FETCH_SPARE` (default 1), uses answers as they arrive, and asks the next
+candidate whenever one fails or nothing arrives within three times the nearest
+round trip (between 1 and 5 s). With `k` fragments it decodes, checks the
+`chunk_id` and decrypts; the output is written as `.bp-partial` and renamed at
+the end.
 
 **Grants.** A grant `(file_id, owner key, grantee fingerprint)` is signed with
 the owner's SSH key. A Pouch accepts a fragment only from a device of a member
