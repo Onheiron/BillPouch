@@ -15,6 +15,14 @@ pub fn new_file_id() -> String {
     hex::encode(&new_key()[..8])
 }
 
+pub fn chunk_id(file_id: &str, index: usize) -> String {
+    blake3::hash(format!("billpouch/chunk/{file_id}/{index}").as_bytes()).to_hex()[..16].to_string()
+}
+
+pub fn chunk_ids(file_id: &str, count: u64) -> impl Iterator<Item = String> + '_ {
+    (0..count as usize).map(move |i| chunk_id(file_id, i))
+}
+
 fn signed(context: &[u8], value: &impl Serialize) -> Vec<u8> {
     let mut msg = context.to_vec();
     msg.extend_from_slice(&serde_json::to_vec(value).unwrap_or_default());

@@ -16,7 +16,7 @@ pub const MAX_BYTES_PER_DEVICE: u64 = 1 << 46;
 pub const USAGE_INTERVAL_SECS: u64 = 120;
 pub const OP_TTL_SECS: u64 = 3_600;
 const OP_SKEW_SECS: u64 = 300;
-pub const MAX_CHUNKS_PER_FILE: usize = 1 << 20;
+pub const MAX_CHUNKS_PER_FILE: u64 = 1 << 24;
 const DAY: u64 = 86_400;
 const PPM: i64 = 1_000_000;
 const STAKE: i64 = 250_000;
@@ -69,7 +69,7 @@ pub enum Op {
         file_id: String,
         k: usize,
         layer: StorageTier,
-        chunks: Vec<String>,
+        chunks: u64,
         bytes: u64,
         holders: BTreeSet<String>,
     },
@@ -111,7 +111,7 @@ pub struct Placement {
     pub owner: String,
     pub k: usize,
     pub layer: StorageTier,
-    pub chunks: Vec<String>,
+    pub chunks: u64,
     pub bytes: u64,
     pub planned: usize,
     pub holders: BTreeSet<String>,
@@ -898,8 +898,8 @@ impl Ledger {
                     .is_some_and(|p| p.owner != author)
                     || *k == 0
                     || *k > holders.len()
-                    || chunks.is_empty()
-                    || chunks.len() > MAX_CHUNKS_PER_FILE
+                    || *chunks == 0
+                    || *chunks > MAX_CHUNKS_PER_FILE
                     || *bytes > MAX_BYTES_PER_DEVICE
                     || !holders.iter().all(|d| self.is_live(d))
                 {
@@ -912,7 +912,7 @@ impl Ledger {
                         owner: author.clone(),
                         k: *k,
                         layer: *layer,
-                        chunks: chunks.clone(),
+                        chunks: *chunks,
                         bytes: *bytes,
                         planned: holders.len(),
                         holders: holders.clone(),
@@ -1618,7 +1618,7 @@ mod tests {
             file_id: "f".into(),
             k,
             layer: StorageTier::T1,
-            chunks: vec!["c1".into(), "c2".into()],
+            chunks: 2,
             bytes: 1 << 20,
             holders: holders.iter().map(|d| (*d).clone()).collect(),
         };
@@ -1713,7 +1713,7 @@ mod tests {
             file_id: "f".into(),
             k: 1,
             layer: StorageTier::T1,
-            chunks: vec!["c".into()],
+            chunks: 1,
             bytes: 1 << 20,
             holders: [d0.clone(), d1.clone()].into(),
         };
@@ -1752,7 +1752,7 @@ mod tests {
             file_id: "f".into(),
             k: 1,
             layer: StorageTier::T1,
-            chunks: vec!["c".into()],
+            chunks: 1,
             bytes: 1 << 20,
             holders: [d0.clone(), d1.clone()].into(),
         };
@@ -1802,7 +1802,7 @@ mod tests {
             file_id: file.into(),
             k: 1,
             layer: StorageTier::T1,
-            chunks: vec!["c".into()],
+            chunks: 1,
             bytes: 1 << 20,
             holders: [d0.clone(), d1.clone()].into(),
         };
@@ -1881,7 +1881,7 @@ mod tests {
             file_id: "f".into(),
             k: 1,
             layer: StorageTier::T1,
-            chunks: vec!["c".into()],
+            chunks: 1,
             bytes: 1 << 20,
             holders: [d0.clone(), d1.clone()].into(),
         };
