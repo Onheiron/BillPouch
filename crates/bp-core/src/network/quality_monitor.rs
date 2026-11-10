@@ -632,7 +632,7 @@ fn volunteers(
         })
         .map(|(file_id, p)| {
             let started = p.chunks.iter().any(|c| sm.has_chunk(c));
-            let size = (p.chunks.len() * crate::files::CHUNK_BYTES / p.k) as u64;
+            let size = p.bytes;
             let rank = blake3::hash(format!("{file_id}/{me}").as_bytes())
                 .to_hex()
                 .to_string();

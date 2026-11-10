@@ -36,6 +36,7 @@ pub struct Stored {
     pub stored: usize,
     pub distributed: usize,
     pub peers: usize,
+    pub fragment_bytes: u64,
 }
 
 async fn publish(state: &DaemonState, network_id: &str, message: Gossip) {
@@ -255,13 +256,14 @@ fn register_placement(
     network_id: &str,
     file_id: &str,
     file: &FilePlan,
-    chunks: &[String],
+    stored: &Stored,
 ) {
     let op = crate::ledger::Op::Place {
         file_id: file_id.to_string(),
         k: file.plan.k,
         layer: file.layer,
-        chunks: chunks.to_vec(),
+        chunks: stored.chunks.clone(),
+        bytes: stored.fragment_bytes,
         holders: file.holders.iter().cloned().collect(),
     };
     if let Some(chain) = state.chains.write().unwrap().get_mut(network_id) {
@@ -290,6 +292,7 @@ async fn store_chunk(
     let chunk_id = rlnc::chunk_hash(data);
     let (layer, nodes, plan) = (file.layer, &file.holders, &file.plan);
     let fragments = rlnc::encode(data, plan.k, plan.n).map_err(|e| format!("Encode error: {e}"))?;
+    total.fragment_bytes += fragments.first().map_or(0, |f| f.to_bytes().len() as u64);
     let owner = crate::storage::ChunkOwner {
         owner_key: grant.owner_key.clone(),
         file_id: grant.file_id.clone(),
@@ -565,7 +568,7 @@ pub async fn put_file(
         Ok(m) => m,
         Err(e) => return ControlResponse::err(e.to_string()),
     };
-    register_placement(state, &network_id, &file_id, &placement, &total.chunks);
+    register_placement(state, &network_id, &file_id, &placement, &total);
     add_to_index(state, &network_id, manifest);
     publish_index(state, &network_id).await;
     ControlResponse::ok(PutFileData {
@@ -925,7 +928,7 @@ pub async fn publish_index(state: &DaemonState, network_id: &str) {
             return tracing::warn!(network = %network_id, "cannot store the file index: {e}");
         }
     }
-    register_placement(state, network_id, &file_id, &file, &total.chunks);
+    register_placement(state, network_id, &file_id, &file, &total);
     let head = match Head::sign(&state.identity, network_id, version, &file_id, total.chunks) {
         Ok(h) => h,
         Err(e) => return tracing::warn!("cannot sign the index head: {e}"),

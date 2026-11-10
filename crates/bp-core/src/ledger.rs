@@ -66,6 +66,7 @@ pub enum Op {
         k: usize,
         layer: StorageTier,
         chunks: Vec<String>,
+        bytes: u64,
         holders: BTreeSet<String>,
     },
     Hold {
@@ -101,6 +102,7 @@ pub struct Placement {
     pub k: usize,
     pub layer: StorageTier,
     pub chunks: Vec<String>,
+    pub bytes: u64,
     pub planned: usize,
     pub holders: BTreeSet<String>,
     pub extra: BTreeSet<String>,
@@ -834,6 +836,7 @@ impl Ledger {
                 k,
                 layer,
                 chunks,
+                bytes,
                 holders,
             } => {
                 if self.placements.contains_key(file_id)
@@ -841,6 +844,7 @@ impl Ledger {
                     || *k > holders.len()
                     || chunks.is_empty()
                     || chunks.len() > MAX_CHUNKS_PER_FILE
+                    || *bytes > MAX_BYTES_PER_DEVICE
                     || !holders.iter().all(|d| self.is_live(d))
                 {
                     return Err(invalid("invalid placement"));
@@ -852,6 +856,7 @@ impl Ledger {
                         k: *k,
                         layer: *layer,
                         chunks: chunks.clone(),
+                        bytes: *bytes,
                         planned: holders.len(),
                         holders: holders.clone(),
                         extra: BTreeSet::new(),
@@ -1524,6 +1529,7 @@ mod tests {
             k,
             layer: StorageTier::T1,
             chunks: vec!["c1".into(), "c2".into()],
+            bytes: 1 << 20,
             holders: holders.iter().map(|d| (*d).clone()).collect(),
         };
         let t = net.now();
@@ -1618,6 +1624,7 @@ mod tests {
             k: 1,
             layer: StorageTier::T1,
             chunks: vec!["c".into()],
+            bytes: 1 << 20,
             holders: [d0.clone(), d1.clone()].into(),
         };
         let hold = Op::Hold {
@@ -1656,6 +1663,7 @@ mod tests {
             k: 1,
             layer: StorageTier::T1,
             chunks: vec!["c".into()],
+            bytes: 1 << 20,
             holders: [d0.clone(), d1.clone()].into(),
         };
         let hold = Op::Hold {
@@ -1705,6 +1713,7 @@ mod tests {
             k: 1,
             layer: StorageTier::T1,
             chunks: vec!["c".into()],
+            bytes: 1 << 20,
             holders: [d0.clone(), d1.clone()].into(),
         };
         let hold = |file: &str| Op::Hold {
@@ -1776,6 +1785,7 @@ mod tests {
             k: 1,
             layer: StorageTier::T1,
             chunks: vec!["c".into()],
+            bytes: 1 << 20,
             holders: [d0.clone(), d1.clone()].into(),
         };
         let hold = Op::Hold {

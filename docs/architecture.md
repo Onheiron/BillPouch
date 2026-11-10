@@ -206,7 +206,7 @@ For every peer the daemon keeps a QoS record (`network/qos.rs`):
   among the holders.
 - RTT EWMA (α = 0.125) and challenge success EWMA (β = 0.10, used for credit).
 **Repair is the network's job.** After storing a file its owner registers it
-in the ledger (`Place`): chunks, `k`, layer and holders. A holder counts while
+in the ledger (`Place`): chunks, `k`, layer, the bytes each holder stores and holders. A holder counts while
 it is **live**: its user is a member and the device passed a challenge within
 `grace` epochs of the last epoch in which any device of the network passed
 one (a network nobody challenges, such as a single user's, ages nobody). An
@@ -339,7 +339,7 @@ signed ops from the genesis entry and the creator's device certificate:
 | `Observations` | Adds PoS counts to other users' totals |
 | `ProposeExpel` / `ApproveExpel` | Expulsion vote |
 | `Leave` | The author leaves: no longer a member, weight removed, rotation due |
-| `Place` | Owner registers a file: chunks, `k`, layer and the holders it was planned with |
+| `Place` | Owner registers a file: chunks, `k`, layer, the bytes each holder stores and the holders it was planned with |
 | `Hold` / `Release` | A user's device starts or stops holding a file's fragments, as a charged or an extra holder |
 | `Drop` | Owner deletes a file from the registry |
 | `Trust` | A holder hands its place in a file to an extra holder of another user and bets that they keep it |
