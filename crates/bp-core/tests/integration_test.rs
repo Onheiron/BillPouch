@@ -333,7 +333,7 @@ async fn put_file_get_file_roundtrip() {
         .values()
         .map(|sm| sm.read().unwrap().meta.storage_bytes_used)
         .sum();
-    assert!(used_before > original.len() as u64);
+    assert!(used_before > put_data.packed_bytes);
     unwrap_ok(
         send_request(
             &socket_path,
