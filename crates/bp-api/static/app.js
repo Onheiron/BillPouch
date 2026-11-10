@@ -318,6 +318,7 @@ function renderFiles(data) {
           <td>${f.mine ? '<span class="owner-you">you</span>' : esc(who[f.owner] || short(f.owner))}</td>
           <td>${new Date(f.uploaded_at * 1000).toLocaleString()}</td>
           <td class="actions">
+            ${!native && playable(f.file_name) ? `<button class="button small" data-play="${esc(f.file_id)}" data-network="${esc(f.network_id)}" data-name="${esc(f.file_name)}">Play</button>` : ""}
             <button class="button small" data-download="${esc(f.file_id)}" data-network="${esc(f.network_id)}" data-name="${esc(f.file_name)}">Download</button>
             <button class="button small danger" data-delete="${esc(f.file_id)}" data-network="${esc(f.network_id)}" data-name="${esc(f.file_name)}">${f.mine ? "Delete" : "Remove"}</button>
           </td>
@@ -494,6 +495,34 @@ async function uploadAll(files) {
   for (const file of files) await upload(file);
 }
 
+const PLAYABLE = ["mp4", "m4v", "webm", "mkv", "mov", "ogv", "mp3", "m4a", "ogg", "oga", "opus", "wav", "flac"];
+
+function playable(name) {
+  return PLAYABLE.includes(String(name).split(".").pop().toLowerCase());
+}
+
+function play(id, network, name) {
+  const query = new URLSearchParams({ network, session: session() });
+  const media = $("player-media");
+  $("player-title").textContent = name;
+  media.src = `/files/${encodeURIComponent(id)}?${query}`;
+  $("player").hidden = false;
+  media.play().catch(() => {});
+}
+
+function closePlayer() {
+  const media = $("player-media");
+  media.pause();
+  media.removeAttribute("src");
+  media.load();
+  $("player").hidden = true;
+}
+
+$("player-close").addEventListener("click", closePlayer);
+$("player").addEventListener("click", (e) => {
+  if (e.target === $("player")) closePlayer();
+});
+
 async function download(id, network, name) {
   if (native) {
     try {
@@ -628,6 +657,7 @@ $("node-tabs").addEventListener("click", (e) => {
 $("files").addEventListener("click", (e) => {
   const b = e.target.closest("button");
   if (!b) return;
+  if (b.dataset.play) play(b.dataset.play, b.dataset.network, b.dataset.name);
   if (b.dataset.download) download(b.dataset.download, b.dataset.network, b.dataset.name);
   if (b.dataset.delete) remove(b.dataset.delete, b.dataset.network, b.dataset.name);
 });

@@ -31,12 +31,20 @@ async fn require_session(
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
+    let in_url = (request.method() == axum::http::Method::GET
+        && request.uri().path().starts_with("/files/"))
+    .then(|| Query::<HashMap<String, String>>::try_from_uri(request.uri()).ok())
+    .flatten()
+    .and_then(|Query(query)| query.get("session").cloned());
     let presented = request
         .headers()
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Session "))
-        .unwrap_or("");
+        .map(str::to_string)
+        .or(in_url)
+        .unwrap_or_default();
+    let presented = presented.as_str();
     let Some(user_key) = &state.user_key else {
         return next.run(request).await;
     };
@@ -463,6 +471,29 @@ fn attachment(name: &str) -> String {
     format!("attachment; filename*=UTF-8''{encoded}")
 }
 
+const OPEN_RANGE_BYTES: u64 = 8 << 20;
+
+fn media_type(name: &str) -> &'static str {
+    let ext = name
+        .rsplit('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "mp4" | "m4v" => "video/mp4",
+        "webm" => "video/webm",
+        "mkv" => "video/x-matroska",
+        "mov" => "video/quicktime",
+        "ogv" => "video/ogg",
+        "mp3" => "audio/mpeg",
+        "m4a" => "audio/mp4",
+        "ogg" | "oga" | "opus" => "audio/ogg",
+        "wav" => "audio/wav",
+        "flac" => "audio/flac",
+        _ => "application/octet-stream",
+    }
+}
+
 fn requested_range(headers: &HeaderMap) -> Option<(u64, u64)> {
     let spec = headers
         .get(header::RANGE)?
@@ -473,7 +504,7 @@ fn requested_range(headers: &HeaderMap) -> Option<(u64, u64)> {
     let from: u64 = from.trim().parse().ok()?;
     let to = to.trim();
     let len = if to.is_empty() {
-        u64::MAX - from
+        OPEN_RANGE_BYTES
     } else {
         to.parse::<u64>().ok()?.checked_sub(from)? + 1
     };
@@ -522,7 +553,10 @@ async fn get_file(
     });
     let mut response = (
         [
-            (header::CONTENT_TYPE, "application/octet-stream".to_string()),
+            (
+                header::CONTENT_TYPE,
+                media_type(&meta.file_name).to_string(),
+            ),
             (header::CONTENT_LENGTH, meta.bytes.to_string()),
             (header::CONTENT_DISPOSITION, attachment(&meta.file_name)),
             (header::ACCEPT_RANGES, "bytes".to_string()),

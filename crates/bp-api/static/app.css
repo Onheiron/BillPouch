@@ -220,6 +220,11 @@ main { max-width: 1240px; margin: 0 auto; padding: 22px 28px 60px; display: grid
 .folder strong { color: var(--sky-ink); font-size: 14px; }
 .folder.waiting { background: var(--yellow-soft); border-color: var(--yellow); }
 
+.player { position: fixed; inset: 0; z-index: 40; background: rgba(11, 58, 102, 0.6); display: grid; place-items: center; padding: 16px; }
+.player-box { width: min(960px, 100%); background: var(--white); border-radius: var(--radius); padding: 14px; display: grid; gap: 10px; box-shadow: 0 12px 36px rgba(11, 58, 102, 0.35); }
+.player-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--sky-ink); word-break: break-all; }
+.player video { width: 100%; max-height: 70vh; background: #000; border-radius: 10px; }
+
 .empty { color: var(--muted); padding: 18px 4px; text-align: center; }
 
 .toasts { position: fixed; right: 20px; bottom: 20px; display: grid; gap: 10px; z-index: 20; max-width: min(420px, calc(100vw - 40px)); }
