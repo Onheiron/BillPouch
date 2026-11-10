@@ -338,8 +338,10 @@ hour, scaled down proportionally beyond that). The ledger accepts each
 member's hours in order and at most two hours late.
 
 **Allowance.** Credit and usage are current values in the ledger, not daily
-ones. At most every 120 s each member submits a `Usage` op that replaces its
-previous one: for every device of another user it challenged, the **verified
+ones. Each member submits a `Usage` op that replaces its previous one when a
+value moved by more than 5 % or one appeared or disappeared (at most every
+120 s), and otherwise at most once an hour if anything changed. It carries,
+for every device of another user it challenged, the **verified
 bytes** (what that Pouch announces it stores × its challenge success rate as
 seen by the challenger), and, for every other owner, the bytes its own Pouches
 hold for them. A user's **credit** is, summed over their devices, the median
@@ -366,7 +368,10 @@ QoS is local to each node (`qos.json`); reputation lives in the ledger.
 ## Shared ledger and consensus
 
 Each network has a ledger (`ledger.rs`) built by replaying committed blocks of
-signed ops from the genesis entry and the creator's device certificate:
+signed ops from the genesis entry and the creator's device certificate. Every
+op carries the time it was signed and is valid for one hour (and at most 5
+minutes ahead): the ledger remembers the ids of applied ops only for that hour,
+which is enough to refuse a replay, so this set does not grow with history.
 
 | Op | Effect |
 |----|--------|
@@ -418,7 +423,10 @@ is locked on it and only unlocks on a newer > 2/3 prevote, so a committed block
 is never replaced; rounds time out (3 s + 1 s per round) and are skipped when
 > 1/3 of the weight is already in a later one. Each user votes through one
 voting device, so their devices cannot equivocate by accident. Nothing is
-proposed while no op is pending.
+proposed while no op is pending. Blocks batch ops: the periodic reports
+(`Usage`, `Observations`) wait up to 60 s, or until 64 ops are pending, so they
+share one block and its votes; any other op is proposed at once and takes the
+waiting ones along.
 
 **Sync**: commits carry their precommits, so any node can verify them alone.
 Every 15 s, and whenever it sees a commit more than one block ahead, a node asks

@@ -11,6 +11,8 @@ pub const BASE_TIMEOUT_MS: u64 = 3_000;
 pub const TIMEOUT_STEP_MS: u64 = 1_000;
 pub const REBROADCAST_MS: u64 = 2_000;
 pub const MAX_CLOCK_SKEW_SECS: u64 = 120;
+pub const BATCH_MS: u64 = 60_000;
+pub const BATCH_OPS: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum VoteKind {
@@ -101,6 +103,8 @@ pub struct Engine {
     proposals: BTreeMap<u32, Proposal>,
     votes: BTreeMap<(u32, VoteKind), BTreeMap<String, Vote>>,
     mempool: BTreeMap<String, SignedOp>,
+    waiting_since: Option<u64>,
+    pub batch_ms: u64,
     timeout: Option<(u64, u32, Step)>,
     fired: BTreeSet<(u32, &'static str)>,
     proposed_in: Option<u32>,
@@ -123,6 +127,8 @@ impl Engine {
             proposals: BTreeMap::new(),
             votes: BTreeMap::new(),
             mempool: BTreeMap::new(),
+            waiting_since: None,
+            batch_ms: BATCH_MS,
             timeout: None,
             fired: BTreeSet::new(),
             proposed_in: None,
@@ -152,6 +158,7 @@ impl Engine {
     pub fn submit(&mut self, op: SignedOp, now_ms: u64) -> BpResult<()> {
         self.ledger.validate_op(&op, &self.probe_block(now_ms))?;
         if self.mempool.insert(op.id(), op.clone()).is_none() {
+            self.waiting_since.get_or_insert(now_ms);
             self.outbox.push(ConsensusMsg::Op { op });
         }
         self.progress(now_ms);
@@ -167,6 +174,7 @@ impl Engine {
                         .validate_op(&op, &self.probe_block(now_ms))
                         .is_ok()
                 {
+                    self.waiting_since.get_or_insert(now_ms);
                     self.mempool.insert(op.id(), op);
                 }
             }
@@ -218,8 +226,17 @@ impl Engine {
         self.progress(now_ms);
     }
 
-    fn active(&self) -> bool {
+    fn ready(&self, now_ms: u64) -> bool {
         !self.mempool.is_empty()
+            && (self.mempool.values().any(|op| !op.op.is_background())
+                || self.mempool.len() >= BATCH_OPS
+                || self
+                    .waiting_since
+                    .is_some_and(|since| now_ms >= since + self.batch_ms))
+    }
+
+    fn active(&self, now_ms: u64) -> bool {
+        self.ready(now_ms)
             || !self.proposals.is_empty()
             || self.votes.values().any(|v| !v.is_empty())
     }
@@ -392,7 +409,7 @@ impl Engine {
         let (block, valid_round) = match &self.valid {
             Some((round, block)) => (block.clone(), Some(*round)),
             None => {
-                if self.mempool.is_empty() {
+                if !self.ready(now_ms) {
                     return;
                 }
                 let mut block = Block {
@@ -440,7 +457,7 @@ impl Engine {
                 break;
             }
         }
-        if self.active() && self.timeout.is_none() {
+        if self.active(now_ms) && self.timeout.is_none() {
             self.schedule(self.step, now_ms);
         }
     }
@@ -567,6 +584,7 @@ impl Engine {
         let ledger = &self.ledger;
         self.mempool
             .retain(|_, op| ledger.validate_op(op, &probe).is_ok());
+        self.waiting_since = (!self.mempool.is_empty()).then_some(now_ms);
         self.outbox.push(ConsensusMsg::Commit {
             commit: Box::new(commit.clone()),
         });
@@ -663,7 +681,7 @@ mod tests {
                 apply(
                     &mut ledger,
                     start,
-                    vec![SignedOp::sign(&people[0], Op::AddMember { entry }).unwrap()],
+                    vec![SignedOp::sign(&people[0], Op::AddMember { entry }, start).unwrap()],
                 );
                 apply(
                     &mut ledger,
@@ -673,6 +691,7 @@ mod tests {
                         Op::RegisterDevice {
                             cert: p.cert.clone(),
                         },
+                        start,
                     )
                     .unwrap()],
                 );
@@ -682,7 +701,11 @@ mod tests {
             let now = midday * 1000;
             let engines = people
                 .iter()
-                .map(|p| Engine::new(p, ledger.clone()))
+                .map(|p| {
+                    let mut engine = Engine::new(p, ledger.clone());
+                    engine.batch_ms = 0;
+                    engine
+                })
                 .collect();
             Self {
                 online: vec![true; n],
@@ -749,6 +772,7 @@ mod tests {
                         passed: 1,
                     }],
                 },
+                self.now / 1000,
             )
             .unwrap();
             self.engines[by].submit(op, self.now).unwrap();
