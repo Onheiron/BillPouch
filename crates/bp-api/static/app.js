@@ -163,6 +163,7 @@ function nodes(data) {
       qos: null,
     };
   });
+  const counted = Object.assign({}, ...Object.values(data.members).map((m) => m.availability || {}));
   const remote = data.flock.known_peers.map((n) => ({
     kind: n.service_type,
     network: n.network_id,
@@ -178,16 +179,9 @@ function nodes(data) {
     tier: n.metadata.tier,
     seen: n.announced_at,
     qos: qos[n.peer_id] || null,
+    counted: counted[n.peer_id],
   }));
   return [...local, ...remote].filter((n) => inNetwork(n.network));
-}
-
-function availability(q) {
-  const a = 1 + q.seen;
-  const b = 1 + q.missed;
-  const total = a + b;
-  const spread = Math.sqrt((a * b) / (total * total * (total + 1)));
-  return Math.min(1, Math.max(0, a / total - 1.645 * spread));
 }
 
 function verification(node, data) {
@@ -206,7 +200,8 @@ function verification(node, data) {
   const q = node.qos;
   if (!q || q.challenges_sent === 0) return ["wait", "Not challenged yet"];
   const rate = Math.round(q.challenge_success_ewma * 100);
-  const detail = `${q.challenges_succeeded}/${q.challenges_sent} challenges passed (${rate}%) · counted as ${Math.round(availability(q) * 100)}% available`;
+  const counted = node.counted === undefined ? "not counted by the network yet" : `the network counts it ${(node.counted * 100).toFixed(1)}% available`;
+  const detail = `${q.challenges_succeeded}/${q.challenges_sent} of your challenges passed (${rate}%) · ${counted}`;
   if (q.challenge_success_ewma >= 0.9) return ["ok", detail];
   if (q.challenge_success_ewma >= 0.5) return ["wait", detail];
   return ["bad", detail];

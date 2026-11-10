@@ -9,7 +9,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const EPOCH_SECS: u64 = 86_400;
-pub const MAX_CHALLENGES_PER_DEVICE_PER_EPOCH: u32 = 2880;
+pub const HOUR_SECS: u64 = 3_600;
+pub const MAX_CHALLENGES_PER_DEVICE_PER_HOUR: u32 = 120;
 pub const MIN_CHALLENGES_FOR_PROMOTION: u64 = 100;
 pub const MAX_BYTES_PER_DEVICE: u64 = 1 << 46;
 pub const USAGE_INTERVAL_SECS: u64 = 120;
@@ -17,6 +18,7 @@ pub const MAX_CHUNKS_PER_FILE: usize = 1 << 20;
 const DAY: u64 = 86_400;
 const PPM: i64 = 1_000_000;
 const STAKE: i64 = 250_000;
+const RECENT_KEPT: u64 = 9;
 const SPONSOR_REWARD: i64 = 50_000;
 const FREE_COMMITMENTS: usize = 8;
 
@@ -41,7 +43,7 @@ pub enum Op {
         entry: Entry,
     },
     Observations {
-        epoch: u64,
+        hour: u64,
         results: Vec<Observation>,
     },
     Usage {
@@ -297,7 +299,7 @@ pub struct Ledger {
     pub expelled: BTreeSet<String>,
     pub left: BTreeSet<String>,
     pub expel_approvals: BTreeMap<String, BTreeSet<String>>,
-    pub reported: BTreeSet<(String, u64)>,
+    pub reported: BTreeMap<String, u64>,
     pub applied_ops: BTreeSet<String>,
     pub snapshot: Snapshot,
     pub commitment: String,
@@ -310,6 +312,7 @@ pub struct Ledger {
     pub placements: BTreeMap<String, Placement>,
     pub proven: BTreeMap<String, u64>,
     pub challenges: BTreeMap<String, (u64, u64)>,
+    pub recent: BTreeMap<String, (u64, u64)>,
     pub last_proof: u64,
     pub params: Params,
     pub param_votes: BTreeMap<String, Params>,
@@ -355,7 +358,7 @@ impl Ledger {
             expelled: BTreeSet::new(),
             left: BTreeSet::new(),
             expel_approvals: BTreeMap::new(),
-            reported: BTreeSet::new(),
+            reported: BTreeMap::new(),
             applied_ops: BTreeSet::new(),
             snapshot: Snapshot {
                 epoch: genesis.body.at / EPOCH_SECS,
@@ -371,6 +374,7 @@ impl Ledger {
             placements: BTreeMap::new(),
             proven: BTreeMap::new(),
             challenges: BTreeMap::new(),
+            recent: BTreeMap::new(),
             last_proof: 0,
             params: Params::default(),
             param_votes: BTreeMap::new(),
@@ -414,6 +418,11 @@ impl Ledger {
         };
         let seen = self.proven.get(device).copied().unwrap_or(0).max(d.since);
         self.is_member(&d.user) && seen + self.params.grace_epochs >= self.last_proof
+    }
+
+    pub fn device_availability(&self, device: &str) -> f64 {
+        let (passed, failed) = self.recent.get(device).copied().unwrap_or_default();
+        crate::network::qos::availability_lower_bound(passed as f64, failed as f64)
     }
 
     pub fn availability(&self, device: &str) -> f64 {
@@ -668,6 +677,10 @@ impl Ledger {
         let mut next = self.clone();
         if block.epoch() > next.snapshot.epoch {
             next.snapshot = next.compute_snapshot(block.epoch());
+            for (passed, failed) in next.recent.values_mut() {
+                *passed = *passed * RECENT_KEPT / 10;
+                *failed = *failed * RECENT_KEPT / 10;
+            }
         }
         for op in &block.ops {
             next.apply_op(op, block)?;
@@ -730,18 +743,20 @@ impl Ledger {
                 );
                 self.entries.push(entry.clone());
             }
-            Op::Observations { epoch, results } => {
-                if *epoch != block.epoch() || !self.reported.insert((author.clone(), *epoch)) {
-                    return Err(invalid(
-                        "observations for a wrong or already reported epoch",
-                    ));
+            Op::Observations { hour, results } => {
+                let now = block.time / HOUR_SECS;
+                let fresh = *hour <= now && *hour + 2 >= now;
+                if !fresh || self.reported.get(&author).is_some_and(|last| last >= hour) {
+                    return Err(invalid("observations for a wrong or already reported hour"));
                 }
+                self.reported.insert(author.clone(), *hour);
+                let epoch = *hour * HOUR_SECS / EPOCH_SECS;
                 let mut devices = BTreeSet::new();
                 for o in results {
                     if o.user == author
                         || !self.is_member(&o.user)
                         || o.passed > o.sent
-                        || o.sent > MAX_CHALLENGES_PER_DEVICE_PER_EPOCH
+                        || o.sent > MAX_CHALLENGES_PER_DEVICE_PER_HOUR
                         || !devices.insert(&o.device)
                     {
                         return Err(invalid("invalid observation"));
@@ -757,9 +772,12 @@ impl Ledger {
                     let counts = self.challenges.entry(o.device.clone()).or_default();
                     counts.0 += u64::from(o.sent);
                     counts.1 += u64::from(o.passed);
+                    let recent = self.recent.entry(o.device.clone()).or_default();
+                    recent.0 += u64::from(o.passed);
+                    recent.1 += u64::from(o.sent - o.passed);
                     if o.passed > 0 {
-                        self.proven.insert(o.device.clone(), *epoch);
-                        self.last_proof = self.last_proof.max(*epoch);
+                        self.proven.insert(o.device.clone(), epoch);
+                        self.last_proof = self.last_proof.max(epoch);
                     }
                 }
                 let files: Vec<String> = self.placements.keys().cloned().collect();
@@ -1140,7 +1158,7 @@ mod tests {
             SignedOp::sign(
                 &self.people[by],
                 Op::Observations {
-                    epoch: time / EPOCH_SECS,
+                    hour: time / HOUR_SECS,
                     results: vec![Observation {
                         device: self.people[about].peer_id.to_string(),
                         user: self.fp(about),

@@ -561,6 +561,11 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 members,
                 expelled: ledger.expelled.iter().cloned().collect(),
                 params: ledger.params,
+                availability: ledger
+                    .recent
+                    .keys()
+                    .map(|device| (device.clone(), ledger.device_availability(device)))
+                    .collect(),
             })
         }
 

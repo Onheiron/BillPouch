@@ -207,6 +207,7 @@ pub struct MembersData {
     pub members: Vec<MemberInfo>,
     pub expelled: Vec<String>,
     pub params: crate::ledger::Params,
+    pub availability: std::collections::BTreeMap<String, f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

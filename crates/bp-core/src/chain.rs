@@ -4,8 +4,8 @@ use crate::{
     error::{BpError, BpResult},
     identity::{DeviceCert, Identity},
     ledger::{
-        Ledger, Observation, Op, SignedOp, EPOCH_SECS, MAX_CHALLENGES_PER_DEVICE_PER_EPOCH,
-        USAGE_INTERVAL_SECS,
+        Ledger, Observation, Op, SignedOp, EPOCH_SECS, HOUR_SECS,
+        MAX_CHALLENGES_PER_DEVICE_PER_HOUR, USAGE_INTERVAL_SECS,
     },
     membership::{
         genesis, invite_entry, key_commitment, new_key, open_key, wrap_for, Entry, Invite,
@@ -19,27 +19,39 @@ use std::sync::{Arc, RwLock};
 pub const SYNC_BATCH: usize = 100;
 const RESUBMIT_MS: u64 = 60_000;
 const SYNC_RETRY_MS: u64 = 5_000;
-const REPORT_AT: f64 = 0.9;
 const ROTATION_SLOT_SECS: u64 = 60;
 
 pub type Chains = Arc<RwLock<HashMap<String, Chain>>>;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Tally {
-    pub epoch: u64,
+    pub hour: u64,
     pub sent: u32,
     pub passed: u32,
+    pub previous: Option<(u64, u32, u32)>,
     pub verified_bytes: u64,
+}
+
+impl Tally {
+    fn of_hour(&self, hour: u64) -> Option<(u32, u32)> {
+        if self.hour == hour {
+            return Some((self.sent, self.passed));
+        }
+        self.previous
+            .filter(|(h, _, _)| *h == hour)
+            .map(|(_, sent, passed)| (sent, passed))
+    }
 }
 
 pub type ObservationLog = Arc<RwLock<HashMap<String, Tally>>>;
 
 pub fn observe(log: &ObservationLog, device: &str, passed: bool, verified_bytes: u64, now_ms: u64) {
-    let epoch = epoch_of(now_ms);
+    let hour = now_ms / 1000 / HOUR_SECS;
     if let Ok(mut log) = log.write() {
         let tally = log.entry(device.to_string()).or_default();
-        if tally.epoch != epoch {
-            tally.epoch = epoch;
+        if tally.hour != hour {
+            tally.previous = (tally.sent > 0).then_some((tally.hour, tally.sent, tally.passed));
+            tally.hour = hour;
             tally.sent = 0;
             tally.passed = 0;
         }
@@ -76,7 +88,7 @@ pub struct Chain {
     commits: Vec<Commit>,
     device_submitted_ms: u64,
     rotation_submitted_ms: u64,
-    reported_epoch: Option<u64>,
+    reported_hour: Option<u64>,
     reported_usage: Option<(BTreeMap<String, u64>, BTreeMap<String, u64>)>,
     usage_submitted_ms: u64,
     sync_requested_ms: u64,
@@ -119,7 +131,7 @@ impl Chain {
             commits: Vec::new(),
             device_submitted_ms: 0,
             rotation_submitted_ms: 0,
-            reported_epoch: None,
+            reported_hour: None,
             reported_usage: None,
             usage_submitted_ms: 0,
             sync_requested_ms: 0,
@@ -376,29 +388,30 @@ impl Chain {
     }
 
     fn report(&mut self, log: &ObservationLog, now_ms: u64) {
-        let epoch = epoch_of(now_ms);
-        let into_epoch = (now_ms / 1000 % EPOCH_SECS) as f64 / EPOCH_SECS as f64;
+        let Some(hour) = (now_ms / 1000 / HOUR_SECS).checked_sub(1) else {
+            return;
+        };
         let ledger = &self.engine.ledger;
         let me = &self.me.fingerprint;
-        if into_epoch < REPORT_AT
-            || self.reported_epoch == Some(epoch)
+        if self.reported_hour == Some(hour)
             || !ledger.is_member(me)
-            || ledger.reported.contains(&(me.clone(), epoch))
+            || ledger.reported.get(me).is_some_and(|last| *last >= hour)
         {
             return;
         }
-        self.reported_epoch = Some(epoch);
+        self.reported_hour = Some(hour);
         let results: Vec<Observation> = log
             .read()
             .map(|log| {
                 log.iter()
-                    .filter(|(_, t)| t.epoch == epoch && t.sent > 0)
-                    .filter_map(|(device, t)| {
+                    .filter_map(|(device, t)| Some((device, t.of_hour(hour)?)))
+                    .filter(|(_, (sent, _))| *sent > 0)
+                    .filter_map(|(device, (t_sent, t_passed))| {
                         let user = ledger.device_owner(device)?;
                         (user != me && ledger.is_member(user)).then(|| {
-                            let sent = t.sent.min(MAX_CHALLENGES_PER_DEVICE_PER_EPOCH);
+                            let sent = t_sent.min(MAX_CHALLENGES_PER_DEVICE_PER_HOUR);
                             let passed =
-                                (u64::from(t.passed) * u64::from(sent) / u64::from(t.sent)) as u32;
+                                (u64::from(t_passed) * u64::from(sent) / u64::from(t_sent)) as u32;
                             Observation {
                                 device: device.clone(),
                                 user: user.to_string(),
@@ -412,7 +425,7 @@ impl Chain {
             .unwrap_or_default();
         if !results.is_empty() {
             self.submit(
-                Op::Observations { epoch, results },
+                Op::Observations { hour, results },
                 now_ms,
                 "report observations",
             );
@@ -599,18 +612,18 @@ mod tests {
     }
 
     #[test]
-    fn observations_are_reported_near_the_end_of_the_epoch() {
+    fn observations_are_reported_once_their_hour_is_over() {
         let mut net = Net::new(2);
-        let epoch_start = (epoch_of(net.now) + 1) * EPOCH_SECS * 1000;
+        let hour_start = (net.now / 1000 / HOUR_SECS + 1) * HOUR_SECS * 1000;
         let device = net.people[1].peer_id.to_string();
         for i in 0..10 {
-            observe(&net.log, &device, i != 0, 1000, epoch_start + 1);
+            observe(&net.log, &device, i != 0, 1000, hour_start + 1);
         }
-        net.now = epoch_start + 1000;
+        net.now = hour_start + 1000;
         net.settle();
         assert_eq!(net.chains[0].ledger().members[&net.fp(1)].sent, 0);
         assert_eq!(net.chains[1].ledger().credit(&net.fp(1)), 1000);
-        net.now = epoch_start + EPOCH_SECS * 950;
+        net.now = hour_start + HOUR_SECS * 1000 + 60_000;
         net.settle();
         let member = &net.chains[0].ledger().members[&net.fp(1)];
         assert_eq!((member.sent, member.passed), (10, 9));

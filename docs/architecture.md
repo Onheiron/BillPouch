@@ -194,16 +194,21 @@ the Pouch's setup (others' fragments, filler, free space) and your **quota**
 
 ## Quality, Proof-of-Storage, reputation
 
-For every peer the daemon keeps a QoS record (`network/qos.rs`):
+**Availability for k/n comes from the ledger**, so every node sees the same
+value and computes the same `k`, `n` and quota. The ledger keeps, for every
+device, the challenges it passed and failed as reported by the other users,
+both multiplied by 0.9 at each new epoch (a memory of about ten days). With
+`a = 1 + passed` and `b = 1 + failed`, the device's `p_i` is the lower 5 % bound
+of Beta(a, b), `mean − 1.645·σ`: a Pouch nobody has reported yet counts as about
+0.03, and one that always answers climbs towards 1, so evidence, not hope,
+earns a place among the holders.
 
-- **Availability** `p_i`, the `p_i` used for k/n. Every ping answered and every
-  challenge passed counts as seen, every timeout or failed challenge as
-  missed, with a memory that decays by 0.9995 per observation (about a day
-  and a half of pings). With
-  `a = 1 + seen` and `b = 1 + missed`, `p_i` is the lower 5 % bound of
-  Beta(a, b), `mean − 1.645·σ`: a Pouch never observed counts as about 0.03 and
-  one always present climbs towards 0.999, so evidence, not hope, earns a place
-  among the holders.
+For every peer the daemon also keeps its own QoS record (`network/qos.rs`):
+
+- **Its own availability estimate**, built the same way from the pings and
+  challenges it saw itself, with a memory that decays by 0.9995 per
+  observation. It is private: it is this node's forecast when it bets on a
+  newcomer, never the input of k/n.
 - RTT EWMA (α = 0.125) and challenge success EWMA (β = 0.10, used for credit).
 **Repair is the network's job.** After storing a file its owner registers it
 in the ledger (`Place`): chunks, `k`, layer, the bytes each holder stores and holders. A holder counts while
@@ -307,10 +312,11 @@ minute) generated from a seed that is thrown away, so the Pouch can neither
 compress nor rebuild them. Real fragments evict filler. A Pouch announces how
 much it stores (`stored_bytes`) and how many blobs (`fillers`).
 
-**Reputation.** Every challenge result is counted per device and epoch. In
-the last 10 % of an epoch each member submits an `Observations` op for the
-devices of other users: challenges sent and passed (at most 2880 per device
-per epoch, scaled down proportionally beyond that).
+**Reputation.** Every challenge result is counted per device and hour. Once
+an hour is over each member submits an `Observations` op for that hour, for the
+devices of other users: challenges sent and passed (at most 120 per device per
+hour, scaled down proportionally beyond that). The ledger accepts each
+member's hours in order and at most two hours late.
 
 **Allowance.** Credit and usage are current values in the ledger, not daily
 ones. At most every 120 s each member submits a `Usage` op that replaces its
@@ -348,7 +354,7 @@ signed ops from the genesis entry and the creator's device certificate:
 | `AddMember` | Adds a member entry (with the network key wrapped for them) |
 | `RegisterDevice` | Adds one of your devices; the first one becomes your voting device |
 | `SetVotingDevice` | Picks which of your devices votes |
-| `Observations` | Adds PoS counts to other users' totals |
+| `Observations` | Adds an hour of PoS counts to other users' and their devices' totals |
 | `ProposeExpel` / `ApproveExpel` | Expulsion vote |
 | `Leave` | The author leaves: no longer a member, weight removed, rotation due |
 | `Place` | Owner registers a file: chunks, `k`, layer, the bytes each holder stores and the holders it was planned with |
