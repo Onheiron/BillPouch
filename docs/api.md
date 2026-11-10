@@ -49,7 +49,13 @@ needs `Authorization: Session <session>`: a session is signed with this
 device's user SSH key and lasts 12 h; `bp-api` accepts only sessions of that
 key. `bp dashboard` starts `bp-api` when it is not running, signs a session and
 opens `https://127.0.0.1:<port>/#session=<session>`; the app keeps it in the
-browser until it expires.
+browser until it expires. `GET /files/:file_id` also takes the session as
+`?session=<session>`, because a `<video>` or `<audio>` element cannot send a
+header: that is how the web app's player streams a file. Such a URL grants
+access to that file for as long as the session lasts, so it is never shared.
+Audio and video files are served with their media type, and an open-ended
+range (`bytes=A-`) returns at most 8 MiB, so playback starts without waiting
+for the whole file.
 
 The web app is a progressive web app: your identity and network, your quota
 (used, free, not verified yet and lost to redundancy, on the scale of what you
