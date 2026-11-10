@@ -23,6 +23,18 @@ const ROTATION_SLOT_SECS: u64 = 60;
 
 pub type Chains = Arc<RwLock<HashMap<String, Chain>>>;
 
+const USAGE_REFRESH_SECS: u64 = 3_600;
+const USAGE_DRIFT_PERCENT: u64 = 5;
+
+fn drifted(before: &BTreeMap<String, u64>, now: &BTreeMap<String, u64>) -> bool {
+    before.len() != now.len()
+        || now.iter().any(|(key, &value)| {
+            before
+                .get(key)
+                .is_none_or(|&old| old.abs_diff(value) * 100 > old.max(1) * USAGE_DRIFT_PERCENT)
+        })
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Tally {
     pub hour: u64,
@@ -170,6 +182,7 @@ impl Chain {
             Op::AddMember {
                 entry: entry.clone(),
             },
+            now_ms / 1000,
         )?;
         self.engine.submit(op, now_ms)?;
         self.record();
@@ -195,14 +208,14 @@ impl Chain {
     }
 
     pub fn propose(&mut self, op: Op, now_ms: u64) -> BpResult<()> {
-        let op = SignedOp::sign(&self.me, op)?;
+        let op = SignedOp::sign(&self.me, op, now_ms / 1000)?;
         self.engine.submit(op, now_ms)?;
         self.record();
         Ok(())
     }
 
     pub fn leave(&mut self, now_ms: u64) -> BpResult<()> {
-        let op = SignedOp::sign(&self.me, Op::Leave)?;
+        let op = SignedOp::sign(&self.me, Op::Leave, now_ms / 1000)?;
         self.engine.submit(op, now_ms)?;
         self.record();
         Ok(())
@@ -226,7 +239,7 @@ impl Chain {
                 member: member.to_string(),
             }
         };
-        let op = SignedOp::sign(&self.me, op)?;
+        let op = SignedOp::sign(&self.me, op, now_ms / 1000)?;
         self.engine.submit(op, now_ms)?;
         self.record();
         Ok(())
@@ -331,7 +344,8 @@ impl Chain {
     }
 
     fn submit(&mut self, op: Op, now_ms: u64, what: &str) {
-        let result = SignedOp::sign(&self.me, op).and_then(|op| self.engine.submit(op, now_ms));
+        let result = SignedOp::sign(&self.me, op, now_ms / 1000)
+            .and_then(|op| self.engine.submit(op, now_ms));
         if let Err(e) = result {
             tracing::warn!(network = %self.name, "cannot {what}: {e}");
         }
@@ -376,8 +390,15 @@ impl Chain {
             .map(|(owner, &bytes)| (owner.clone(), bytes))
             .collect();
         let current = (verified, held);
-        let unchanged = self.reported_usage.as_ref() == Some(&current)
-            || (self.reported_usage.is_none() && current.0.is_empty() && current.1.is_empty());
+        let stale = now_ms >= self.usage_submitted_ms + USAGE_REFRESH_SECS * 1000;
+        let unchanged = match &self.reported_usage {
+            Some((verified, held)) => {
+                !drifted(verified, &current.0)
+                    && !drifted(held, &current.1)
+                    && (!stale || *verified == current.0 && *held == current.1)
+            }
+            None => current.0.is_empty() && current.1.is_empty(),
+        };
         if unchanged {
             return;
         }
@@ -556,7 +577,8 @@ mod tests {
         fn new(n: usize) -> Self {
             let people: Vec<Identity> =
                 (0..n).map(|_| Identity::in_memory(None).unwrap()).collect();
-            let first = Chain::create(&people[0], "amici").unwrap();
+            let mut first = Chain::create(&people[0], "amici").unwrap();
+            first.engine.batch_ms = 0;
             let now = first.ledger().time * 1000 + 1000;
             let mut net = Self {
                 people,
@@ -568,6 +590,7 @@ mod tests {
                 let key = net.people[i].user_key.clone();
                 let invite = net.chains[0].invite(&key, net.now).unwrap();
                 let mut chain = Chain::from_invite(&net.people[i], invite).unwrap();
+                chain.engine.batch_ms = 0;
                 chain.apply_synced(net.chains[0].commits_from(0), net.now);
                 net.chains.push(chain);
                 net.settle();
@@ -661,7 +684,8 @@ mod tests {
 
         let key = Identity::in_memory(None).unwrap().user_key;
         let entry = invite_entry(&net.people[0], &net.chains[0].genesis, &old, &key).unwrap();
-        let stale = SignedOp::sign(&net.people[0], Op::AddMember { entry }).unwrap();
+        let stale =
+            SignedOp::sign(&net.people[0], Op::AddMember { entry }, net.now / 1000).unwrap();
         assert!(net.chains[0].engine.submit(stale, net.now).is_err());
     }
 }

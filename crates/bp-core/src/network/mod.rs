@@ -1258,6 +1258,7 @@ mod tests {
                         Op::RegisterDevice {
                             cert: id.cert.clone(),
                         },
+                        0,
                     )
                     .unwrap(),
                 },

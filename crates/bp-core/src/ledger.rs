@@ -14,6 +14,8 @@ pub const MAX_CHALLENGES_PER_DEVICE_PER_HOUR: u32 = 120;
 pub const MIN_CHALLENGES_FOR_PROMOTION: u64 = 100;
 pub const MAX_BYTES_PER_DEVICE: u64 = 1 << 46;
 pub const USAGE_INTERVAL_SECS: u64 = 120;
+pub const OP_TTL_SECS: u64 = 3_600;
+const OP_SKEW_SECS: u64 = 300;
 pub const MAX_CHUNKS_PER_FILE: usize = 1 << 20;
 const DAY: u64 = 86_400;
 const PPM: i64 = 1_000_000;
@@ -98,6 +100,12 @@ pub enum Op {
     },
 }
 
+impl Op {
+    pub fn is_background(&self) -> bool {
+        matches!(self, Op::Usage { .. } | Op::Observations { .. })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Placement {
     pub owner: String,
@@ -168,13 +176,14 @@ pub struct SignedOp {
     pub op: Op,
     pub author: String,
     pub nonce: u64,
+    pub at: u64,
     pub signature: String,
 }
 
 impl SignedOp {
-    pub fn sign(identity: &Identity, op: Op) -> BpResult<Self> {
+    pub fn sign(identity: &Identity, op: Op, at: u64) -> BpResult<Self> {
         let nonce = rand::random();
-        let message = op_message(&op, &identity.user_key, nonce)?;
+        let message = op_message(&op, &identity.user_key, nonce, at)?;
         let signature = identity
             .user
             .sign(&message)
@@ -183,6 +192,7 @@ impl SignedOp {
             op,
             author: identity.user_key.clone(),
             nonce,
+            at,
             signature: hex::encode(signature),
         })
     }
@@ -191,7 +201,10 @@ impl SignedOp {
         let (public, fingerprint) = parse_user_key(&self.author)?;
         let signature = hex::decode(&self.signature)
             .map_err(|_| BpError::Identity("op: bad signature encoding".into()))?;
-        if public.verify(&op_message(&self.op, &self.author, self.nonce)?, &signature) {
+        if public.verify(
+            &op_message(&self.op, &self.author, self.nonce, self.at)?,
+            &signature,
+        ) {
             Ok(fingerprint)
         } else {
             Err(BpError::Identity("op: invalid signature".into()))
@@ -205,9 +218,9 @@ impl SignedOp {
     }
 }
 
-fn op_message(op: &Op, author: &str, nonce: u64) -> BpResult<Vec<u8>> {
+fn op_message(op: &Op, author: &str, nonce: u64, at: u64) -> BpResult<Vec<u8>> {
     let mut msg = b"billpouch/op/v1".to_vec();
-    msg.extend_from_slice(&serde_json::to_vec(&(op, author, nonce))?);
+    msg.extend_from_slice(&serde_json::to_vec(&(op, author, nonce, at))?);
     Ok(msg)
 }
 
@@ -300,7 +313,7 @@ pub struct Ledger {
     pub left: BTreeSet<String>,
     pub expel_approvals: BTreeMap<String, BTreeSet<String>>,
     pub reported: BTreeMap<String, u64>,
-    pub applied_ops: BTreeSet<String>,
+    pub applied_ops: BTreeMap<String, u64>,
     pub snapshot: Snapshot,
     pub commitment: String,
     pub key_wraps: BTreeMap<String, WrappedKey>,
@@ -359,7 +372,7 @@ impl Ledger {
             left: BTreeSet::new(),
             expel_approvals: BTreeMap::new(),
             reported: BTreeMap::new(),
-            applied_ops: BTreeSet::new(),
+            applied_ops: BTreeMap::new(),
             snapshot: Snapshot {
                 epoch: genesis.body.at / EPOCH_SECS,
                 users: BTreeMap::new(),
@@ -686,6 +699,8 @@ impl Ledger {
             next.apply_op(op, block)?;
         }
         next.settle_bets(block.epoch());
+        next.applied_ops
+            .retain(|_, at| *at + OP_TTL_SECS >= block.time);
         next.height = block.height;
         next.head = block.hash();
         next.time = block.time;
@@ -699,8 +714,11 @@ impl Ledger {
 
     fn apply_op(&mut self, signed: &SignedOp, block: &Block) -> BpResult<()> {
         let id = signed.id();
-        if self.applied_ops.contains(&id) {
+        if self.applied_ops.contains_key(&id) {
             return Err(invalid("op already applied"));
+        }
+        if signed.at + OP_TTL_SECS < block.time || signed.at > block.time + OP_SKEW_SECS {
+            return Err(invalid("op expired or signed in the future"));
         }
         let author = signed.author_fingerprint()?;
         if !self.is_member(&author) {
@@ -1000,7 +1018,7 @@ impl Ledger {
                 self.rekey_since = None;
             }
         }
-        self.applied_ops.insert(id);
+        self.applied_ops.insert(id, signed.at);
         Ok(())
     }
 
@@ -1081,6 +1099,18 @@ mod tests {
     use super::*;
     use crate::membership::{genesis, invite_entry, key_commitment, new_key, wrap_for};
 
+    thread_local! {
+        static CLOCK: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    }
+
+    fn sign_op(identity: &Identity, op: Op) -> BpResult<SignedOp> {
+        SignedOp::sign(identity, op, CLOCK.with(|c| c.get()))
+    }
+
+    fn sign_at(identity: &Identity, op: Op, at: u64) -> SignedOp {
+        SignedOp::sign(identity, op, at).unwrap()
+    }
+
     struct Net {
         people: Vec<Identity>,
         ledger: Ledger,
@@ -1093,6 +1123,7 @@ mod tests {
                 (0..n).map(|_| Identity::in_memory(None).unwrap()).collect();
             let (root, key) = genesis(&people[0], "amici").unwrap();
             let ledger = Ledger::new(root, &people[0].cert).unwrap();
+            CLOCK.with(|c| c.set(ledger.time));
             Self {
                 people,
                 ledger,
@@ -1112,7 +1143,9 @@ mod tests {
 
         fn commit(&mut self, proposer: usize, time: u64, ops: Vec<SignedOp>) -> BpResult<()> {
             let block = self.block(proposer, time, ops);
-            self.ledger.apply(&block)
+            self.ledger.apply(&block)?;
+            CLOCK.with(|c| c.set(self.ledger.time));
+            Ok(())
         }
 
         fn next_epoch(&mut self) {
@@ -1129,7 +1162,7 @@ mod tests {
                 &member_key,
             )
             .unwrap();
-            SignedOp::sign(&self.people[by], Op::AddMember { entry }).unwrap()
+            sign_op(&self.people[by], Op::AddMember { entry }).unwrap()
         }
 
         fn now(&self) -> u64 {
@@ -1159,7 +1192,7 @@ mod tests {
             passed: u32,
             time: u64,
         ) -> SignedOp {
-            SignedOp::sign(
+            sign_at(
                 &self.people[by],
                 Op::Observations {
                     hour: time / HOUR_SECS,
@@ -1170,8 +1203,8 @@ mod tests {
                         passed,
                     }],
                 },
+                time,
             )
-            .unwrap()
         }
 
         fn rotate_op(&self, by: usize, members: &[usize], time: u64) -> SignedOp {
@@ -1185,15 +1218,15 @@ mod tests {
                     )
                 })
                 .collect();
-            SignedOp::sign(
+            sign_at(
                 &self.people[by],
                 Op::RotateKey {
                     epoch: time / EPOCH_SECS,
                     wrapped,
                     commitment: key_commitment(&key),
                 },
+                time,
             )
-            .unwrap()
         }
     }
 
@@ -1238,14 +1271,14 @@ mod tests {
         net.commit(0, t, vec![net.rotate_op(0, &[0, 1, 2], t)])
             .unwrap();
         let lucia = net.fp(2);
-        let propose = SignedOp::sign(
+        let propose = sign_op(
             &net.people[0],
             Op::ProposeExpel {
                 member: lucia.clone(),
             },
         )
         .unwrap();
-        let approve = SignedOp::sign(
+        let approve = sign_op(
             &net.people[1],
             Op::ApproveExpel {
                 member: lucia.clone(),
@@ -1270,16 +1303,33 @@ mod tests {
         let t = net.now();
         net.commit(0, t, vec![net.rotate_op(0, &[0, 1, 2], t)])
             .unwrap();
-        let leave = SignedOp::sign(&net.people[2], Op::Leave).unwrap();
+        let leave = sign_op(&net.people[2], Op::Leave).unwrap();
         net.commit(0, t, vec![leave]).unwrap();
         assert!(!net.ledger.is_member(&net.fp(2)));
         assert!(net.ledger.left.contains(&net.fp(2)));
         assert_eq!(net.ledger.snapshot.weight(&net.fp(2)), 0);
         assert_eq!(net.ledger.rotation_due(t), Some(t));
-        let again = SignedOp::sign(&net.people[2], Op::Leave).unwrap();
+        let again = sign_op(&net.people[2], Op::Leave).unwrap();
         assert!(net.commit(0, t, vec![again]).is_err());
         net.commit(0, t, vec![net.rotate_op(1, &[0, 1], t)])
             .unwrap();
+    }
+
+    #[test]
+    fn ops_expire_and_are_then_forgotten() {
+        let mut net = Net::new(2);
+        let op = net.invite_op(0, 1);
+        let late = net.now() + OP_TTL_SECS + 1;
+        assert!(net.commit(0, late, vec![op]).is_err(), "too old to apply");
+        let op = net.invite_op(0, 1);
+        let t = net.now();
+        net.commit(0, t, vec![op]).unwrap();
+        assert_eq!(net.ledger.applied_ops.len(), 1);
+        net.next_epoch();
+        assert!(
+            net.ledger.applied_ops.is_empty(),
+            "an expired op cannot come back, so its id is dropped"
+        );
     }
 
     #[test]
@@ -1354,7 +1404,7 @@ mod tests {
     }
 
     fn usage(net: &Net, by: usize, verified: &[(usize, u64)], held: &[(usize, u64)]) -> SignedOp {
-        SignedOp::sign(
+        sign_op(
             &net.people[by],
             Op::Usage {
                 verified: verified
@@ -1372,7 +1422,7 @@ mod tests {
         let mut net = Net::everyone_joined(3);
         let mut t = net.now();
         for i in 1..3 {
-            let op = SignedOp::sign(
+            let op = sign_op(
                 &net.people[i],
                 Op::RegisterDevice {
                     cert: net.people[i].cert.clone(),
@@ -1414,7 +1464,7 @@ mod tests {
             assert!(net.commit(0, t, vec![bad]).is_err());
         }
 
-        let leave = SignedOp::sign(&net.people[2], Op::Leave).unwrap();
+        let leave = sign_op(&net.people[2], Op::Leave).unwrap();
         net.commit(0, t, vec![leave]).unwrap();
         assert_eq!(net.ledger.credit(&marco), 50, "only one observer left");
         assert_eq!(net.ledger.usage(&marco), 0);
@@ -1467,7 +1517,7 @@ mod tests {
         let mut net = Net::everyone_joined(5);
         let t = net.now();
         let target = net.fp(4);
-        let propose = SignedOp::sign(
+        let propose = sign_op(
             &net.people[0],
             Op::ProposeExpel {
                 member: target.clone(),
@@ -1476,7 +1526,7 @@ mod tests {
         .unwrap();
         net.commit(0, t, vec![propose]).unwrap();
         let approve = |net: &Net, voter: usize| {
-            SignedOp::sign(
+            sign_op(
                 &net.people[voter],
                 Op::ApproveExpel {
                     member: target.clone(),
@@ -1487,7 +1537,7 @@ mod tests {
         let op = approve(&net, 1);
         net.commit(0, t, vec![op]).unwrap();
         assert!(net.ledger.is_member(&target), "2 of 4 votes are not enough");
-        let op = SignedOp::sign(
+        let op = sign_op(
             &net.people[2],
             Op::ApproveExpel {
                 member: target.clone(),
@@ -1506,7 +1556,7 @@ mod tests {
     fn members_cannot_propose_expulsions_without_the_capability() {
         let mut net = Net::everyone_joined(3);
         let t = net.now();
-        let op = SignedOp::sign(&net.people[1], Op::ProposeExpel { member: net.fp(2) }).unwrap();
+        let op = sign_op(&net.people[1], Op::ProposeExpel { member: net.fp(2) }).unwrap();
         assert!(net.commit(1, t, vec![op]).is_err());
     }
 
@@ -1521,7 +1571,7 @@ mod tests {
         assert_eq!(net.ledger.voting_device(&net.fp(1)), None);
 
         let laptop = net.people[1].cert.clone();
-        let op = SignedOp::sign(&net.people[1], Op::RegisterDevice { cert: laptop }).unwrap();
+        let op = sign_op(&net.people[1], Op::RegisterDevice { cert: laptop }).unwrap();
         net.commit(0, t, vec![op]).unwrap();
         let laptop_id = net.people[1].peer_id.to_string();
         assert_eq!(
@@ -1534,7 +1584,7 @@ mod tests {
         );
         assert!(net.ledger.device_key(&laptop_id).is_some());
 
-        let stolen = SignedOp::sign(
+        let stolen = sign_op(
             &net.people[0],
             Op::RegisterDevice {
                 cert: net.people[1].cert.clone(),
@@ -1542,8 +1592,7 @@ mod tests {
         )
         .unwrap();
         assert!(net.commit(0, t, vec![stolen]).is_err());
-        let hijack =
-            SignedOp::sign(&net.people[0], Op::SetVotingDevice { device: laptop_id }).unwrap();
+        let hijack = sign_op(&net.people[0], Op::SetVotingDevice { device: laptop_id }).unwrap();
         assert!(net.commit(0, t, vec![hijack]).is_err());
     }
 
@@ -1551,7 +1600,7 @@ mod tests {
     fn placements_track_who_holds_a_file() {
         let mut net = Net::everyone_joined(3);
         for who in 1..3 {
-            let op = SignedOp::sign(
+            let op = sign_op(
                 &net.people[who],
                 Op::RegisterDevice {
                     cert: net.people[who].cert.clone(),
@@ -1564,7 +1613,7 @@ mod tests {
         let device = |i: usize| net.people[i].peer_id.to_string();
         let (d0, d1, d2) = (device(0), device(1), device(2));
         let people = net.people.clone();
-        let sign = |who: usize, op: Op| SignedOp::sign(&people[who], op).unwrap();
+        let sign = |who: usize, op: Op| sign_op(&people[who], op).unwrap();
         let place = |holders: &[&String], k: usize| Op::Place {
             file_id: "f".into(),
             k,
@@ -1645,7 +1694,7 @@ mod tests {
     fn an_extra_holder_replaces_a_user_who_is_gone() {
         let mut net = Net::everyone_joined(3);
         for who in 1..3 {
-            let op = SignedOp::sign(
+            let op = sign_op(
                 &net.people[who],
                 Op::RegisterDevice {
                     cert: net.people[who].cert.clone(),
@@ -1658,7 +1707,7 @@ mod tests {
         let device = |i: usize| net.people[i].peer_id.to_string();
         let (d0, d1, d2) = (device(0), device(1), device(2));
         let people = net.people.clone();
-        let sign = |who: usize, op: Op| SignedOp::sign(&people[who], op).unwrap();
+        let sign = |who: usize, op: Op| sign_op(&people[who], op).unwrap();
         let t = net.now();
         let place = Op::Place {
             file_id: "f".into(),
@@ -1684,7 +1733,7 @@ mod tests {
     fn a_holder_that_stops_proving_its_storage_is_replaced() {
         let mut net = Net::everyone_joined(3);
         for who in 1..3 {
-            let op = SignedOp::sign(
+            let op = sign_op(
                 &net.people[who],
                 Op::RegisterDevice {
                     cert: net.people[who].cert.clone(),
@@ -1697,7 +1746,7 @@ mod tests {
         let device = |i: usize| net.people[i].peer_id.to_string();
         let (d0, d1, d2) = (device(0), device(1), device(2));
         let people = net.people.clone();
-        let sign = |who: usize, op: Op| SignedOp::sign(&people[who], op).unwrap();
+        let sign = |who: usize, op: Op| sign_op(&people[who], op).unwrap();
         let t = net.now();
         let place = Op::Place {
             file_id: "f".into(),
@@ -1735,7 +1784,7 @@ mod tests {
     fn trusting_a_newcomer_is_a_scored_bet() {
         let mut net = Net::everyone_joined(3);
         for who in 1..3 {
-            let op = SignedOp::sign(
+            let op = sign_op(
                 &net.people[who],
                 Op::RegisterDevice {
                     cert: net.people[who].cert.clone(),
@@ -1748,7 +1797,7 @@ mod tests {
         let device = |i: usize| net.people[i].peer_id.to_string();
         let (d0, d1, d2) = (device(0), device(1), device(2));
         let people = net.people.clone();
-        let sign = |who: usize, op: Op| SignedOp::sign(&people[who], op).unwrap();
+        let sign = |who: usize, op: Op| sign_op(&people[who], op).unwrap();
         let place = |file: &str| Op::Place {
             file_id: file.into(),
             k: 1,
@@ -1812,7 +1861,7 @@ mod tests {
     fn inviting_stakes_trust_and_bets_on_invitees_do_not_score() {
         let mut net = Net::everyone_joined(3);
         for who in 1..3 {
-            let op = SignedOp::sign(
+            let op = sign_op(
                 &net.people[who],
                 Op::RegisterDevice {
                     cert: net.people[who].cert.clone(),
@@ -1825,7 +1874,7 @@ mod tests {
         let device = |i: usize| net.people[i].peer_id.to_string();
         let (d0, d1, d2) = (device(0), device(1), device(2));
         let people = net.people.clone();
-        let sign = |who: usize, op: Op| SignedOp::sign(&people[who], op).unwrap();
+        let sign = |who: usize, op: Op| sign_op(&people[who], op).unwrap();
         assert_eq!(net.ledger.sponsoring(&net.fp(0)), 2);
         let t = net.now();
         let place = Op::Place {
@@ -1864,7 +1913,7 @@ mod tests {
 
         let mut net = Net::everyone_joined(3);
         let t = net.now();
-        let leave = SignedOp::sign(&net.people[2], Op::Leave).unwrap();
+        let leave = sign_op(&net.people[2], Op::Leave).unwrap();
         net.commit(0, t, vec![leave]).unwrap();
         assert_eq!(net.ledger.trust[&net.fp(0)], -STAKE);
         for _ in 0..net.ledger.params.horizon_epochs {
@@ -1885,9 +1934,8 @@ mod tests {
             horizon_epochs: 3,
             ..Params::default()
         };
-        let vote = |who: usize, params: Params| {
-            SignedOp::sign(&people[who], Op::SetParams { params }).unwrap()
-        };
+        let vote =
+            |who: usize, params: Params| sign_op(&people[who], Op::SetParams { params }).unwrap();
         let t = net.now();
         let broken = Params {
             ph_ppm: 1_000_000,
