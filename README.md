@@ -46,8 +46,10 @@ bp invite friends "ssh-ed25519 AAAA… marco@pc"   # prints a token for Marco
 bp join <token>                                  # on Marco's machine
 ```
 
-You can only store what the others have verified you host, so a network needs at
-least two users with a Pouch each before anyone can upload.
+Each tier is a folder (`bp put --tier T2`). A folder spreads files only once at
+least 3 users have a Pouch that reaches it; until then your files stay on your own
+Pouches and are spread as soon as it fills up. On the others you can only store what
+they have verified you host.
 
 To try a whole network on one machine: `./playground.sh up` (Docker, 6 nodes, built from this checkout), then `./playground.sh app` for the web app.
 
