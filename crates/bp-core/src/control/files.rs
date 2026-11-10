@@ -97,9 +97,15 @@ pub fn layer_nodes(state: &DaemonState, network_id: &str) -> Vec<LayerNode> {
     nodes
 }
 
-fn availabilities(state: &DaemonState, peers: &[String]) -> Vec<f64> {
-    let qos = state.qos.read().unwrap();
-    peers.iter().map(|p| qos.availability(p)).collect()
+fn availabilities(state: &DaemonState, network_id: &str, peers: &[String]) -> Vec<f64> {
+    let chains = state.chains.read().unwrap();
+    let Some(ledger) = chains.get(network_id).map(|c| c.ledger()) else {
+        return vec![crate::network::qos::unknown_availability(); peers.len()];
+    };
+    peers
+        .iter()
+        .map(|p| ledger.device_availability(p))
+        .collect()
 }
 
 pub fn choose_layer(
@@ -161,7 +167,13 @@ pub fn quota_rate(
 ) -> Result<Rate, String> {
     let nodes = layer_nodes(state, network_id);
     let sample = (size as usize).clamp(1, CHUNK_BYTES);
-    let (_, peers, plan) = choose_layer(&nodes, "", |p| availabilities(state, p), sample, ph)?;
+    let (_, peers, plan) = choose_layer(
+        &nodes,
+        "",
+        |p| availabilities(state, network_id, p),
+        sample,
+        ph,
+    )?;
     let chains = state.chains.read().unwrap();
     let ledger = chains
         .get(network_id)
@@ -240,7 +252,7 @@ fn plan_file(
     let (layer, holders, plan) = choose_layer(
         &layer_nodes(state, network_id),
         file_id,
-        |peers| availabilities(state, peers),
+        |peers| availabilities(state, network_id, peers),
         largest_chunk,
         ph,
     )?;

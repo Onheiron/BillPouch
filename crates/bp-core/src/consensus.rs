@@ -741,7 +741,7 @@ mod tests {
             let op = SignedOp::sign(
                 &self.people[by],
                 Op::Observations {
-                    epoch: epoch_of(self.now),
+                    hour: self.now / 1000 / crate::ledger::HOUR_SECS,
                     results: vec![crate::ledger::Observation {
                         device: self.people[about].peer_id.to_string(),
                         user: self.people[about].fingerprint.clone(),
