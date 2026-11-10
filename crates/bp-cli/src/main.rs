@@ -221,6 +221,12 @@ enum Cmd {
         )]
         #[arg(long)]
         name: Option<String>,
+
+        #[arg(
+            help = "Folder (tier) to store the file in: T1 … T5. A folder with fewer than 3 users with a Pouch keeps the file on your own Pouches until it fills up"
+        )]
+        #[arg(long, default_value = "T1")]
+        tier: bp_core::storage::StorageTier,
     },
 
     #[command(about = "Fetch, decrypt and write one of your files (or one shared with you)")]
@@ -510,8 +516,9 @@ async fn main() -> anyhow::Result<()> {
             network,
             ph,
             name,
+            tier,
         }) => {
-            commands::put::put(file, network, ph, name).await?;
+            commands::put::put(file, network, ph, name, tier).await?;
         }
 
         Some(Cmd::Get {

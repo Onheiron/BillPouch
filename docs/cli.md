@@ -43,13 +43,13 @@ started automatically when missing.
 
 | Command | Description |
 |---------|-------------|
-| `bp put <file> --network <id> [--ph <p>] [--name <name>]` | Stream a file in 4 MiB chunks: encrypt, encode and give one fragment to every Pouch of the lowest layer with room; prints its `file_id`. `--ph` = target recovery probability (default: the network's `ph`, see `bp params`) |
+| `bp put <file> --network <id> [--tier T1] [--ph <p>] [--name <name>]` | Stream a file in 4 MiB chunks into a folder (`--tier`, default T1): encrypt, encode and spread fragments over the folder's Pouches; prints its `file_id`. A folder with fewer than 3 users with a Pouch keeps the file on your own Pouches until it fills up. `--ph` = target recovery probability (default: the network's `ph`, see `bp params`) |
 | `bp get <file_id> <output> --network <id>` | Fetch, decode and decrypt one of your files or one shared with you, chunk by chunk |
 | `bp rm <file_id> --network <id>` | Delete one of your files (every Pouch drops its fragments), or remove a shared file from your list |
-| `bp ls [--network <id>]` | Your files and the ones shared with you, from your index (synced across your devices) |
+| `bp ls [--network <id>]` | Your files and the ones shared with you, from your index (synced across your devices), with their folder (`local` while it keeps them on your Pouches) |
 | `bp unshare <file_id> <fingerprint> --network <id>` | Withdraw a member's access: Pouches refuse them the fragments and the file leaves their list |
 | `bp share <file_id> <fingerprint> --network <id>` | Share one of your own files with a member: the file key is wrapped for their SSH key, a fetch grant is signed for them and both are delivered; it then shows up in their `bp ls` |
-| `bp storage [--network <id>]` | Colored bars on the scale of what you offer: per Pouch its setup (others' data, filler, free space); per network your quota = verified credit × k/n (used, free, not verified yet, redundancy); your upload totals |
+| `bp storage [--network <id>]` | Colored bars on the scale of what you offer: per Pouch its setup (others' data, filler, free space); per network your quota = verified credit × k/n (used, free, not verified yet, redundancy); per folder its users, Pouches, free space and k/n, or *local only*; your upload totals |
 
 ## Connectivity
 

@@ -368,6 +368,7 @@ struct PutFileQuery {
     network: String,
     name: Option<String>,
     ph: Option<f64>,
+    tier: Option<bp_core::storage::StorageTier>,
 }
 
 fn scratch_file() -> std::io::Result<PathBuf> {
@@ -407,6 +408,7 @@ async fn put_file(
         network_id: query.network,
         ph: query.ph,
         file_name: query.name,
+        tier: query.tier,
     };
     let response = respond(&state, req, StatusCode::CREATED).await;
     let _ = tokio::fs::remove_file(&path).await;

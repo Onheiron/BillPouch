@@ -874,7 +874,10 @@ impl Ledger {
                 bytes,
                 holders,
             } => {
-                if self.placements.contains_key(file_id)
+                if self
+                    .placements
+                    .get(file_id)
+                    .is_some_and(|p| p.owner != author)
                     || *k == 0
                     || *k > holders.len()
                     || chunks.is_empty()
@@ -884,6 +887,7 @@ impl Ledger {
                 {
                     return Err(invalid("invalid placement"));
                 }
+                self.bets.retain(|b| b.file_id != *file_id);
                 self.placements.insert(
                     file_id.clone(),
                     Placement {

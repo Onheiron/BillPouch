@@ -97,10 +97,10 @@ chunks; only one chunk is in memory at a time. Each file gets a random
    your SSH key and put in the file's manifest: `file_id`, the ordered
    `chunk_id`s, name, size, owner, one wrap and one grant per authorized user.
    Pouches only ever see ciphertext.
-2. **Choose the layer** (see *Storage tiers*). `chunk_id` is a 16-hex-char
-   BLAKE3 prefix of the ciphertext. The chunk goes to the lowest layer whose
-   every Pouch (yours included) still has room for one fragment in that layer's
-   slice; lower layers have more Pouches, so they are at least as stable.
+2. **The folder** (see *Storage tiers*) is the layer you put the file in
+   (`--tier`, default T1). `chunk_id` is a 16-hex-char BLAKE3 prefix of the
+   ciphertext. Every chosen holder must still have room for one fragment in
+   that layer's slice, or the folder is full.
 3. **Choose k and the holders** (`coding/params.rs`). With `X_i` = Pouch `i`
    reachable, with probability `p_i` (its conservative availability, below),
    the recovery probability `Pe = P(Σ X_i ≥ k)` over `n` holders is computed
@@ -183,7 +183,21 @@ the offer ends, so a 512 MiB T1 Pouch has a 512 MiB T1 slice.
 With 100 Pouches of which 30 are T2 and 10 are T3, layer T1 has 100 Pouches,
 T2 40 and T3 10. A fragment of layer `L` only goes into the `L` slice, and a
 Pouch announces its free space per layer (`layer_free`). Usable space and
-redundancy therefore come in steps, one per layer; files fill T1 first.
+redundancy therefore come in steps, one per layer.
+
+**Folders.** Each layer is a folder you choose when you store a file
+(`bp put --tier T2`, or the folder picker of the web app). `bp storage` and the
+web app show each folder's users, Pouches, free space, `k/n` and recovery
+probability. A folder works only once **at least 3 users** have a Pouch that
+reaches it: with fewer, nobody can cross-check the others. Until then a file
+put there stays on your own Pouches that reach the folder (`k = 1`, a full copy
+on each), costs no quota and is shown as *local only*; with no such Pouch of
+yours the upload is refused. Every 30 s the daemon looks for a local file of
+yours whose folder now has 3 users, checks your quota, spreads it over the
+folder like a new upload, registers the new placement (an owner may re-place
+its own file) and drops its local copies. Example: ten 10 GiB Pouches and one
+of 1 TiB make a working T1 folder of eleven Pouches, while the 1 TiB owner's T2
+to T4 folders stay local until two more users offer that much.
 
 | Tier | Name | Quota |
 |------|------|-------|
@@ -362,7 +376,7 @@ signed ops from the genesis entry and the creator's device certificate:
 | `Observations` | Adds an hour of PoS counts to other users' and their devices' totals |
 | `ProposeExpel` / `ApproveExpel` | Expulsion vote |
 | `Leave` | The author leaves: no longer a member, weight removed, rotation due |
-| `Place` | Owner registers a file: chunks, `k`, layer, the bytes each holder stores and the holders it was planned with |
+| `Place` | Owner registers (or re-places) a file: chunks, `k`, layer, the bytes each holder stores and the holders it was planned with |
 | `Hold` / `Release` | A user's device starts or stops holding a file's fragments, as a charged or an extra holder |
 | `Drop` | Owner deletes a file from the registry |
 | `Trust` | A holder hands its place in a file to an extra holder of another user and bets that they keep it |

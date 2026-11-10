@@ -193,6 +193,22 @@ impl StorageManager {
         Ok(freed)
     }
 
+    pub fn remove_fragment(&mut self, chunk_id: &str, fragment_id: &str) -> BpResult<u64> {
+        let layer = self.owner_of(chunk_id).map(|o| o.layer);
+        let Some(meta) = self.index.remove(chunk_id, fragment_id) else {
+            return Ok(0);
+        };
+        let dir = self.root.join("fragments").join(chunk_id);
+        let _ = std::fs::remove_file(dir.join(format!("{fragment_id}.frag")));
+        let _ = std::fs::remove_file(dir.join(format!("{fragment_id}.commit")));
+        if let Some(used) = layer.and_then(|l| self.layer_used.get_mut(&l)) {
+            *used = used.saturating_sub(meta.size_bytes);
+        }
+        self.meta.storage_bytes_used = self.meta.storage_bytes_used.saturating_sub(meta.size_bytes);
+        self.save_meta()?;
+        Ok(meta.size_bytes)
+    }
+
     pub fn catalog(&self, layer: StorageTier) -> Vec<CatalogEntry> {
         self.index
             .chunk_ids()

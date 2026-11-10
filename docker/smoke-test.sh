@@ -276,7 +276,7 @@ fi
 
 docker exec bp-post bash -c 'head -c 100000 /dev/urandom > /tmp/free.bin'
 FREE_OUT=$(docker exec bp-post bp put /tmp/free.bin --network smoketest 2>&1) || true
-if echo "${FREE_OUT}" | grep -q "not enough quota"; then
+if echo "${FREE_OUT}" | grep -qE "not enough quota|none of your Pouches reaches"; then
     pass "lucia-post, who hosts nothing, cannot store on the others' Pouches"
 else
     fail "lucia-post stored without credit: ${FREE_OUT}"

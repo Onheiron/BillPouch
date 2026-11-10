@@ -206,7 +206,11 @@ fn display_name(path: &tauri_plugin_fs::FilePath, n: usize) -> String {
 }
 
 #[tauri::command]
-async fn upload_files(app: AppHandle, network: String) -> Result<Vec<String>, String> {
+async fn upload_files(
+    app: AppHandle,
+    network: String,
+    tier: bp_core::storage::StorageTier,
+) -> Result<Vec<String>, String> {
     let picker = app.clone();
     let picked =
         tauri::async_runtime::spawn_blocking(move || picker.dialog().file().blocking_pick_files())
@@ -224,6 +228,7 @@ async fn upload_files(app: AppHandle, network: String) -> Result<Vec<String>, St
             ph: None,
             network_id: network.clone(),
             file_name: Some(name.clone()),
+            tier: Some(tier),
         })
         .await;
         let _ = std::fs::remove_file(&temp);

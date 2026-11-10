@@ -1,5 +1,7 @@
 use crate::client::ControlClient;
-use bp_core::control::protocol::{ControlRequest, CreditStat, PouchStat, StorageInfoData};
+use bp_core::control::protocol::{
+    ControlRequest, CreditStat, FolderInfo, PouchStat, StorageInfoData,
+};
 use std::io::IsTerminal;
 
 const BAR: usize = 40;
@@ -21,6 +23,12 @@ pub async fn storage_info(network_id: String) -> anyhow::Result<()> {
     }
     for c in &d.credits {
         print_credit(c);
+        println!();
+    }
+    for f in &d.folders {
+        print_folder(f);
+    }
+    if !d.folders.is_empty() {
         println!();
     }
     println!(
@@ -63,6 +71,23 @@ pub fn print_pouch(p: &PouchStat) {
     println!(
         "   setup {}: the space the network has filled and challenges you on",
         pct(p.fragment_bytes + p.filler_bytes, p.quota_bytes)
+    );
+}
+
+fn print_folder(f: &FolderInfo) {
+    let state = if f.active {
+        format!("k/n {}/{}, recovery {:.4}", f.k, f.n, f.pe)
+    } else {
+        "local only: files stay on your Pouches until 3 users have a Pouch here".to_string()
+    };
+    println!(
+        "📁 {} {}: {} user(s), {} Pouch(es), {} free — {}",
+        f.network_id,
+        f.tier,
+        f.users,
+        f.pouches,
+        fmt_bytes(f.free_bytes),
+        state
     );
 }
 

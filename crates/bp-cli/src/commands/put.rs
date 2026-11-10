@@ -8,6 +8,7 @@ pub async fn put(
     network: String,
     ph: Option<f64>,
     name: Option<String>,
+    tier: bp_core::storage::StorageTier,
 ) -> anyhow::Result<()> {
     let path = std::fs::canonicalize(&path)
         .map_err(|e| anyhow::anyhow!("Cannot read {:?}: {}", path, e))?;
@@ -18,6 +19,7 @@ pub async fn put(
             ph,
             network_id: network.clone(),
             file_name: name,
+            tier: Some(tier),
         })
         .await?
         .ok_or_else(|| anyhow::anyhow!("empty response from daemon"))?;
@@ -34,5 +36,12 @@ pub async fn put(
         d.fragments_stored, d.fragments_distributed
     );
     println!("   network      : {}", network);
+    println!("   folder       : {}", d.tier);
+    if d.local {
+        println!(
+            "⚠  folder {} has fewer than 3 users with a Pouch: the file stays on your own Pouches, unprotected, and is spread over the folder as soon as it fills up",
+            d.tier
+        );
+    }
     Ok(())
 }

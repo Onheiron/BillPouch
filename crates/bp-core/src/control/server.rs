@@ -774,7 +774,8 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             ph,
             network_id,
             file_name,
-        } => files::put_file(state, path, ph, network_id, file_name).await,
+            tier,
+        } => files::put_file(state, path, ph, network_id, file_name, tier).await,
 
         ControlRequest::GetFile {
             file_id,
@@ -857,7 +858,20 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                     })
                 })
                 .collect();
+            let networks: Vec<String> = state
+                .chains
+                .read()
+                .unwrap()
+                .keys()
+                .filter(|name| network_id.is_empty() || **name == network_id)
+                .cloned()
+                .collect();
+            let folders = networks
+                .iter()
+                .flat_map(|name| files::folders(state, name))
+                .collect();
             ControlResponse::ok(StorageInfoData {
+                folders,
                 files_uploaded: own.len(),
                 uploaded_bytes: own.iter().map(|f| f.size_bytes).sum(),
                 pouches,
