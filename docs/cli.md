@@ -65,4 +65,6 @@ started automatically when missing.
 | `BP_PASSPHRASE` | Passphrase for an encrypted identity |
 | `BP_LISTEN_PORT` | Fixed TCP listen port for the daemon (default: random); `off` makes a client-only node that only dials out, enough for a Bill |
 | `BP_TRUST_AFTER` | Mean minutes this node waits before handing a file it holds to a reliable newcomer (default 360); sooner for files with more holders than they need, never when the file would fall below `ph` |
+| `BP_FETCH_SPARE` | Holders `bp get` asks for each chunk beyond the fragments it lacks (default 1): more is faster, fewer saves bandwidth |
+| `BP_FETCH_PARALLEL` | Chunks `bp get` fetches at once (default 4) |
 | `RUST_LOG` | Log filter, e.g. `bp_core=debug` |

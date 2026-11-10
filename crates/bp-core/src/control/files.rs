@@ -21,11 +21,18 @@ use crate::{
         ChunkCipher, StorageTier,
     },
 };
+use futures::StreamExt;
 use libp2p::PeerId;
 use std::collections::HashSet;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    sync::mpsc,
+};
 
 const FETCH_TIMEOUT_SECS: u64 = 10;
+const MIN_HEDGE_MS: f64 = 1_000.0;
+const DEFAULT_FETCH_SPARE: usize = 1;
+const DEFAULT_FETCH_PARALLEL: usize = 4;
 
 #[derive(Default)]
 pub struct Stored {
@@ -390,6 +397,97 @@ async fn store_chunk(
     Ok(chunk_id)
 }
 
+fn env_count(name: &str, default: usize) -> usize {
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
+}
+
+fn fetch_spare() -> usize {
+    env_count("BP_FETCH_SPARE", DEFAULT_FETCH_SPARE)
+}
+
+fn fetch_parallel() -> usize {
+    env_count("BP_FETCH_PARALLEL", DEFAULT_FETCH_PARALLEL).max(1)
+}
+
+fn fetch_candidates(
+    state: &DaemonState,
+    network_id: &str,
+    chunk_id: &str,
+    file_id: &str,
+) -> (Vec<(PeerId, f64)>, usize) {
+    let me = state.identity.peer_id.to_string();
+    let (holders, k) = {
+        let chains = state.chains.read().unwrap();
+        chains
+            .get(network_id)
+            .and_then(|c| {
+                let ledger = c.ledger();
+                let p = ledger.placements.get(file_id)?;
+                let live: Vec<String> = ledger.live_holders(p).into_iter().cloned().collect();
+                Some((live, p.k))
+            })
+            .unwrap_or_default()
+    };
+    let indexed: Vec<String> = state
+        .remote_fragment_index
+        .read()
+        .unwrap()
+        .pointers_for(chunk_id)
+        .iter()
+        .map(|p| p.peer_id.clone())
+        .collect();
+    let pouches: Vec<String> = state
+        .network_state
+        .read()
+        .unwrap()
+        .in_network(network_id)
+        .into_iter()
+        .filter(|n| n.service_type == ServiceType::Pouch)
+        .map(|n| n.peer_id.clone())
+        .collect();
+    let qos = state.qos.read().unwrap();
+    let rtt = |p: &String| qos.get(p).and_then(|q| q.rtt_ewma_ms).unwrap_or(f64::MAX);
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for mut group in [holders, indexed, pouches] {
+        group.sort_by(|a, b| rtt(a).total_cmp(&rtt(b)));
+        for peer in group {
+            if peer != me && seen.insert(peer.clone()) {
+                if let Ok(id) = peer.parse() {
+                    out.push((id, rtt(&peer).min(FETCH_TIMEOUT_SECS as f64 * 1000.0)));
+                }
+            }
+        }
+    }
+    (out, k.max(1))
+}
+
+async fn ask(
+    net_tx: mpsc::Sender<NetworkCommand>,
+    peer: PeerId,
+    chunk_id: String,
+    grant: Grant,
+) -> Option<Vec<(String, Vec<u8>)>> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    net_tx
+        .send(NetworkCommand::FetchChunkFragments {
+            peer_id: peer,
+            chunk_id,
+            grant,
+            resp_tx: tx,
+        })
+        .await
+        .ok()?;
+    let timeout = std::time::Duration::from_secs(FETCH_TIMEOUT_SECS);
+    match tokio::time::timeout(timeout, rx).await {
+        Ok(Ok(FragmentResponse::FoundMany { fragments })) => Some(fragments),
+        _ => None,
+    }
+}
+
 pub async fn fetch_chunk(
     state: &DaemonState,
     network_id: &str,
@@ -410,69 +508,52 @@ pub async fn fetch_chunk(
         }
     }
 
-    let k = fragments.first().map_or(0, |f| f.k);
     let mut remote_count = 0;
-    if fragments.is_empty() || fragments.len() < k {
-        let local_peer = state.identity.peer_id.to_string();
-        let peers: Vec<PeerId> = {
-            let idx = state.remote_fragment_index.read().unwrap();
-            let mut candidates: Vec<String> = idx
-                .pointers_for(chunk_id)
-                .iter()
-                .map(|p| p.peer_id.clone())
-                .collect();
-            candidates.extend(
-                state
-                    .network_state
-                    .read()
-                    .unwrap()
-                    .in_network(network_id)
-                    .into_iter()
-                    .filter(|n| n.service_type == ServiceType::Pouch)
-                    .map(|n| n.peer_id.clone()),
-            );
-            let mut seen = HashSet::new();
-            candidates
-                .into_iter()
-                .filter(|p| *p != local_peer && seen.insert(p.clone()))
-                .filter_map(|p| p.parse().ok())
-                .collect()
-        };
-
-        let mut receivers = Vec::new();
-        for peer in peers {
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            let sent = state
-                .net_tx
-                .send(NetworkCommand::FetchChunkFragments {
-                    peer_id: peer,
-                    chunk_id: chunk_id.to_string(),
-                    grant: grant.clone(),
-                    resp_tx: tx,
-                })
-                .await;
-            if sent.is_ok() {
-                receivers.push(rx);
-            }
+    let enough = |fragments: &[EncodedFragment]| {
+        let k = fragments.first().map_or(0, |f| f.k);
+        k > 0 && fragments.len() >= k
+    };
+    if !enough(&fragments) {
+        let (candidates, k) = fetch_candidates(state, network_id, chunk_id, &grant.file_id);
+        let hedge = candidates.first().map_or(MIN_HEDGE_MS, |(_, rtt)| {
+            (rtt * 3.0).clamp(MIN_HEDGE_MS, FETCH_TIMEOUT_SECS as f64 * 500.0)
+        });
+        let mut queue = candidates.into_iter().map(|(peer, _)| peer);
+        let mut pending = futures::stream::FuturesUnordered::new();
+        let first = k.saturating_sub(fragments.len()) + fetch_spare();
+        for peer in queue.by_ref().take(first) {
+            pending.push(ask(
+                state.net_tx.clone(),
+                peer,
+                chunk_id.to_string(),
+                grant.clone(),
+            ));
         }
-        for rx in receivers {
-            let timeout = std::time::Duration::from_secs(FETCH_TIMEOUT_SECS);
-            if let Ok(Ok(FragmentResponse::FoundMany { fragments: found })) =
-                tokio::time::timeout(timeout, rx).await
-            {
-                for (id, bytes) in found {
-                    match EncodedFragment::from_bytes(id, chunk_id.to_string(), &bytes) {
-                        Ok(f) => {
-                            fragments.push(f);
-                            remote_count += 1;
+        while !pending.is_empty() && !enough(&fragments) {
+            let wait = std::time::Duration::from_millis(hedge as u64);
+            match tokio::time::timeout(wait, pending.next()).await {
+                Ok(Some(Some(found))) => {
+                    for (id, bytes) in found {
+                        match EncodedFragment::from_bytes(id, chunk_id.to_string(), &bytes) {
+                            Ok(f) => {
+                                fragments.push(f);
+                                remote_count += 1;
+                            }
+                            Err(e) => tracing::warn!("Remote fragment parse error: {e}"),
                         }
-                        Err(e) => tracing::warn!("Remote fragment parse error: {e}"),
                     }
                 }
-            }
-            let k = fragments.first().map_or(0, |f| f.k);
-            if k > 0 && fragments.len() >= k {
-                break;
+                Ok(Some(None)) | Err(_) => {
+                    if let Some(peer) = queue.next() {
+                        pending.push(ask(
+                            state.net_tx.clone(),
+                            peer,
+                            chunk_id.to_string(),
+                            grant.clone(),
+                        ));
+                    }
+                }
+                Ok(None) => break,
             }
         }
     }
@@ -643,15 +724,16 @@ pub async fn get_file(
         Err(e) => return ControlResponse::err(format!("cannot write {}: {e}", partial.display())),
     };
     let mut fragments_remote = 0;
-    for chunk_id in &manifest.chunks {
-        let result = fetch_chunk(state, &network_id, chunk_id, &grant)
-            .await
-            .and_then(|(sealed, remote)| {
-                fragments_remote += remote;
-                cipher
-                    .decrypt(&sealed)
-                    .map_err(|e| format!("Decryption failed: {e}"))
-            });
+    let mut fetched = futures::stream::iter(&manifest.chunks)
+        .map(|chunk_id| fetch_chunk(state, &network_id, chunk_id, &grant))
+        .buffered(fetch_parallel());
+    while let Some(result) = fetched.next().await {
+        let result = result.and_then(|(sealed, remote)| {
+            fragments_remote += remote;
+            cipher
+                .decrypt(&sealed)
+                .map_err(|e| format!("Decryption failed: {e}"))
+        });
         let plain = match result {
             Ok(p) => p,
             Err(e) => {
@@ -663,6 +745,7 @@ pub async fn get_file(
             return ControlResponse::err(format!("cannot write {}: {e}", partial.display()));
         }
     }
+    drop(fetched);
     if let Err(e) = out
         .flush()
         .await
