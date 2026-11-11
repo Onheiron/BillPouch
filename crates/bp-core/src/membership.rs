@@ -11,7 +11,9 @@ use sha2::{Digest, Sha512};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WrappedKey {
+    #[serde(with = "crate::wire::hex_bytes")]
     pub ephemeral: String,
+    #[serde(with = "crate::wire::hex_bytes")]
     pub ciphertext: String,
 }
 
@@ -22,6 +24,7 @@ pub struct EntryBody {
     pub author: String,
     pub member: String,
     pub wrapped_key: WrappedKey,
+    #[serde(with = "crate::wire::hex_bytes")]
     pub commitment: String,
     pub at: u64,
 }
@@ -29,6 +32,7 @@ pub struct EntryBody {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Entry {
     pub body: EntryBody,
+    #[serde(with = "crate::wire::hex_bytes")]
     pub signature: String,
 }
 

@@ -29,6 +29,9 @@ pub enum BpError {
     #[error("Serialization error: {0}")]
     Serde(#[from] serde_json::Error),
 
+    #[error("Encoding error: {0}")]
+    Encoding(String),
+
     #[error("Not authenticated — run `bp login` first")]
     NotAuthenticated,
 

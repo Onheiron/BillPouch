@@ -557,7 +557,7 @@ async fn handle_swarm_event(
             };
             let Some(gossip) = crate::membership::open(key, &message.data)
                 .ok()
-                .and_then(|plain| serde_json::from_slice::<Gossip>(&plain).ok())
+                .and_then(|plain| crate::wire::decode::<Gossip>(&plain).ok())
             else {
                 tracing::warn!(peer=%propagation_source, "Dropped undecryptable gossip");
                 return;
@@ -795,9 +795,8 @@ fn publish(
         tracing::warn!(network=%network_id, "Publish to a network we have not joined");
         return;
     };
-    let sealed = serde_json::to_vec(message)
-        .map_err(BpError::from)
-        .and_then(|plain| crate::membership::seal(key, &plain));
+    let sealed =
+        crate::wire::encode(message).and_then(|plain| crate::membership::seal(key, &plain));
     match sealed {
         Ok(payload) => match swarm
             .behaviour_mut()
@@ -1266,9 +1265,9 @@ mod tests {
         ];
         for message in messages {
             let sealed =
-                crate::membership::seal(&key, &serde_json::to_vec(&message).unwrap()).unwrap();
+                crate::membership::seal(&key, &crate::wire::encode(&message).unwrap()).unwrap();
             let opened: Gossip =
-                serde_json::from_slice(&crate::membership::open(&key, &sealed).unwrap()).unwrap();
+                crate::wire::decode(&crate::membership::open(&key, &sealed).unwrap()).unwrap();
             assert_eq!(
                 serde_json::to_value(&opened).unwrap(),
                 serde_json::to_value(&message).unwrap()

@@ -8,7 +8,7 @@ Alpha. Current version in the root `Cargo.toml`; history in the GitHub releases.
 - **Services** `pouch` / `bill` / `post`; storage tiers T1–T5 as nested layers; one Pouch per network per node.
 - **Discovery** through invite tokens, addresses in announcements, Kademlia, bootstrap list and saved peers; gossip; NAT relay client. No mDNS.
 - **Invite-only networks**: network key wrapped per member, encrypted gossip, members-only fragment exchange.
-- **Shared ledger** per network, committed by weighted BFT consensus: members, devices, per-user reputation, per-device challenge counts, epoch snapshots, capabilities, expulsion votes, key rotation every epoch and after each expulsion, voted network parameters (`bp params`). Periodic reports share batched blocks; ops expire after an hour.
+- **Shared ledger** per network, committed by weighted BFT consensus: members, devices, per-user reputation, per-device challenge counts, epoch snapshots, capabilities, expulsion votes, key rotation every epoch and after each expulsion, voted network parameters (`bp params`). Periodic reports share batched blocks; ops expire after an hour. Ops name their author by fingerprint, and ops, blocks and gossip are CBOR with raw-byte signatures: a third smaller than JSON with the whole key.
 - **Folders**: each tier is a folder you put files in (`--tier`). A folder spreads files once at least 3 users have a Pouch that reaches it; until then files stay on your own Pouches and are spread automatically when it fills up.
 - **Files**: streamed in 4 MiB chunks, random per-file key wrapped per authorized user, systematic RLNC with `k/n` chosen to reach `ph` from the availability recorded in the ledger (the same for every node). `bp get` fetches from the nearest holders first, with spares, answers as they arrive and several chunks at once.
 - **Registry of holders** in the ledger (`Place`, `Hold`, `Release`, `Drop`): repair when a holder is gone (left, expelled, evicted, or silent for `grace` epochs), recoding chains so nobody sees the file.
@@ -36,7 +36,6 @@ Alpha. Current version in the root `Cargo.toml`; history in the GitHub releases.
 
 ## TODO
 
-- **Smaller ops**: sign ops with the author's fingerprint instead of the whole SSH key (the key is already in the member registry), and store and gossip ledger blocks in a binary encoding (CBOR) instead of JSON with hex. About half the size of every op.
 - **Snapshots and pruning**: the network periodically agrees on the ledger state at a height (certified by that block's precommits); nodes keep the snapshot and recent blocks and drop the rest, and a joining node downloads the snapshot instead of replaying everything. The old history can be archived as a BillPouch file in the network itself.
 - **Distributed file registry**: for hundreds of nodes and millions of files, keep each file's placement record with its holders and only a Merkle root of the registry in the ledger, so the replicated state stops growing with the number of files.
 - Playground: configurable epoch length, so bets, invitations and silent holders settle in minutes instead of days.
