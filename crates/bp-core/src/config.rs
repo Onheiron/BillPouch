@@ -67,6 +67,10 @@ pub fn files_path() -> BpResult<PathBuf> {
     Ok(base_dir()?.join("files.json"))
 }
 
+pub fn chat_path() -> BpResult<PathBuf> {
+    Ok(base_dir()?.join("chat.cbor"))
+}
+
 pub fn ensure_dirs() -> BpResult<()> {
     std::fs::create_dir_all(base_dir()?).map_err(BpError::Io)?;
     std::fs::create_dir_all(runtime_dir()?).map_err(BpError::Io)
