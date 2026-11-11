@@ -51,6 +51,10 @@ least 3 users have a Pouch that reaches it; until then your files stay on your o
 Pouches and are spread as soon as it fills up. On the others you can only store what
 they have verified you host.
 
+To watch your videos on the TV, plug a DLNA server on a Bill of a computer at home:
+`bp hatch bill --network friends --dlna`. The TV finds it as a media server and
+streams straight from the network; anyone on your local network can watch them.
+
 To try a whole network on one machine: `./playground.sh up` (Docker, 6 nodes, built from this checkout), then `./playground.sh app` for the web app.
 
 ## Android

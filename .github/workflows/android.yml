@@ -7,6 +7,7 @@ on:
       - "android/**"
       - "crates/bp-core/**"
       - "crates/bp-api/**"
+      - "crates/bp-dlna/**"
       - ".github/workflows/android.yml"
   workflow_dispatch:
 

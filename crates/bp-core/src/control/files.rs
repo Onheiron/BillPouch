@@ -784,10 +784,104 @@ fn manifest_of(state: &DaemonState, network_id: &str, file_id: &str) -> Option<M
         .cloned()
 }
 
+fn not_yours_text(file_id: &str, network_id: &str) -> String {
+    format!("'{file_id}' is not one of your files on '{network_id}' (see bp ls)")
+}
+
 fn not_yours(file_id: &str, network_id: &str) -> ControlResponse {
-    ControlResponse::err(format!(
-        "'{file_id}' is not one of your files on '{network_id}' (see bp ls)"
-    ))
+    ControlResponse::err(not_yours_text(file_id, network_id))
+}
+
+pub struct FileRead {
+    manifest: Manifest,
+    grant: Grant,
+    key: [u8; 32],
+    pub start: u64,
+    pub end: u64,
+}
+
+impl FileRead {
+    pub fn open(
+        state: &DaemonState,
+        network_id: &str,
+        file_id: &str,
+        range: Option<(u64, u64)>,
+    ) -> Result<Self, String> {
+        let manifest = manifest_of(state, network_id, file_id)
+            .ok_or_else(|| not_yours_text(file_id, network_id))?;
+        let (grant, key) = manifest
+            .grant_for(&state.identity.fingerprint)
+            .and_then(|g| Ok((g.clone(), manifest.file_key(&state.identity)?)))
+            .map_err(|e| e.to_string())?;
+        let size = manifest.size_bytes;
+        let (start, end) = match range {
+            None => (0, size),
+            Some((offset, len)) if offset < size && len > 0 => {
+                (offset, offset.saturating_add(len).min(size))
+            }
+            Some(_) => return Err(format!("the range is outside the file ({size} bytes)")),
+        };
+        Ok(Self {
+            manifest,
+            grant,
+            key,
+            start,
+            end,
+        })
+    }
+
+    pub async fn copy_to<W: tokio::io::AsyncWrite + Unpin>(
+        &self,
+        state: &DaemonState,
+        out: &mut W,
+    ) -> Result<usize, String> {
+        let (start, end) = (self.start, self.end);
+        let chunk = self.manifest.chunk_bytes.max(1);
+        let (first, last) = (
+            (start / chunk) as usize,
+            ((end.max(1) - 1) / chunk) as usize,
+        );
+        let cipher = ChunkCipher::from_raw_key(self.key);
+        let mut fragments_remote = 0;
+        let (net, grant, file) = (&self.manifest.network, &self.grant, &self.manifest.file_id);
+        let wanted: Vec<(usize, String)> = self
+            .manifest
+            .chunks
+            .iter()
+            .cloned()
+            .enumerate()
+            .skip(first)
+            .take(last + 1 - first)
+            .collect();
+        let mut fetched = futures::stream::iter(wanted)
+            .map(|(i, hash)| async move {
+                let chunk_id = crate::files::chunk_id(file, i);
+                (
+                    i,
+                    fetch_chunk(state, net, &chunk_id, grant, Some(&hash)).await,
+                )
+            })
+            .buffered(fetch_parallel());
+        while let Some((i, result)) = fetched.next().await {
+            let plain = result.and_then(|(sealed, remote)| {
+                fragments_remote += remote;
+                let packed = cipher
+                    .decrypt(&sealed)
+                    .map_err(|e| format!("Decryption failed: {e}"))?;
+                crate::files::unpack(&packed).map_err(|e| e.to_string())
+            })?;
+            let at = i as u64 * chunk;
+            let from = (start.max(at) - at) as usize;
+            let to = ((end.min(at + plain.len() as u64)).saturating_sub(at) as usize).max(from);
+            out.write_all(&plain[from..to])
+                .await
+                .map_err(|e| format!("cannot write: {e}"))?;
+        }
+        out.flush()
+            .await
+            .map_err(|e| format!("cannot write: {e}"))?;
+        Ok(fragments_remote)
+    }
 }
 
 pub async fn get_file(
@@ -798,32 +892,10 @@ pub async fn get_file(
     range: Option<(u64, u64)>,
 ) -> ControlResponse {
     use std::os::unix::fs::FileTypeExt;
-    let Some(manifest) = manifest_of(state, &network_id, &file_id) else {
-        return not_yours(&file_id, &network_id);
-    };
-    let (grant, key) = match manifest
-        .grant_for(&state.identity.fingerprint)
-        .and_then(|g| Ok((g.clone(), manifest.file_key(&state.identity)?)))
-    {
+    let read = match FileRead::open(state, &network_id, &file_id, range) {
         Ok(r) => r,
-        Err(e) => return ControlResponse::err(e.to_string()),
+        Err(e) => return ControlResponse::err(e),
     };
-    let size = manifest.size_bytes;
-    let (start, end) = match range {
-        None => (0, size),
-        Some((offset, len)) if offset < size && len > 0 => {
-            (offset, offset.saturating_add(len).min(size))
-        }
-        Some(_) => {
-            return ControlResponse::err(format!("the range is outside the file ({size} bytes)"))
-        }
-    };
-    let chunk = manifest.chunk_bytes.max(1);
-    let (first, last) = (
-        (start / chunk) as usize,
-        ((end.max(1) - 1) / chunk) as usize,
-    );
-    let cipher = ChunkCipher::from_raw_key(key);
     let streamed = std::fs::metadata(&output).is_ok_and(|m| m.file_type().is_fifo());
     let direct = streamed || range.is_some();
     let target = if direct {
@@ -841,53 +913,15 @@ pub async fn get_file(
         Ok(f) => f,
         Err(e) => return ControlResponse::err(format!("cannot write {}: {e}", target.display())),
     };
-    let mut fragments_remote = 0;
-    let (net, grant, file) = (&network_id, &grant, &manifest.file_id);
-    let wanted: Vec<(usize, String)> = manifest
-        .chunks
-        .iter()
-        .cloned()
-        .enumerate()
-        .skip(first)
-        .take(last + 1 - first)
-        .collect();
-    let mut fetched = futures::stream::iter(wanted)
-        .map(|(i, hash)| async move {
-            let chunk_id = crate::files::chunk_id(file, i);
-            (
-                i,
-                fetch_chunk(state, net, &chunk_id, grant, Some(&hash)).await,
-            )
-        })
-        .buffered(fetch_parallel());
-    while let Some((i, result)) = fetched.next().await {
-        let result = result.and_then(|(sealed, remote)| {
-            fragments_remote += remote;
-            let packed = cipher
-                .decrypt(&sealed)
-                .map_err(|e| format!("Decryption failed: {e}"))?;
-            crate::files::unpack(&packed).map_err(|e| e.to_string())
-        });
-        let plain = match result {
-            Ok(p) => p,
-            Err(e) => {
-                if !direct {
-                    let _ = tokio::fs::remove_file(&target).await;
-                }
-                return ControlResponse::err(e);
+    let fragments_remote = match read.copy_to(state, &mut out).await {
+        Ok(n) => n,
+        Err(e) => {
+            if !direct {
+                let _ = tokio::fs::remove_file(&target).await;
             }
-        };
-        let at = i as u64 * chunk;
-        let from = (start.max(at) - at) as usize;
-        let to = ((end.min(at + plain.len() as u64)).saturating_sub(at) as usize).max(from);
-        if let Err(e) = out.write_all(&plain[from..to]).await {
-            return ControlResponse::err(format!("cannot write {}: {e}", target.display()));
+            return ControlResponse::err(e);
         }
-    }
-    drop(fetched);
-    if let Err(e) = out.flush().await {
-        return ControlResponse::err(format!("cannot write {}: {e}", target.display()));
-    }
+    };
     if !direct {
         if let Err(e) = tokio::fs::rename(&target, &output).await {
             return ControlResponse::err(format!("cannot write {}: {e}", output.display()));
@@ -895,10 +929,10 @@ pub async fn get_file(
     }
     ControlResponse::ok(GetFileData {
         file_id,
-        file_name: manifest.file_name,
-        size_bytes: manifest.size_bytes,
-        bytes: end - start,
-        chunks: manifest.chunks.len(),
+        file_name: read.manifest.file_name.clone(),
+        size_bytes: read.manifest.size_bytes,
+        bytes: read.end - read.start,
+        chunks: read.manifest.chunks.len(),
         fragments_remote,
         output: output.display().to_string(),
     })
