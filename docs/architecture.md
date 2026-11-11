@@ -424,8 +424,12 @@ next one.
 | R3 | Trusted | member ≥ 90 days, pass rate ≥ 99.5 % |
 | R4 | Pillar | member ≥ 365 days, pass rate ≥ 99.9 % |
 
-Weight = tier rank (R1 = 1 … R4 = 4). With 4 or more users no user can hold
-more than a quarter of the total (capped iteratively).
+Weight = tier rank (R1 = 1 … R4 = 4), but only for users with a live device
+that has passed a challenge, that is a Pouch: once anyone has one, users
+without (who only run Bills, and so have no quota either) stay members with no
+weight. Until then, in a brand-new network, everyone weighs by tier. With 4 or
+more users no user can hold more than a quarter of the total (capped
+iteratively).
 
 **Capabilities**: vote R1+, invite R2+, propose an expulsion R3+; while nobody
 has reached R2 (R3) the creator alone can invite (propose expulsions). An
@@ -441,8 +445,7 @@ is never replaced; rounds time out (3 s + 1 s per round) and are skipped when
 > 1/3 of the weight is already in a later one. Each user votes through one
 voting device, so their devices cannot equivocate by accident: at each epoch
 it is the user's device that most recently passed a challenge, which is a
-Pouch, and only while none has, the first device they registered. A Bill
-therefore votes only for a user who has no Pouch. Nothing is
+Pouch, and only while none has, the first device they registered. Nothing is
 proposed while no op is pending. Blocks batch ops: the periodic reports
 (`Usage`, `Observations`) wait up to 60 s, or until 64 ops are pending, so they
 share one block and its votes; any other op is proposed at once and takes the
