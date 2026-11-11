@@ -57,7 +57,8 @@ credit; `reset` starts over. Its Pouches offer 512 MiB each (`STORAGE_SIZE`), so
 | `ci.yml` | push to `main` | fmt, clippy, tests (Linux + macOS) |
 | `smoke.yml` | push to `main` | Docker smoke test |
 | `security.yml` | push to `main`, weekly | `cargo deny check` (advisories, licenses, sources) |
-| `release.yml` | `vX.Y.Z` tag | Checks the tag matches `Cargo.toml`, builds `bp` for Linux x86_64 and macOS x86_64/aarch64, publishes the GitHub release with generated notes |
+| `release.yml` | `vX.Y.Z` tag | Checks the tag matches `Cargo.toml`, builds `bp` for Linux x86_64 and macOS x86_64/aarch64 and the Android APK, publishes the GitHub release with generated notes |
+| `android.yml` | push to `main` touching the app, manual run, releases | Builds the Android APK, signed when the keystore secrets are set |
 | `docker.yml` | `vX.Y.Z` tag, manual run | Builds and pushes `onheirongithub/billpouch` (`latest` + tag) |
 
 Everything is committed straight to `main`; there are no pull requests. To
@@ -75,7 +76,14 @@ To publish an ad-hoc image run the Docker workflow manually from the Actions tab
 `android/` is a Tauri 2 app outside the Cargo workspace. It embeds the daemon
 with `BP_LISTEN_PORT=off` (a client-only Bill) and the `bp-api` router without
 sessions; the web app calls it through Tauri commands instead of HTTP. The
-`Android` workflow generates the icons and the Gradle project, builds a debug
-APK for arm64 and uploads it as an artifact; nothing in `android/gen` is
-committed.
+`Android` workflow generates the icons and the Gradle project, builds an APK
+for arm64 and uploads it as the artifact `billpouch-android`; nothing in
+`android/gen` is committed.
+
+With the repository secrets `ANDROID_KEYSTORE_BASE64` (the PKCS12 keystore,
+base64 on one line, key alias `billpouch`) and `ANDROID_KEYSTORE_PASSWORD` the
+workflow builds a release APK and signs it with `apksigner`
+(`billpouch-android.apk`), so every build installs over the previous one;
+without them it builds `billpouch-android-debug.apk`. The release workflow runs
+the same job and attaches the APK to the GitHub release.
 

@@ -50,9 +50,15 @@ jobs:
           path: ${{ matrix.artifact }}
           if-no-files-found: error
 
+  android:
+    name: Android app
+    needs: check
+    uses: ./.github/workflows/android.yml
+    secrets: inherit
+
   release:
     name: GitHub release
-    needs: build
+    needs: [build, android]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4

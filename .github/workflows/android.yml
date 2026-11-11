@@ -10,6 +10,12 @@ on:
       - "crates/bp-dlna/**"
       - ".github/workflows/android.yml"
   workflow_dispatch:
+  workflow_call:
+    secrets:
+      ANDROID_KEYSTORE_BASE64:
+        required: false
+      ANDROID_KEYSTORE_PASSWORD:
+        required: false
 
 jobs:
   apk:
@@ -20,6 +26,8 @@ jobs:
         working-directory: android
     env:
       NDK_VERSION: "27.2.12479018"
+      BUILD_TOOLS: "34.0.0"
+      SIGNED: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -33,7 +41,7 @@ jobs:
           packages: platform-tools
 
       - name: Install the Android platform and NDK
-        run: sdkmanager "platforms;android-34" "build-tools;34.0.0" "ndk;${NDK_VERSION}"
+        run: sdkmanager "platforms;android-34" "build-tools;${BUILD_TOOLS}" "ndk;${NDK_VERSION}"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -57,13 +65,38 @@ jobs:
         env:
           NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/${{ env.NDK_VERSION }}
 
-      - name: Build the APK
-        run: npx tauri android build --debug --apk --target aarch64 --ci
+      - name: Build the debug APK
+        if: env.SIGNED != 'true'
+        run: |
+          npx tauri android build --debug --apk --target aarch64 --ci
+          cp "$(find gen/android/app/build/outputs/apk -name '*.apk' | head -n 1)" billpouch-android-debug.apk
         env:
           NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/${{ env.NDK_VERSION }}
+
+      - name: Build the release APK
+        if: env.SIGNED == 'true'
+        run: npx tauri android build --apk --target aarch64 --ci
+        env:
+          NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/${{ env.NDK_VERSION }}
+
+      - name: Sign the release APK
+        if: env.SIGNED == 'true'
+        run: |
+          tools="${ANDROID_SDK_ROOT}/build-tools/${BUILD_TOOLS}"
+          keystore="${RUNNER_TEMP}/release.jks"
+          printf '%s' "${ANDROID_KEYSTORE_BASE64}" | base64 --decode > "${keystore}"
+          built="$(find gen/android/app/build/outputs/apk -name '*.apk' | head -n 1)"
+          "${tools}/zipalign" -f -p 4 "${built}" "${RUNNER_TEMP}/aligned.apk"
+          "${tools}/apksigner" sign --ks "${keystore}" --ks-key-alias billpouch \
+            --ks-pass env:ANDROID_KEYSTORE_PASSWORD --out billpouch-android.apk "${RUNNER_TEMP}/aligned.apk"
+          "${tools}/apksigner" verify --print-certs billpouch-android.apk
+          rm -f "${keystore}" billpouch-android.apk.idsig
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
 
       - uses: actions/upload-artifact@v4
         with:
           name: billpouch-android
-          path: android/gen/android/app/build/outputs/apk/**/*.apk
+          path: android/billpouch-android*.apk
           if-no-files-found: error
