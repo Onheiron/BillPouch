@@ -1622,11 +1622,11 @@ mod tests {
     fn only_users_whose_pouches_prove_their_storage_have_weight() {
         let mut net = Net::everyone_joined(3);
         let people = net.people.clone();
-        for who in 1..3 {
+        for person in &people[1..] {
             let op = sign_op(
-                &people[who],
+                person,
                 Op::RegisterDevice {
-                    cert: people[who].cert.clone(),
+                    cert: person.cert.clone(),
                 },
             )
             .unwrap();
