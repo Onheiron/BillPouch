@@ -19,6 +19,7 @@ Alpha. Current version in the root `Cargo.toml`; history in the GitHub releases.
 - `pause` / `resume`, `farewell --evict`, `ls`, `storage`, `status`, `members`, `leave`.
 - Web app over HTTPS with sessions signed by your SSH key (`bp dashboard`): quota, Pouches, folders, members and trust, files.
 - Android app (Bill only), built by CI as a debug APK.
+- DLNA plugin on a Bill (`bp hatch bill --dlna`): TVs and players on the local network browse your audio, video and pictures and stream them from the network with byte ranges.
 - Docker smoke test in CI and a 6-node playground.
 
 ## Known limitations
@@ -31,6 +32,7 @@ Alpha. Current version in the root `Cargo.toml`; history in the GitHub releases.
 | Availability | A new Pouch counts for `k/n` only after its first full hour of reported challenges; the list of candidate Pouches still comes from announcements |
 | Trust | The whole trust cycle (hand over, delete, settle) is covered by ledger tests only, not by an end-to-end test |
 | Credit | A Pouch's announced `stored_bytes` is trusted up to its challenge success rate |
+| DLNA | No login (anyone on the local network can watch), no transcoding (the TV must play the format), no thumbnails or subtitles, IPv4 only, no change events: a TV sees new files when it browses again |
 
 ## TODO
 

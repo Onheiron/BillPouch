@@ -66,6 +66,12 @@ enum Cmd {
         )]
         #[arg(long, value_parser = parse_size)]
         size: Option<u64>,
+
+        #[arg(
+            help = "For bill: also serve your audio, video and pictures to TVs and players on the local network over DLNA, on this port (8200 if omitted)"
+        )]
+        #[arg(long, value_name = "PORT", num_args = 0..=1, default_missing_value = "8200")]
+        dlna: Option<u16>,
     },
 
     #[command(about = "Show all known peers and network info")]
@@ -457,6 +463,7 @@ async fn main() -> anyhow::Result<()> {
             network,
             tier,
             size,
+            dlna,
         }) => {
             let svc_type: bp_core::service::ServiceType = service_type.parse()?;
             let mut metadata: HashMap<String, serde_json::Value> = HashMap::new();
@@ -465,6 +472,9 @@ async fn main() -> anyhow::Result<()> {
             }
             if let Some(size) = size {
                 metadata.insert("size_bytes".into(), serde_json::Value::from(size));
+            }
+            if let Some(port) = dlna {
+                metadata.insert("dlna".into(), serde_json::Value::from(port));
             }
             commands::hatch::hatch(svc_type, network, metadata).await?;
         }

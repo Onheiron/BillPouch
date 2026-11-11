@@ -7,6 +7,7 @@
 | `bp-core` | library | Everything: identity, daemon, networking, coding, storage, control protocol |
 | `bp-cli`  | binary `bp` | Thin client: parses commands, talks to the daemon over the control socket |
 | `bp-api`  | binary `bp-api` | HTTPS gateway to the same socket, plus the embedded web app |
+| `bp-dlna` | library | A DLNA media server over any `Library` that lists files and streams byte ranges; knows nothing of BillPouch |
 
 `bp-core` never prints or exits; it returns `BpResult<T>` (`thiserror`). The
 binaries use `anyhow` and own all terminal output.
@@ -33,6 +34,18 @@ fragment or offered a trust bet, and does not challenge anyone. It follows the
 ledger, which it needs to know who holds what, and reads and writes your
 files with your key. Reputation, credit, availability and trust come only from
 Pouches.
+
+**Plugins on a Bill.** `bp hatch bill --dlna [port]` plugs a DLNA media server
+(`bp-dlna`) on the Bill: the Bill is its library, so finding the holders,
+fetching the fragments, decoding, decrypting and decompressing stay the
+Bill's job, and the plugin only speaks UPnP to the TVs and players of the
+local network. It announces itself over SSDP (multicast 239.255.255.250:1900),
+shows the audio, video and pictures of your files in that network in three
+folders, and streams each byte range a player asks for straight from the
+network, chunk by chunk, as `bp get --range` does. It serves only clients on
+private, loopback or link-local addresses, without any login: anyone on your
+local network can watch what the Bill can read. It starts and stops with the
+Bill and comes back with it when the daemon restarts.
 
 ## Files
 

@@ -710,6 +710,7 @@ fn make_in_memory_state() -> std::sync::Arc<bp_core::control::server::DaemonStat
         )),
         files: std::sync::RwLock::new(bp_core::files::FileStore::default()),
         listen_addrs: Default::default(),
+        plugins: Default::default(),
     })
 }
 

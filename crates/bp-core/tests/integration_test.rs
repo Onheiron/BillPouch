@@ -53,6 +53,7 @@ fn make_daemon_state() -> (Arc<DaemonState>, mpsc::Receiver<NetworkCommand>) {
         remote_fragment_index: Arc::new(RwLock::new(bp_core::network::RemoteFragmentIndex::new())),
         files: RwLock::new(bp_core::files::FileStore::default()),
         listen_addrs: Default::default(),
+        plugins: Default::default(),
     });
 
     (state, net_rx)

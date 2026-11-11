@@ -43,5 +43,6 @@ x25519-dalek = { version = "2", features = ["static_secrets"] }
 curve25519-dalek = "4"
 base64 = "0.22"
 zstd = "0.13"
+bp-dlna = { path = "../bp-dlna" }
 ssh-key = { version = "0.6", default-features = false, features = ["std", "ed25519", "encryption", "rand_core"] }
 

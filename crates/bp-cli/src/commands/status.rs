@@ -68,13 +68,17 @@ fn print_status(s: &StatusData) {
         println!("   (none — run `bp hatch <bill|pouch|post> --network <id>`)");
     } else {
         for svc in &s.local_services {
-            let tier_info = if svc.service_type == bp_core::service::ServiceType::Pouch {
-                match svc.metadata.get("tier").and_then(|v| v.as_str()) {
-                    Some(t) => format!("  tier: {t}"),
-                    None => String::new(),
+            let tier_info = match svc.service_type {
+                bp_core::service::ServiceType::Pouch => {
+                    match svc.metadata.get("tier").and_then(|v| v.as_str()) {
+                        Some(t) => format!("  tier: {t}"),
+                        None => String::new(),
+                    }
                 }
-            } else {
-                String::new()
+                _ => match bp_core::dlna::port(svc) {
+                    Some(port) => format!("  📺 DLNA :{port}"),
+                    None => String::new(),
+                },
             };
             println!(
                 "   [{:>6}]  {}  │  net: {}  │  {}{}",

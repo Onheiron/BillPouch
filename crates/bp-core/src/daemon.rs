@@ -68,6 +68,7 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
         remote_fragment_index: Arc::clone(&remote_fragment_index),
         files: RwLock::new(crate::files::FileStore::load()),
         listen_addrs: Arc::clone(&listen_addrs),
+        plugins: Default::default(),
     });
 
     let swarm = network::build_swarm(identity.device.clone())
@@ -114,6 +115,7 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
     });
 
     crate::control::server::join_all(&daemon_state).await;
+    crate::dlna::restore(&daemon_state).await;
 
     let file_state = Arc::clone(&daemon_state);
     tokio::spawn(async move {

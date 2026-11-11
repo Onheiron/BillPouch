@@ -40,6 +40,7 @@ pub struct DaemonState {
     pub remote_fragment_index: Arc<RwLock<RemoteFragmentIndex>>,
     pub files: RwLock<crate::files::FileStore>,
     pub listen_addrs: crate::network::ListenAddrs,
+    pub plugins: crate::dlna::Plugins,
 }
 
 pub async fn run_control_server(
@@ -233,7 +234,11 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             let info = ServiceInfo::new(service_type, network_id.clone(), metadata.clone());
             let service_id = info.id.clone();
 
-            state.services.write().unwrap().register(info);
+            state.services.write().unwrap().register(info.clone());
+            if let Err(e) = crate::dlna::start(state, &info).await {
+                state.services.write().unwrap().remove(&service_id);
+                return ControlResponse::err(e);
+            }
 
             if let Some((tier, quota)) = pouch {
                 match StorageManager::init(network_id.clone(), service_id.clone(), tier, quota) {
@@ -257,11 +262,18 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 service_id: service_id.clone(),
                 service_type,
                 network_id,
-                message: format!("🦤 {} service hatched — id: {}", service_type, service_id),
+                message: match state.plugins.lock().unwrap().get(&service_id) {
+                    Some(dlna) => format!(
+                        "🦤 {service_type} service hatched — id: {service_id}\n📺 Serving your media to TVs on this network over DLNA, port {}",
+                        dlna.port
+                    ),
+                    None => format!("🦤 {service_type} service hatched — id: {service_id}"),
+                },
             })
         }
 
         ControlRequest::Farewell { service_id } => {
+            crate::dlna::stop(state, &service_id);
             let mut reg = state.services.write().unwrap();
             match reg.remove(&service_id) {
                 Some(info) => ControlResponse::ok(serde_json::json!({
@@ -702,6 +714,7 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 if svc.service_type == ServiceType::Pouch {
                     evict_service(state, svc).await;
                 } else {
+                    crate::dlna::stop(state, &svc.id);
                     state.services.write().unwrap().remove(&svc.id);
                 }
                 tracing::info!(service_id = %svc.id, network_id = %network_id, "stopped by leave --force");
@@ -1114,6 +1127,7 @@ async fn evict_service(state: &DaemonState, svc: &ServiceInfo) -> (usize, usize,
         .insert("evicting".into(), serde_json::Value::Bool(true));
     announce_service(state, &notice).await;
 
+    crate::dlna::stop(state, &svc.id);
     state.services.write().unwrap().remove(&svc.id);
 
     let (chunks, fragments, bytes) = summary;

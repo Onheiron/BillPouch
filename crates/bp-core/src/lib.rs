@@ -4,6 +4,7 @@ pub mod config;
 pub mod consensus;
 pub mod control;
 pub mod daemon;
+pub mod dlna;
 pub mod error;
 pub mod files;
 pub mod identity;

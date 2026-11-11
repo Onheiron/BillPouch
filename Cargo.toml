@@ -3,6 +3,7 @@ members = [
     "crates/bp-core",
     "crates/bp-cli",
     "crates/bp-api",
+    "crates/bp-dlna",
 ]
 resolver = "2"
 
