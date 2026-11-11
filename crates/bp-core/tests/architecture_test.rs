@@ -709,6 +709,7 @@ fn make_in_memory_state() -> std::sync::Arc<bp_core::control::server::DaemonStat
             bp_core::network::RemoteFragmentIndex::new(),
         )),
         files: std::sync::RwLock::new(bp_core::files::FileStore::default()),
+        chat: std::sync::RwLock::new(bp_core::chat::ChatStore::default()),
         listen_addrs: Default::default(),
         plugins: Default::default(),
     })
@@ -1114,4 +1115,112 @@ async fn network_loop_accetta_e_processa_comandi() {
             eprintln!("network_loop timeout (CI senza netlink — accettabile)");
         }
     }
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn chat_keeps_what_you_write_and_only_authentic_gossip() {
+    use bp_core::chat::ChatMessage;
+    use bp_core::control::protocol::{ChatData, MembersData};
+    use bp_core::network::Gossip;
+
+    let (sp, state) = start_test_server().await;
+    let chat = |resp: ControlResponse| -> ChatData {
+        match resp {
+            ControlResponse::Ok { data } => serde_json::from_value(data.unwrap()).unwrap(),
+            ControlResponse::Error { message } => panic!("{message}"),
+        }
+    };
+
+    let sent = chat(
+        send_cmd(
+            &sp,
+            &ControlRequest::ChatSend {
+                network_id: "amici".into(),
+                text: "  ciao stormo  ".into(),
+            },
+        )
+        .await,
+    );
+    let lines = sent.messages.unwrap();
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].text, "ciao stormo");
+    assert!(lines[0].mine);
+
+    let unchanged = chat(
+        send_cmd(
+            &sp,
+            &ControlRequest::Chat {
+                network_id: "amici".into(),
+                known_revision: Some(sent.revision),
+            },
+        )
+        .await,
+    );
+    assert!(unchanged.messages.is_none());
+
+    let room = state.chains.read().unwrap().get("amici").unwrap().id();
+    let stranger = bp_core::identity::Identity::in_memory(None).unwrap();
+    let forged = ChatMessage::write(&stranger, &room, "fatemi entrare", 1).unwrap();
+    bp_core::control::chat::on_gossip(
+        &state,
+        "amici",
+        Gossip::Chat {
+            message: Box::new(forged),
+        },
+    )
+    .await;
+    let later = ChatMessage::write(&state.identity, &room, "dal telefono", 2).unwrap();
+    bp_core::control::chat::on_gossip(
+        &state,
+        "amici",
+        Gossip::ChatHistory {
+            messages: vec![later],
+        },
+    )
+    .await;
+
+    let all = chat(
+        send_cmd(
+            &sp,
+            &ControlRequest::Chat {
+                network_id: "amici".into(),
+                known_revision: Some(sent.revision),
+            },
+        )
+        .await,
+    );
+    let texts: Vec<String> = all.messages.unwrap().into_iter().map(|m| m.text).collect();
+    assert_eq!(texts, ["dal telefono", "ciao stormo"]);
+
+    for (network_id, text) in [("amici", "   "), ("nowhere", "ciao")] {
+        let refused = send_cmd(
+            &sp,
+            &ControlRequest::ChatSend {
+                network_id: network_id.into(),
+                text: text.into(),
+            },
+        )
+        .await;
+        assert!(matches!(refused, ControlResponse::Error { .. }));
+    }
+
+    let members = send_cmd(
+        &sp,
+        &ControlRequest::Members {
+            network_id: "amici".into(),
+        },
+    )
+    .await;
+    let ControlResponse::Ok { data } = members else {
+        panic!("members failed");
+    };
+    let members: MembersData = serde_json::from_value(data.unwrap()).unwrap();
+    let me = &members.members[0];
+    assert_eq!(me.messages, 2);
+    assert_eq!(me.level.name, "Hatchling");
+    assert!(me
+        .achievements
+        .iter()
+        .any(|a| a.id == "founder" && a.earned));
 }

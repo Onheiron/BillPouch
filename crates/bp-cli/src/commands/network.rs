@@ -1,7 +1,7 @@
 use crate::client::ControlClient;
 use bp_core::{
     chain::ExpelOutcome,
-    control::protocol::{ControlRequest, ExpelData, InviteData, MembersData, ParamsData},
+    control::protocol::{ChatData, ControlRequest, ExpelData, InviteData, MembersData, ParamsData},
     ledger::Params,
 };
 
@@ -93,9 +93,63 @@ pub async fn members(network_id: String) -> anyhow::Result<()> {
             you,
             expel
         );
+        let badges: Vec<&str> = member
+            .achievements
+            .iter()
+            .filter(|a| a.earned)
+            .map(|a| a.name.as_str())
+            .collect();
+        println!(
+            "   {:<12} level {} {} · {} points · {}",
+            "",
+            member.level.number,
+            member.level.name,
+            member.level.points,
+            if badges.is_empty() {
+                "no badges yet".to_string()
+            } else {
+                badges.join(", ")
+            }
+        );
     }
     for fingerprint in &m.expelled {
         println!("   {fingerprint}  expelled");
+    }
+    Ok(())
+}
+
+pub async fn chat(network_id: String, message: String, last: usize) -> anyhow::Result<()> {
+    let request = if message.trim().is_empty() {
+        ControlRequest::Chat {
+            network_id,
+            known_revision: None,
+        }
+    } else {
+        ControlRequest::ChatSend {
+            network_id,
+            text: message,
+        }
+    };
+    let data = ControlClient::connect()
+        .await?
+        .request(request)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("empty response from daemon"))?;
+    let chat: ChatData = serde_json::from_value(data)?;
+    let lines = chat.messages.unwrap_or_default();
+    if lines.is_empty() {
+        println!("💬 {} — nobody has written yet", chat.network_id);
+    }
+    for line in lines.iter().skip(lines.len().saturating_sub(last)) {
+        let when = chrono::DateTime::from_timestamp(line.at as i64, 0)
+            .map(|t| {
+                t.with_timezone(&chrono::Local)
+                    .format("%d %b %H:%M")
+                    .to_string()
+            })
+            .unwrap_or_default();
+        let who = if line.mine { "you" } else { line.name.as_str() };
+        println!("{when}  {who}: {}", line.text);
     }
     Ok(())
 }

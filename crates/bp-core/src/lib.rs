@@ -1,5 +1,7 @@
 pub mod chain;
+pub mod chat;
 pub mod coding;
+pub mod community;
 pub mod config;
 pub mod consensus;
 pub mod control;

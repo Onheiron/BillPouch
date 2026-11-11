@@ -39,6 +39,7 @@ pub struct DaemonState {
     pub qos: Arc<RwLock<QosRegistry>>,
     pub remote_fragment_index: Arc<RwLock<RemoteFragmentIndex>>,
     pub files: RwLock<crate::files::FileStore>,
+    pub chat: RwLock<crate::chat::ChatStore>,
     pub listen_addrs: crate::network::ListenAddrs,
     pub plugins: crate::dlna::Plugins,
 }
@@ -531,16 +532,29 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 ));
             };
             let ledger = chain.ledger();
+            let chat = state.chat.read().unwrap();
+            let written = chat.written_by(&network_id);
             let members = ledger
                 .active_members()
-                .map(|(fingerprint, m)| MemberInfo {
+                .map(|(fingerprint, m)| {
+                    let messages = written.get(fingerprint.as_str()).copied().unwrap_or(0);
+                    let achievements =
+                        crate::community::achievements(ledger, fingerprint, messages);
+                    (fingerprint, m, messages, achievements)
+                })
+                .map(|(fingerprint, m, messages, achievements)| MemberInfo {
+                    challenges_sent: m.sent,
+                    challenges_passed: m.passed,
+                    invited: ledger
+                        .entries
+                        .iter()
+                        .filter(|e| e.body.author == m.key)
+                        .count(),
+                    messages,
+                    level: crate::community::level(&achievements),
+                    achievements,
                     fingerprint: fingerprint.clone(),
-                    name: m
-                        .key
-                        .split_whitespace()
-                        .skip(2)
-                        .collect::<Vec<_>>()
-                        .join(" "),
+                    name: member_name(&m.key),
                     tier: ledger
                         .snapshot
                         .tier(fingerprint)
@@ -746,6 +760,11 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 }
             }
             state.files.write().unwrap().forget_network(&network_id);
+            {
+                let mut chat = state.chat.write().unwrap();
+                chat.forget(&network_id);
+                chat.save();
+            }
 
             let _ = state
                 .net_tx
@@ -899,7 +918,20 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
         ControlRequest::ListFiles { network_id } => {
             ControlResponse::ok(files::list_files(state, &network_id))
         }
+
+        ControlRequest::Chat {
+            network_id,
+            known_revision,
+        } => super::chat::history(state, network_id, known_revision),
+
+        ControlRequest::ChatSend { network_id, text } => {
+            super::chat::send(state, network_id, text).await
+        }
     }
+}
+
+pub fn member_name(key: &str) -> String {
+    key.split_whitespace().skip(2).collect::<Vec<_>>().join(" ")
 }
 
 const MEMBERSHIP_WAIT_SECS: u64 = 90;

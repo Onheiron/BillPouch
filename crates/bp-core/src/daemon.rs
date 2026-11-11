@@ -67,6 +67,7 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
         qos,
         remote_fragment_index: Arc::clone(&remote_fragment_index),
         files: RwLock::new(crate::files::FileStore::load()),
+        chat: RwLock::new(crate::chat::ChatStore::load(crate::chain::now_ms() / 1000)),
         listen_addrs: Arc::clone(&listen_addrs),
         plugins: Default::default(),
     });
@@ -120,7 +121,14 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
     let file_state = Arc::clone(&daemon_state);
     tokio::spawn(async move {
         while let Some((network, gossip)) = file_rx.recv().await {
-            crate::control::files::on_gossip(&file_state, &network, gossip).await;
+            match gossip {
+                network::Gossip::Chat { .. }
+                | network::Gossip::ChatRequest { .. }
+                | network::Gossip::ChatHistory { .. } => {
+                    crate::control::chat::on_gossip(&file_state, &network, gossip).await
+                }
+                _ => crate::control::files::on_gossip(&file_state, &network, gossip).await,
+            }
         }
     });
 
@@ -141,6 +149,7 @@ pub async fn run_daemon(passphrase: Option<String>) -> BpResult<()> {
             tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
             crate::control::server::announce_all(&reannounce_state).await;
             crate::control::files::sync_cycle(&reannounce_state).await;
+            crate::control::chat::sync_cycle(&reannounce_state).await;
         }
     });
 

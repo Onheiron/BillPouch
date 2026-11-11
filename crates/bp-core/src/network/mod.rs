@@ -97,6 +97,16 @@ pub enum Gossip {
     Order {
         order: Box<crate::files::Order>,
     },
+    Chat {
+        message: Box<crate::chat::ChatMessage>,
+    },
+    ChatRequest {
+        to: String,
+        since: u64,
+    },
+    ChatHistory {
+        messages: Vec<crate::chat::ChatMessage>,
+    },
 }
 
 pub type FileGossip = mpsc::Sender<(String, Gossip)>;
@@ -569,6 +579,9 @@ async fn handle_swarm_event(
                     | Gossip::Share { .. }
                     | Gossip::ShareAck { .. }
                     | Gossip::Order { .. }
+                    | Gossip::Chat { .. }
+                    | Gossip::ChatRequest { .. }
+                    | Gossip::ChatHistory { .. }
             ) {
                 if file_gossip.try_send((network_id.clone(), gossip)).is_err() {
                     tracing::warn!("file gossip queue full, dropped a message");
@@ -871,7 +884,10 @@ fn handle_gossip(
         | Gossip::HeadRequest { .. }
         | Gossip::Share { .. }
         | Gossip::ShareAck { .. }
-        | Gossip::Order { .. } => None,
+        | Gossip::Order { .. }
+        | Gossip::Chat { .. }
+        | Gossip::ChatRequest { .. }
+        | Gossip::ChatHistory { .. } => None,
     }
 }
 

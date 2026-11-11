@@ -312,6 +312,50 @@ async fn network_members(
     .await
 }
 
+#[derive(Deserialize, Default)]
+struct ChatQuery {
+    revision: Option<u64>,
+}
+
+#[instrument(skip_all)]
+async fn chat_history(
+    State(state): State<AppState>,
+    Path(network_id): Path<String>,
+    Query(query): Query<ChatQuery>,
+) -> Response {
+    respond(
+        &state,
+        ControlRequest::Chat {
+            network_id,
+            known_revision: query.revision,
+        },
+        StatusCode::OK,
+    )
+    .await
+}
+
+#[derive(Deserialize)]
+struct ChatBody {
+    text: String,
+}
+
+#[instrument(skip_all)]
+async fn chat_send(
+    State(state): State<AppState>,
+    Path(network_id): Path<String>,
+    Json(body): Json<ChatBody>,
+) -> Response {
+    respond(
+        &state,
+        ControlRequest::ChatSend {
+            network_id,
+            text: body.text,
+        },
+        StatusCode::CREATED,
+    )
+    .await
+}
+
 #[derive(Deserialize)]
 struct ShareBody {
     network_id: String,
@@ -651,6 +695,10 @@ pub fn router(socket_path: PathBuf, user_key: Option<String>) -> Router {
         .route("/networks/join", post(network_join))
         .route("/networks/{network_id}/members", get(network_members))
         .route("/networks/{network_id}/expulsions", post(network_expel))
+        .route(
+            "/networks/{network_id}/chat",
+            get(chat_history).post(chat_send),
+        )
         .route("/networks/leave", post(network_leave))
         .route("/files", get(list_files).post(put_file))
         .route("/storage", get(storage))

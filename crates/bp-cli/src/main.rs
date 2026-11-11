@@ -163,6 +163,19 @@ enum Cmd {
     },
 
     #[command(
+        about = "Read the chat of a network, or write to it",
+        long_about = "Read the chat of a network, or write to it.\n\nWithout a message it prints the last messages this node has seen; with one it sends it to every member. Messages are signed with your key and travel encrypted with the network key."
+    )]
+    Chat {
+        #[arg(help = "The network")]
+        network_id: String,
+        #[arg(help = "The message to send; omit to read")]
+        message: Vec<String>,
+        #[arg(long, default_value_t = 30, help = "How many messages to print")]
+        last: usize,
+    },
+
+    #[command(
         about = "Propose or approve expelling a member",
         long_about = "Propose or approve expelling a member.\n\nThe first call proposes (needs R3, or the creator while nobody is R3); later calls by other members approve (needs R1). The member is out when the approvals hold more than 2/3 of the other members' weight and at least half of them; the network key is then rotated without them."
     )]
@@ -530,6 +543,14 @@ async fn main() -> anyhow::Result<()> {
 
         Some(Cmd::Members { network_id }) => {
             commands::network::members(network_id).await?;
+        }
+
+        Some(Cmd::Chat {
+            network_id,
+            message,
+            last,
+        }) => {
+            commands::network::chat(network_id, message.join(" "), last).await?;
         }
 
         Some(Cmd::Expel { network_id, member }) => {

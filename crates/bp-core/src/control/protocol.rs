@@ -92,6 +92,14 @@ pub enum ControlRequest {
     ListFiles {
         network_id: String,
     },
+    Chat {
+        network_id: String,
+        known_revision: Option<u64>,
+    },
+    ChatSend {
+        network_id: String,
+        text: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -202,6 +210,29 @@ pub struct MemberInfo {
     pub locked_trust: f64,
     pub open_bets: usize,
     pub sponsoring: usize,
+    pub challenges_sent: u64,
+    pub challenges_passed: u64,
+    pub invited: usize,
+    pub messages: usize,
+    pub achievements: Vec<crate::community::Achievement>,
+    pub level: crate::community::Level,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatLine {
+    pub id: String,
+    pub author: String,
+    pub name: String,
+    pub at: u64,
+    pub text: String,
+    pub mine: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatData {
+    pub network_id: String,
+    pub revision: u64,
+    pub messages: Option<Vec<ChatLine>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
