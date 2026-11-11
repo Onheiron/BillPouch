@@ -18,7 +18,7 @@ Alpha. Current version in the root `Cargo.toml`; history in the GitHub releases.
 - `bp rm` / `bp unshare` with owner-signed orders; personal file index synced across your devices; `bp share`.
 - `pause` / `resume`, `farewell --evict`, `ls`, `storage`, `status`, `members`, `leave`.
 - Web app over HTTPS with sessions signed by your SSH key (`bp dashboard`): quota, Pouches, folders, members and trust, files.
-- Android app (Bill only), built by CI as a debug APK.
+- Android app (Bill only), built by CI, signed and attached to releases when the keystore secrets are set.
 - DLNA plugin on a Bill (`bp hatch bill --dlna`): TVs and players on the local network browse your audio, video and pictures and stream them from the network with byte ranges.
 - Docker smoke test in CI and a 6-node playground.
 
@@ -39,4 +39,3 @@ Alpha. Current version in the root `Cargo.toml`; history in the GitHub releases.
 - **Snapshots and pruning**: the network periodically agrees on the ledger state at a height (certified by that block's precommits); nodes keep the snapshot and recent blocks and drop the rest, and a joining node downloads the snapshot instead of replaying everything. The old history can be archived as a BillPouch file in the network itself.
 - **Distributed file registry**: for hundreds of nodes and millions of files, keep each file's placement record with its holders and only a Merkle root of the registry in the ledger, so the replicated state stops growing with the number of files.
 - Playground: configurable epoch length, so bets, invitations and silent holders settle in minutes instead of days.
-- Android: signed release APK in the release workflow (needs the keystore secrets).
