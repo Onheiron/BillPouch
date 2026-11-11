@@ -34,6 +34,7 @@ pub struct Vote {
     pub kind: VoteKind,
     pub block: Option<String>,
     pub device: String,
+    #[serde(with = "crate::wire::hex_bytes")]
     pub signature: String,
 }
 
@@ -43,6 +44,7 @@ pub struct Proposal {
     pub block: Block,
     pub valid_round: Option<u32>,
     pub device: String,
+    #[serde(with = "crate::wire::hex_bytes")]
     pub signature: String,
 }
 
@@ -62,15 +64,9 @@ pub enum ConsensusMsg {
     Commit { commit: Box<Commit> },
 }
 
-fn signing_bytes<T: Serialize>(context: &[u8], value: &T) -> Vec<u8> {
-    let mut bytes = context.to_vec();
-    bytes.extend_from_slice(&serde_json::to_vec(value).unwrap_or_default());
-    bytes
-}
-
 impl Vote {
     fn message(&self) -> Vec<u8> {
-        signing_bytes(
+        crate::wire::signing_bytes(
             b"billpouch/vote/v1",
             &(
                 self.height,
@@ -85,7 +81,7 @@ impl Vote {
 
 impl Proposal {
     fn message(&self) -> Vec<u8> {
-        signing_bytes(
+        crate::wire::signing_bytes(
             b"billpouch/proposal/v1",
             &(self.round, &self.block, self.valid_round, &self.device),
         )

@@ -222,7 +222,7 @@ impl Chain {
     }
 
     pub fn forget(&self) -> BpResult<()> {
-        let path = config::networks_dir()?.join(format!("{}.json", self.name));
+        let path = config::networks_dir()?.join(format!("{}.cbor", self.name));
         if path.exists() {
             std::fs::remove_file(path)?;
         }
@@ -511,8 +511,8 @@ impl Chain {
             commits: self.commits.clone(),
         };
         std::fs::write(
-            dir.join(format!("{}.json", self.name)),
-            serde_json::to_vec(&stored)?,
+            dir.join(format!("{}.cbor", self.name)),
+            crate::wire::encode(&stored)?,
         )?;
         Ok(())
     }
@@ -547,7 +547,7 @@ impl Chain {
             return Ok(all);
         }
         for entry in std::fs::read_dir(dir)? {
-            let stored: Stored = serde_json::from_slice(&std::fs::read(entry?.path())?)?;
+            let stored: Stored = crate::wire::decode(&std::fs::read(entry?.path())?)?;
             let chain = Self::restore(identity, stored, now_ms)?;
             all.insert(chain.name.clone(), chain);
         }

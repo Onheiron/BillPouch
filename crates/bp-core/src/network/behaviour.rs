@@ -82,12 +82,12 @@ pub const RESPONSE_SIZE_MAXIMUM: u64 = 64 * 1024 * 1024;
 pub struct FragmentCodec;
 
 fn decode<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> std::io::Result<T> {
-    cbor4ii::serde::from_slice(bytes)
+    crate::wire::decode(bytes)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))
 }
 
 fn encode<T: Serialize>(value: &T) -> std::io::Result<Vec<u8>> {
-    cbor4ii::serde::to_vec(Vec::new(), value)
+    crate::wire::encode(value)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))
 }
 

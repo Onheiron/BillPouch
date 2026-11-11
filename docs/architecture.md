@@ -60,7 +60,7 @@ or the data dir when there is none). Everything else is under the XDG data dir
 | `profile.json` | Alias and creation time |
 | `services.json` | The services this node runs, reopened when the daemon starts |
 | `daemon.log` | The log of a daemon the CLI started |
-| `networks/<name>.json` | Genesis, your key entry and the committed ledger blocks of each network you belong to |
+| `networks/<name>.cbor` | Genesis, your key entry and the committed ledger blocks of each network you belong to, in CBOR |
 | `qos.json` | Per-peer QoS (RTT, challenge success rate), saved every 60 s |
 | `files.json` | Local copy of your file index per network, the index heads you have seen, shares not yet acknowledged |
 | `kad_peers.json` | Known peer addresses, saved every 600 s and redialled at start |
@@ -403,6 +403,12 @@ signed ops from the genesis entry and the creator's device certificate. Every
 op carries the time it was signed and is valid for one hour (and at most 5
 minutes ahead): the ledger remembers the ids of applied ops only for that hour,
 which is enough to refuse a replay, so this set does not grow with history.
+
+An op names its author by fingerprint and is verified against that member's key
+in the registry. Ops, blocks, votes and every gossip message are encoded in CBOR
+(`wire.rs`), which is also what is hashed and signed; signatures, hashes and
+wrapped keys travel as raw bytes there and as hex wherever the format is JSON
+(invite tokens, the control protocol, the files on disk).
 
 | Op | Effect |
 |----|--------|

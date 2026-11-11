@@ -4,6 +4,7 @@ use crate::{
     membership::{Entry, WrappedKey},
     network::ReputationTier,
     storage::StorageTier,
+    wire,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -93,6 +94,7 @@ pub enum Op {
     RotateKey {
         epoch: u64,
         wrapped: BTreeMap<String, WrappedKey>,
+        #[serde(with = "crate::wire::hex_bytes")]
         commitment: String,
     },
 }
@@ -174,56 +176,52 @@ pub struct SignedOp {
     pub author: String,
     pub nonce: u64,
     pub at: u64,
+    #[serde(with = "crate::wire::hex_bytes")]
     pub signature: String,
 }
 
 impl SignedOp {
     pub fn sign(identity: &Identity, op: Op, at: u64) -> BpResult<Self> {
         let nonce = rand::random();
-        let message = op_message(&op, &identity.user_key, nonce, at)?;
+        let message = op_message(&op, &identity.fingerprint, nonce, at);
         let signature = identity
             .user
             .sign(&message)
             .map_err(|e| BpError::Identity(format!("cannot sign op: {e}")))?;
         Ok(Self {
             op,
-            author: identity.user_key.clone(),
+            author: identity.fingerprint.clone(),
             nonce,
             at,
             signature: hex::encode(signature),
         })
     }
 
-    pub fn author_fingerprint(&self) -> BpResult<String> {
-        let (public, fingerprint) = parse_user_key(&self.author)?;
+    pub fn verify(&self, author_key: &str) -> BpResult<()> {
+        let (public, fingerprint) = parse_user_key(author_key)?;
         let signature = hex::decode(&self.signature)
             .map_err(|_| BpError::Identity("op: bad signature encoding".into()))?;
-        if public.verify(
-            &op_message(&self.op, &self.author, self.nonce, self.at)?,
-            &signature,
-        ) {
-            Ok(fingerprint)
+        let message = op_message(&self.op, &self.author, self.nonce, self.at);
+        if fingerprint == self.author && public.verify(&message, &signature) {
+            Ok(())
         } else {
             Err(BpError::Identity("op: invalid signature".into()))
         }
     }
 
     pub fn id(&self) -> String {
-        blake3::hash(&serde_json::to_vec(self).unwrap_or_default())
-            .to_hex()
-            .to_string()
+        wire::digest(self)
     }
 }
 
-fn op_message(op: &Op, author: &str, nonce: u64, at: u64) -> BpResult<Vec<u8>> {
-    let mut msg = b"billpouch/op/v1".to_vec();
-    msg.extend_from_slice(&serde_json::to_vec(&(op, author, nonce, at))?);
-    Ok(msg)
+fn op_message(op: &Op, author: &str, nonce: u64, at: u64) -> Vec<u8> {
+    wire::signing_bytes(b"billpouch/op/v1", &(op, author, nonce, at))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Block {
     pub height: u64,
+    #[serde(with = "crate::wire::hex_bytes")]
     pub prev: String,
     pub time: u64,
     pub proposer: String,
@@ -232,9 +230,7 @@ pub struct Block {
 
 impl Block {
     pub fn hash(&self) -> String {
-        blake3::hash(&serde_json::to_vec(self).unwrap_or_default())
-            .to_hex()
-            .to_string()
+        wire::digest(self)
     }
 
     pub fn epoch(&self) -> u64 {
@@ -723,16 +719,18 @@ impl Ledger {
         if signed.at + OP_TTL_SECS < block.time || signed.at > block.time + OP_SKEW_SECS {
             return Err(invalid("op expired or signed in the future"));
         }
-        let author = signed.author_fingerprint()?;
-        if !self.is_member(&author) {
-            return Err(invalid("op author is not a member"));
-        }
+        let author = signed.author.clone();
+        let author_key = match self.members.get(&author) {
+            Some(member) if self.is_member(&author) => member.key.clone(),
+            _ => return Err(invalid("op author is not a member")),
+        };
+        signed.verify(&author_key)?;
         match &signed.op {
             Op::AddMember { entry } => {
                 if !self.has_capability(&author, Capability::Invite) {
                     return Err(invalid("author cannot invite"));
                 }
-                if entry.body.author != signed.author
+                if entry.body.author != author_key
                     || entry.body.genesis.as_deref() != Some(&self.genesis.id())
                     || entry.body.commitment != self.commitment
                     || entry.signed_by_author().is_none()
@@ -1135,6 +1133,30 @@ mod tests {
         SignedOp::sign(identity, op, at).unwrap()
     }
 
+    #[test]
+    fn an_op_names_its_author_by_fingerprint_and_is_checked_against_the_registry() {
+        let mut net = Net::everyone_joined(2);
+        let op = sign_op(&net.people[0], Op::ProposeExpel { member: net.fp(1) }).unwrap();
+        assert_eq!(op.author, net.fp(0));
+        let with_whole_key =
+            serde_json::to_vec(&op).unwrap().len() + net.people[0].user_key.len() - op.author.len();
+        assert!(wire::encode(&op).unwrap().len() * 3 < with_whole_key * 2);
+        assert_eq!(
+            wire::decode::<SignedOp>(&wire::encode(&op).unwrap()).unwrap(),
+            op
+        );
+
+        let mut forged = op.clone();
+        forged.author = net.fp(1);
+        let t = net.now() + 1;
+        assert!(net.commit(0, t, vec![forged]).is_err());
+
+        let outsider = Identity::in_memory(None).unwrap();
+        let stranger = sign_op(&outsider, Op::Leave).unwrap();
+        assert!(net.commit(0, t, vec![stranger]).is_err());
+        net.commit(0, t, vec![op]).unwrap();
+    }
+
     struct Net {
         people: Vec<Identity>,
         ledger: Ledger,
@@ -1388,7 +1410,7 @@ mod tests {
         assert!(net.ledger.apply(&block).is_err());
         assert!(net.commit(0, t, vec![op]).is_err());
         let mut stale = net.block(0, t, vec![]);
-        stale.prev = "nope".into();
+        stale.prev = "00".into();
         assert!(net.ledger.apply(&stale).is_err());
         assert!(net.commit(0, t - 1, vec![]).is_err());
     }

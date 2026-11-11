@@ -26,8 +26,10 @@ pub struct UserProfile {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceCert {
     pub user_key: String,
+    #[serde(with = "crate::wire::hex_bytes")]
     pub device_key: String,
     pub issued_at: u64,
+    #[serde(with = "crate::wire::hex_bytes")]
     pub signature: String,
 }
 

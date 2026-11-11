@@ -14,5 +14,6 @@ pub mod network;
 pub mod service;
 pub mod session;
 pub mod storage;
+pub mod wire;
 
 pub use error::{BpError, BpResult};
