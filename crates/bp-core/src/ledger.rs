@@ -1053,6 +1053,18 @@ impl Ledger {
                 )
             })
             .collect();
+        let contributes = |user: &str| {
+            self.devices.iter().any(|(device, d)| {
+                d.user == user && self.proven.contains_key(device) && self.is_live(device)
+            })
+        };
+        if users.keys().any(|u| contributes(u)) {
+            for (user, standing) in users.iter_mut() {
+                if !contributes(user) {
+                    standing.weight = 0;
+                }
+            }
+        }
         if users.len() >= 4 {
             loop {
                 let limit = (users.values().map(|s| s.weight).sum::<u64>() / 4).max(1);
@@ -1604,6 +1616,36 @@ mod tests {
         )
         .unwrap();
         assert!(net.commit(0, t, vec![stolen]).is_err());
+    }
+
+    #[test]
+    fn only_users_whose_pouches_prove_their_storage_have_weight() {
+        let mut net = Net::everyone_joined(3);
+        let people = net.people.clone();
+        for who in 1..3 {
+            let op = sign_op(
+                &people[who],
+                Op::RegisterDevice {
+                    cert: people[who].cert.clone(),
+                },
+            )
+            .unwrap();
+            let t = net.now();
+            net.commit(0, t, vec![op]).unwrap();
+        }
+        assert!((0..3).all(|i| net.ledger.snapshot.weight(&net.fp(i)) > 0));
+        let t = net.now();
+        let seen = vec![net.observe(1, 0, 5, 5, t), net.observe(0, 2, 5, 5, t)];
+        net.commit(0, t, seen).unwrap();
+        net.next_epoch();
+        assert!(net.ledger.snapshot.weight(&net.fp(0)) > 0);
+        assert!(net.ledger.snapshot.weight(&net.fp(2)) > 0);
+        assert_eq!(
+            net.ledger.snapshot.weight(&net.fp(1)),
+            0,
+            "a user with no Pouch proving its storage does not vote"
+        );
+        assert!(net.ledger.is_member(&net.fp(1)));
     }
 
     #[test]
