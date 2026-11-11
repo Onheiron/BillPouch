@@ -61,9 +61,6 @@ pub enum Op {
     RegisterDevice {
         cert: DeviceCert,
     },
-    SetVotingDevice {
-        device: String,
-    },
     Leave,
     Place {
         file_id: String,
@@ -255,6 +252,7 @@ pub struct Standing {
 pub struct Snapshot {
     pub epoch: u64,
     pub users: BTreeMap<String, Standing>,
+    pub voters: BTreeMap<String, String>,
 }
 
 impl Snapshot {
@@ -376,6 +374,7 @@ impl Ledger {
             snapshot: Snapshot {
                 epoch: genesis.body.at / EPOCH_SECS,
                 users: BTreeMap::new(),
+                voters: BTreeMap::new(),
             },
             commitment: genesis.body.commitment.clone(),
             key_wraps: BTreeMap::new(),
@@ -401,7 +400,11 @@ impl Ledger {
     }
 
     pub fn voting_device(&self, user: &str) -> Option<&str> {
-        self.members.get(user)?.voting_device.as_deref()
+        self.snapshot
+            .voters
+            .get(user)
+            .or(self.members.get(user)?.voting_device.as_ref())
+            .map(String::as_str)
     }
 
     pub fn device_owner(&self, device: &str) -> Option<&str> {
@@ -868,15 +871,6 @@ impl Ledger {
                 let member = self.members.get_mut(&author).expect("checked member");
                 member.voting_device.get_or_insert(peer);
             }
-            Op::SetVotingDevice { device } => {
-                if self.devices.get(device).map(|d| &d.user) != Some(&author) {
-                    return Err(invalid("not one of your devices"));
-                }
-                self.members
-                    .get_mut(&author)
-                    .expect("checked member")
-                    .voting_device = Some(device.clone());
-            }
             Op::Leave => {
                 self.left.insert(author.clone());
                 self.vacate(&author);
@@ -1074,7 +1068,25 @@ impl Ledger {
                 }
             }
         }
-        Snapshot { epoch, users }
+        let voters = users
+            .keys()
+            .filter_map(|user| Some((user.clone(), self.best_device(user)?)))
+            .collect();
+        Snapshot {
+            epoch,
+            users,
+            voters,
+        }
+    }
+
+    fn best_device(&self, user: &str) -> Option<String> {
+        self.devices
+            .iter()
+            .filter(|(_, d)| d.user == user)
+            .filter_map(|(device, _)| Some((*self.proven.get(device)?, device)))
+            .max()
+            .map(|(_, device)| device.clone())
+            .or_else(|| self.members.get(user)?.voting_device.clone())
     }
 }
 
@@ -1592,8 +1604,50 @@ mod tests {
         )
         .unwrap();
         assert!(net.commit(0, t, vec![stolen]).is_err());
-        let hijack = sign_op(&net.people[0], Op::SetVotingDevice { device: laptop_id }).unwrap();
-        assert!(net.commit(0, t, vec![hijack]).is_err());
+    }
+
+    #[test]
+    fn a_user_votes_from_the_device_that_proves_its_storage() {
+        let mut net = Net::everyone_joined(3);
+        let people = net.people.clone();
+        let phone = people[1].peer_id.to_string();
+        let pouch_key = libp2p::identity::Keypair::generate_ed25519();
+        let pouch = pouch_key.public().to_peer_id().to_string();
+        let pouch_cert =
+            DeviceCert::issue(&people[1].user, &people[1].user_key, &pouch_key.public()).unwrap();
+        let t = net.now();
+        let register = |cert: DeviceCert| sign_op(&people[1], Op::RegisterDevice { cert }).unwrap();
+        net.commit(0, t, vec![register(people[1].cert.clone())])
+            .unwrap();
+        net.commit(0, t, vec![register(pouch_cert)]).unwrap();
+        net.next_epoch();
+        assert_eq!(
+            net.ledger.voting_device(&net.fp(1)),
+            Some(phone.as_str()),
+            "the first device until one proves its storage"
+        );
+        let t = net.now();
+        let proof = sign_at(
+            &people[0],
+            Op::Observations {
+                hour: t / HOUR_SECS,
+                results: vec![Observation {
+                    device: pouch.clone(),
+                    user: net.fp(1),
+                    sent: 5,
+                    passed: 5,
+                }],
+            },
+            t,
+        );
+        net.commit(0, t, vec![proof]).unwrap();
+        assert_eq!(net.ledger.voting_device(&net.fp(1)), Some(phone.as_str()));
+        net.next_epoch();
+        assert_eq!(
+            net.ledger.voting_device(&net.fp(1)),
+            Some(pouch.as_str()),
+            "from the next epoch the Pouch votes, not the phone"
+        );
     }
 
     #[test]
