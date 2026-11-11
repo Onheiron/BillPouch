@@ -242,6 +242,7 @@ pub fn connection_manager_scpd() -> String {
 
 pub fn protocol_info() -> String {
     media::mime_types()
+        .into_iter()
         .map(|mime| format!("http-get:*:{mime}:*"))
         .collect::<Vec<_>>()
         .join(",")

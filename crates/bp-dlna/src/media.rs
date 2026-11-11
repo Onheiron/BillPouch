@@ -71,14 +71,14 @@ pub fn kind(name: &str) -> Option<(&'static str, Kind)> {
         .map(|(_, mime, kind)| (*mime, *kind))
 }
 
-pub fn mime_types() -> impl Iterator<Item = &'static str> {
-    let mut seen = Vec::new();
-    TYPES.iter().filter_map(move |(_, mime, _)| {
-        (!seen.contains(mime)).then(|| {
-            seen.push(*mime);
-            *mime
-        })
-    })
+pub fn mime_types() -> Vec<&'static str> {
+    let mut all: Vec<&'static str> = Vec::new();
+    for (_, mime, _) in TYPES {
+        if !all.contains(mime) {
+            all.push(mime);
+        }
+    }
+    all
 }
 
 pub const DLNA_FEATURES: &str =
@@ -98,7 +98,7 @@ mod tests {
 
     #[test]
     fn each_mime_type_is_listed_once() {
-        let all: Vec<_> = mime_types().collect();
+        let all = mime_types();
         assert!(all.contains(&"video/mp4"));
         assert_eq!(all.iter().filter(|m| **m == "video/mp4").count(), 1);
     }
