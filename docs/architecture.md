@@ -26,6 +26,14 @@ per user per machine; it runs these Tokio tasks (`daemon.rs`):
 
 All shared state lives in `DaemonState` (`control/server.rs`).
 
+**A Bill is only an interface.** A node that runs only a Bill (the Android
+app, a laptop that just reads and writes files) holds no fragments and no
+filler, is never pinged, challenged, filled, chosen as a holder, asked for a
+fragment or offered a trust bet, and does not challenge anyone. It follows the
+ledger, which it needs to know who holds what, and reads and writes your
+files with your key. Reputation, credit, availability and trust come only from
+Pouches.
+
 ## Files
 
 The control socket `control.sock` is in the runtime dir (`$XDG_RUNTIME_DIR/billpouch/`,
@@ -386,8 +394,7 @@ which is enough to refuse a replay, so this set does not grow with history.
 | Op | Effect |
 |----|--------|
 | `AddMember` | Adds a member entry (with the network key wrapped for them) |
-| `RegisterDevice` | Adds one of your devices; the first one becomes your voting device |
-| `SetVotingDevice` | Picks which of your devices votes |
+| `RegisterDevice` | Adds one of your devices |
 | `Observations` | Adds an hour of PoS counts to other users' and their devices' totals |
 | `ProposeExpel` / `ApproveExpel` | Expulsion vote |
 | `Leave` | The author leaves: no longer a member, weight removed, rotation due |
@@ -432,7 +439,10 @@ precommits from > 2/3 of the weight is final. A node that precommitted a block
 is locked on it and only unlocks on a newer > 2/3 prevote, so a committed block
 is never replaced; rounds time out (3 s + 1 s per round) and are skipped when
 > 1/3 of the weight is already in a later one. Each user votes through one
-voting device, so their devices cannot equivocate by accident. Nothing is
+voting device, so their devices cannot equivocate by accident: at each epoch
+it is the user's device that most recently passed a challenge, which is a
+Pouch, and only while none has, the first device they registered. A Bill
+therefore votes only for a user who has no Pouch. Nothing is
 proposed while no op is pending. Blocks batch ops: the periodic reports
 (`Usage`, `Observations`) wait up to 60 s, or until 64 ops are pending, so they
 share one block and its votes; any other op is proposed at once and takes the
