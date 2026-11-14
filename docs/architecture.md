@@ -62,6 +62,7 @@ or the data dir when there is none). Everything else is under the XDG data dir
 | `daemon.log` | The log of a daemon the CLI started |
 | `networks/<name>.cbor` | Genesis, your key entry and the committed ledger blocks of each network you belong to, in CBOR |
 | `qos.json` | Per-peer QoS (RTT, challenge success rate), saved every 60 s |
+| `chat.cbor` | The last 500 chat messages of each network and when each chat was last synchronized |
 | `files.json` | Local copy of your file index per network, the index heads you have seen, shares not yet acknowledged |
 | `kad_peers.json` | Known peer addresses, saved every 600 s and redialled at start |
 | `bootstrap.json` | Optional WAN bootstrap peers (`bp bootstrap`) |
@@ -86,7 +87,7 @@ dials them. Every NodeInfo carries its node's addresses, so whoever accepts it
 can reach that node; identify, saved peers (`kad_peers.json`) and
 `bp bootstrap add` with an address from `bp status` do the rest.
 
-A daemon can be in several networks at once. Gossip messages are `Node` (NodeInfo), `Index` (fragment locations) and `Consensus` (ledger ops, proposals, votes, commits). A node accepts NodeInfo, and serves fragment requests, only from devices of ledger members.
+A daemon can be in several networks at once. Gossip messages are `Node` (NodeInfo), `Index` (fragment locations), `Consensus` (ledger ops, proposals, votes, commits), the file messages (`Head`, `Share`, `Order`) and the chat (`Chat`, `ChatRequest`, `ChatHistory`). A node accepts NodeInfo, and serves fragment requests, only from devices of ledger members.
 
 **NodeInfo** is what every service announces:
 
@@ -486,6 +487,43 @@ opens its own wrap, checks it against the commitment and moves to the new gossip
 topic, listening on the old one for 10 more minutes. Expelled members get no
 wrap, so they no longer read or reach the gossip, and nobody serves them blocks.
 Invitations carry the commitment too: one made with an old key is rejected.
+
+## Community: chat, achievements and levels
+
+**Chat** (`chat.rs`, `control/chat.rs`). Each network has one room. A message
+is `(author fingerprint, time, text)` signed with the author's user key over the
+network id, so it cannot be replayed in another network; a node keeps a message
+only if the author is a member in its ledger, the signature matches the key in
+the registry, the text has 1–1000 characters and the time is at most 5 minutes
+ahead. Messages travel as gossip, encrypted with the network key like
+everything else, and are not in the ledger: each node keeps the newest 500 per
+network in `chat.cbor`. Every 10 minutes (and at start) a node asks one random
+peer of the network for what was written since its last synchronization
+(`ChatRequest`); the peer answers with `ChatHistory` batches that fit a gossip
+message, and every node that hears them keeps what it lacks. A node that was
+offline for longer than the others' 500 messages misses the oldest ones.
+
+**Achievements** (`community.rs`) are computed, not stored: the same function
+of the ledger gives every node the same badges for every member. The only
+exception is *Chatterbox*, counted on the messages this node has seen.
+
+| Badge | Points | Earned by |
+|-------|--------|-----------|
+| Founder | 100 | Creating the network |
+| Open pouch / Big pouch / Deep pouch | 50 / 100 / 200 | Hosting verified space: any, 10 GiB, 100 GiB |
+| Generous | 75 | Hosting at least twice what you store on the others |
+| Rock solid | 150 | Passing 99% of at least 100 challenges |
+| First fish / Full net | 25 / 100 | Storing 1 file, 100 files |
+| Recruiter / Flock leader | 50 / 150 | Inviting 1 member, 5 members |
+| Good eye / Oracle | 50 / 150 | A positive trust score, a trust score of 1 |
+| Everywhere | 50 | Registering 3 devices |
+| Reliable / Pillar | 100 / 300 | Reaching those reputation tiers |
+| A month / A year in the flock | 50 / 200 | Being a member for 30, 365 days |
+| Chatterbox | 25 | Writing 25 messages |
+
+The points of the earned badges give a **level**: Egg (0), Hatchling (50),
+Paddler (150), Fisher (350), Glider (650), Great Pelican (1000). Levels and
+badges are for fun: they give no capability and no voting weight.
 
 ## Identity and access
 

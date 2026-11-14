@@ -26,7 +26,9 @@ Types: `bp_core::control::protocol`; client helper: `bp_core::control::client::s
 | `create_network` | `name` | Creates a network with you as creator |
 | `invite` | `network_id`, `member_key` (OpenSSH line) | Adds a member once committed and returns the join token; with your own key, returns a token for another device of yours (`for_device: true`) |
 | `join_network` | `token` | Joins with a token and waits for the ledger to sync |
-| `members` | `network_id` | Members with tier, weight, devices, trust and open bets, pending expulsions; expelled members; network parameters |
+| `members` | `network_id` | Members with tier, weight, devices, trust and open bets, challenges passed, invitations, achievements (each with points and progress) and level, pending expulsions; expelled members; network parameters |
+| `chat` | `network_id`, `known_revision`? | The chat this node has seen: `revision` and `messages` (`id`, `author`, `name`, `at`, `text`, `mine`), or `messages: null` when `known_revision` is still current |
+| `chat_send` | `network_id`, `text` (1–1000 characters) | Signs the message, gossips it and returns the chat |
 | `expel` | `network_id`, `member` (fingerprint) | Proposes or approves an expulsion |
 | `leave` | `network_id`, `force` | Leaves a network |
 | `put_file` | `path` (on the daemon's machine), `network_id`, `ph`?, `file_name`? | Streams a file in, returns `file_id`, `chunks`, `k`, `n`, placement counts |
@@ -67,7 +69,9 @@ every node with its challenge results, and an invitation form; **Nest**, your
 quota, files, devices, reputation in each network and the services you can
 start on this node; **Roost**, this node: its services with maintenance, stop
 and evict, how far its ledgers are synchronized, its addresses and leaving a
-network; **Gossip**, the community, still empty; and, at the bottom, your avatar
+network; **Gossip**, the community: the chat of the selected network with an
+unread counter, your level, the members ranked by points (click one for their
+reputation and badges) and your achievements with their progress; and, at the bottom, your avatar
 with your profile and settings. Browsers only register
 its service worker over a trusted certificate, so with the self-signed one it
 works as a page you can install but not offline.
@@ -87,6 +91,8 @@ Errors are `{"error": "…"}` with 401 (missing, expired or foreign session), 50
 | POST | `/networks/:id/invites` | `{member_key}` → 201 | `invite` |
 | POST | `/networks/join` | `{token}` | `join_network` |
 | GET | `/networks/:id/members` | — | `members` |
+| GET | `/networks/:id/chat` | `?revision=<known>` | `chat` |
+| POST | `/networks/:id/chat` | `{text}` → 201 | `chat_send` |
 | POST | `/networks/:id/expulsions` | `{member}` (fingerprint) | `expel` |
 | POST | `/networks/leave` | `{network_id, force?}` | `leave` |
 | GET | `/files` | `?network=<id>` (all if omitted) | `list_files` |

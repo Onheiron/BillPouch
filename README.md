@@ -35,7 +35,8 @@ bp hatch bill  --network friends
 bp put photo.jpg --network friends              # → file_id
 bp get <file_id> photo-copy.jpg --network friends
 bp ls                                           # your files and the ones shared with you
-bp members friends                              # who is in, what they host and store
+bp members friends                              # who is in, what they host and store, levels and badges
+bp chat friends "hello flock"                    # the chat of the network; without a message, read it
 bp dashboard                                    # the web app: nodes, space, your files
 ```
 

@@ -30,7 +30,8 @@ started automatically when missing.
 |---------|-------------|
 | `bp network create <name>` | Create a network; you are its first member and its creator |
 | `bp invite <network> "<ssh public key>"` | Submit the invitation to the network, wait until it is committed and print (on stdout) the token they join with. Requires the `invite` capability (R2+, or the creator while nobody is R2) |
-| `bp members <network>` | Members by name (the comment of their SSH key, yours marked `← you`) with tier, voting weight, bytes they host (verified by the others last epoch) and store, devices, trust with what is locked in open bets and invitations, pending expulsions; expelled members |
+| `bp members <network>` | Members by name (the comment of their SSH key, yours marked `← you`) with tier, voting weight, bytes they host (verified by the others last epoch) and store, devices, trust with what is locked in open bets and invitations, pending expulsions, and under each member their level, points and badges; expelled members |
+| `bp chat <network> [message…] [--last N]` | Without a message, print the last `N` (30) chat messages this node has seen; with one, sign it and send it to every member |
 | `bp params <network> [--ph X] [--decay X] [--horizon N] [--grace N]` | Print the network parameters, or vote them changed by the flags given; they change when the votes for the same values hold > 2/3 of the weight |
 | `bp expel <network> <fingerprint>` | Propose an expulsion (R3+, or the creator while nobody is R3) or approve one (R1+). It passes with > 2/3 of the other members' weight and at least half of them; the network key is then rotated without the expelled member |
 | `bp invite <network> "<your own public key>"` | Token for another device of yours: log in there with the same SSH key and `bp join` it |

@@ -1,4 +1,4 @@
-const CACHE = "billpouch-shell-v1";
+const CACHE = "billpouch-shell-v2";
 const SHELL = ["/", "/app.js", "/app.css", "/icon.svg", "/manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
