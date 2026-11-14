@@ -4,6 +4,35 @@ const SESSION_KEY = "bp-session";
 const NETWORK_KEY = "bp-network";
 const VIEW_KEY = "bp-view";
 const RATE_KEY = "bp-refresh";
+const THEME_KEY = "bp-theme";
+const SEEN_KEY = "bp-chat-seen";
+const EARNED_KEY = "bp-earned";
+const THEMES = [
+  ["sunrise", "Sunrise", "Light · orange and ocean"],
+  ["lagoon", "Lagoon", "Light · cyan and indigo"],
+  ["midnight", "Midnight", "Dark · orange and ocean"],
+  ["abyss", "Abyss", "Dark · cyan and indigo"],
+];
+const BADGE_ICONS = {
+  founder: "flag",
+  pouch_open: "box",
+  big_pouch: "layers",
+  deep_pouch: "net",
+  generous: "heart",
+  rock_solid: "shield",
+  first_fish: "fish",
+  full_net: "folders",
+  recruiter: "user-plus",
+  flock_leader: "users",
+  good_eye: "eye",
+  oracle: "spark",
+  everywhere: "devices",
+  reliable: "star",
+  pillar: "crown",
+  month: "calendar",
+  year: "trophy",
+  chatterbox: "chat",
+};
 const MIB = 1 << 20;
 const HISTORY = 120;
 const VIEWS = {
@@ -46,6 +75,8 @@ const state = {
   data: null,
   history: [],
   timer: null,
+  chat: { network: null, revision: null, messages: [] },
+  member: null,
 };
 
 function session() {
@@ -95,6 +126,25 @@ async function send(path, method, body) {
   return response.json().catch(() => ({}));
 }
 
+function icon(name, cls = "") {
+  return `<svg class="ico ${cls}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
+}
+
+function hue(text) {
+  let h = 0;
+  for (const c of String(text)) h = (h * 31 + c.charCodeAt(0)) % 360;
+  return h;
+}
+
+function avatar(name, fingerprint, cls = "") {
+  return `<span class="avatar ${cls}" style="--hue:${hue(fingerprint)}">${esc(initials(name))}</span>`;
+}
+
+function tierChip(tier) {
+  const cls = { Quarantine: "r0", Reliable: "r2", Trusted: "r3", Pillar: "r4" }[tier] || "";
+  return `<span class="chip ${cls}">${esc(tier)}</span>`;
+}
+
 function esc(value) {
   return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 }
@@ -131,7 +181,7 @@ function plural(n, one, many) {
 function toast(message, kind = "") {
   const el = document.createElement("div");
   el.className = "toast " + kind;
-  el.textContent = message;
+  el.innerHTML = (kind === "badge" ? icon("trophy", "l") : "") + `<span>${esc(message)}</span>`;
   $("toasts").append(el);
   setTimeout(() => el.remove(), kind === "error" ? 9000 : 4500);
 }
@@ -172,7 +222,15 @@ async function load() {
       } catch (_) {}
     }),
   );
-  return { status, flock, storage, files, members };
+  const network = state.network && status.networks.includes(state.network) ? state.network : status.networks.length === 1 ? status.networks[0] : null;
+  let chat = null;
+  if (network) {
+    const known = state.chat.network === network && state.chat.revision !== null ? `?revision=${state.chat.revision}` : "";
+    try {
+      chat = await json(`/networks/${encodeURIComponent(network)}/chat${known}`);
+    } catch (_) {}
+  }
+  return { status, flock, storage, files, members, chat };
 }
 
 function names(data) {
@@ -277,7 +335,7 @@ function nodeCards(list, data) {
              <div class="meta">${n.tier ? esc(n.tier) + " · " : ""}setup ${pct(n.stored, n.quota)}% — ${bytes(n.stored)} of ${bytes(n.quota)}</div>`
           : "";
       return `<div class="node ${n.mine ? "mine" : ""}">
-        <div class="node-top"><span class="name">${esc(n.name)}</span>${n.here ? '<span class="you">this node</span>' : n.mine ? '<span class="you">you</span>' : ""}<span class="kind">${esc(n.kind)}</span></div>
+        <div class="node-top"><span class="name">${esc(n.name)}</span>${n.here ? '<span class="you">this node</span>' : n.mine ? '<span class="you">you</span>' : ""}<span class="kind ${esc(n.kind)}">${icon({ pouch: "box", bill: "fish", post: "relay" }[n.kind] || "box", "s")}${esc(n.kind)}</span></div>
         <div class="meta">${esc(n.network)} · <code>${esc(short(n.peer))}</code></div>
         ${setup}
         <div class="state ${cls}">${esc(text)}</div>
@@ -311,7 +369,8 @@ function renderFish(data) {
   const folders = data.storage.folders.filter((f) => !network || f.network_id === network);
   if (state.folder && !folders.some((f) => f.tier === state.folder)) state.folder = "";
   const all = `<button class="folder ${state.folder ? "" : "selected"}" data-folder="">
-      <strong>📂 All folders</strong>
+      <span class="tile">${icon("folders", "l")}</span>
+      <strong>All folders</strong>
       <span>${plural(data.files.files.filter((f) => inNetwork(f.network_id)).length, "file", "files")}</span>
     </button>`;
   $("folders").innerHTML =
@@ -319,7 +378,8 @@ function renderFish(data) {
     folders
       .map(
         (f) => `<button class="folder ${f.active ? "" : "waiting"} ${state.folder === f.tier ? "selected" : ""}" data-folder="${esc(f.tier)}">
-          <strong>📁 ${esc(f.tier)}${network ? "" : ` <small>${esc(f.network_id)}</small>`}</strong>
+          <span class="tile">${icon("folder", "l")}</span>
+          <strong>${esc(f.tier)}${network ? "" : ` <small>${esc(f.network_id)}</small>`}</strong>
           <span>${plural(f.users, "user", "users")} · ${plural(f.pouches, "Pouch", "Pouches")} · ${bytes(f.free_bytes)} free</span>
           <span>${f.active ? `k/n ${f.k}/${f.n} · recovery ${(f.pe * 100).toFixed(2)}%` : "local only until 3 users have a Pouch here"}</span>
         </button>`,
@@ -347,18 +407,29 @@ function renderFish(data) {
     <tbody>${files
       .map(
         (f) => `<tr>
-          <td class="fname">${esc(f.file_name)}<small>${esc(f.network_id)}${f.tier ? ` · 📁 ${esc(f.tier)}${f.local ? " (local only)" : ""}` : ""} · ${plural(f.chunks, "chunk", "chunks")}${f.mine && f.shared_with ? ` · shared with ${f.shared_with}` : ""}</small></td>
+          <td class="fname"><div class="file-name">${fileKind(f.file_name)}<div>${esc(f.file_name)}<small>${esc(f.network_id)}${f.tier ? ` · ${esc(f.tier)}${f.local ? " (local only)" : ""}` : ""} · ${plural(f.chunks, "chunk", "chunks")}${f.mine && f.shared_with ? ` · shared with ${f.shared_with}` : ""}</small></div></div></td>
           <td>${bytes(f.size_bytes)}</td>
           <td>${f.mine ? '<span class="owner-you">you</span>' : esc(who[f.owner] || short(f.owner))}</td>
           <td>${new Date(f.uploaded_at * 1000).toLocaleString()}</td>
           <td class="actions">
-            ${!native && playable(f.file_name) ? `<button class="button small" data-play="${esc(f.file_id)}" data-network="${esc(f.network_id)}" data-name="${esc(f.file_name)}">Play</button>` : ""}
-            <button class="button small" data-download="${esc(f.file_id)}" data-network="${esc(f.network_id)}" data-name="${esc(f.file_name)}">Download</button>
-            <button class="button small danger" data-delete="${esc(f.file_id)}" data-network="${esc(f.network_id)}" data-name="${esc(f.file_name)}">${f.mine ? "Delete" : "Remove"}</button>
+            ${!native && playable(f.file_name) ? `<button class="button small" data-play="${esc(f.file_id)}" data-network="${esc(f.network_id)}" data-name="${esc(f.file_name)}">${icon("play", "s")}Play</button>` : ""}
+            <button class="button small" data-download="${esc(f.file_id)}" data-network="${esc(f.network_id)}" data-name="${esc(f.file_name)}">${icon("download", "s")}Download</button>
+            <button class="button small ghost danger" title="${f.mine ? "Delete" : "Remove"}" aria-label="${f.mine ? "Delete" : "Remove"}" data-delete="${esc(f.file_id)}" data-network="${esc(f.network_id)}" data-name="${esc(f.file_name)}">${icon("trash", "s")}</button>
           </td>
         </tr>`,
       )
       .join("")}</tbody></table>`;
+}
+
+const IMAGES = ["jpg", "jpeg", "png", "gif", "webp", "heic", "svg", "bmp"];
+const AUDIO = ["mp3", "m4a", "ogg", "oga", "opus", "wav", "flac"];
+
+function fileKind(name) {
+  const ext = String(name).split(".").pop().toLowerCase();
+  if (IMAGES.includes(ext)) return `<span class="file-kind image">${icon("image")}</span>`;
+  if (AUDIO.includes(ext)) return `<span class="file-kind media">${icon("music")}</span>`;
+  if (playable(name)) return `<span class="file-kind media">${icon("film")}</span>`;
+  return `<span class="file-kind">${icon("file")}</span>`;
 }
 
 /* ---------- Flock ---------- */
@@ -471,7 +542,7 @@ function membersTable(data) {
         .map(
           (u) => `<tr>
             <td class="fname">${esc(u.name || short(u.fingerprint))}${u.fingerprint === m.me ? ' <span class="owner-you">you</span>' : ""}<small><code>${esc(short(u.fingerprint))}</code> · ${plural(u.devices, "device", "devices")}${u.expel_approvals ? ` · expulsion: ${u.expel_approvals} approval(s)` : ""}</small></td>
-            <td>${esc(u.tier)} · ${u.weight}</td>
+            <td>${tierChip(u.tier)} <small>weight ${u.weight}</small></td>
             <td>${bytes(u.credit_bytes)}</td>
             <td>${bytes(u.used_bytes)}</td>
             <td class="${u.trust > 0 ? "up" : u.trust < 0 ? "down" : ""}">${u.trust >= 0 ? "+" : ""}${u.trust.toFixed(2)}${u.open_bets || u.sponsoring ? ` <small>${u.locked_trust.toFixed(2)} locked · ${plural(u.open_bets, "bet", "bets")} · ${plural(u.sponsoring, "invitation", "invitations")}</small>` : ""}</td>
@@ -566,7 +637,7 @@ function renderNest(data) {
         .map(
           ([network, u]) => `<tr>
             <td class="fname">${esc(network)}<small>member since ${new Date(u.joined_at * 1000).toLocaleDateString()}</small></td>
-            <td>${esc(u.tier)} · ${u.weight}</td>
+            <td>${tierChip(u.tier)} <small>weight ${u.weight}</small></td>
             <td>${bytes(u.credit_bytes)}</td>
             <td>${bytes(u.used_bytes)}</td>
             <td class="${u.trust > 0 ? "up" : u.trust < 0 ? "down" : ""}">${u.trust >= 0 ? "+" : ""}${u.trust.toFixed(2)} <small>${u.locked_trust.toFixed(2)} locked · ${plural(u.open_bets, "bet", "bets")} · ${plural(u.sponsoring, "invitation", "invitations")}</small></td>
@@ -744,6 +815,7 @@ function initials(name) {
 function renderMe(data) {
   const name = myName(data);
   $("avatar").textContent = initials(name);
+  $("avatar").style.setProperty("--hue", hue(data.status.fingerprint));
   $("me-name").textContent = name;
   $("me-fp").textContent = short(data.status.fingerprint);
 }
@@ -755,17 +827,272 @@ function renderProfile(data) {
     .map(([network, m]) => [network, m.members.find((u) => u.fingerprint === s.fingerprint)])
     .filter(([, u]) => u);
   $("profile").innerHTML = `
-    <span class="avatar big">${esc(initials(name))}</span>
+    ${avatar(name, s.fingerprint, "big")}
     <span><h2>${esc(name)}</h2><code>${esc(s.fingerprint)}</code></span>
     <div class="networks files">${
       rows.length
         ? `<table><thead><tr><th>Network</th><th>Tier</th><th>Trust</th><th>Devices</th></tr></thead><tbody>${rows
-            .map(([network, u]) => `<tr><td class="fname">${esc(network)}</td><td>${esc(u.tier)}</td><td>${u.trust >= 0 ? "+" : ""}${u.trust.toFixed(2)}</td><td>${u.devices}</td></tr>`)
+            .map(([network, u]) => `<tr><td class="fname">${esc(network)}<small>level ${u.level.number} · ${esc(u.level.name)} · ${u.level.points} points</small></td><td>${tierChip(u.tier)}</td><td>${u.trust >= 0 ? "+" : ""}${u.trust.toFixed(2)}</td><td>${u.devices}</td></tr>`)
             .join("")}</tbody></table>`
         : `<div class="empty">You are in no network yet.</div>`
     }</div>`;
+  renderThemes();
   $("refresh-rate").value = String(state.rate);
   $("sign-out").hidden = Boolean(native);
+}
+
+function renderThemes() {
+  const current = document.documentElement.dataset.theme;
+  $("themes").innerHTML = THEMES.map(
+    ([id, name, about]) => `<button class="theme ${id === current ? "active" : ""}" data-theme="${id}" data-pick="${id}">
+      <span class="preview"><i></i><b><u></u><u></u><u></u></b></span>
+      <span>${name}<small>${about}</small></span>
+    </button>`,
+  ).join("");
+}
+
+/* ---------- Gossip ---------- */
+
+function keepChat(data) {
+  const network = currentNetwork();
+  if (!network) {
+    state.chat = { network: null, revision: null, messages: [] };
+    return;
+  }
+  if (!data.chat || data.chat.network_id !== network) return;
+  state.chat = {
+    network,
+    revision: data.chat.revision,
+    messages: data.chat.messages === null ? state.chat.messages : data.chat.messages,
+  };
+}
+
+function seen() {
+  try {
+    return JSON.parse(stored(SEEN_KEY, "{}"));
+  } catch (_) {
+    return {};
+  }
+}
+
+function unread() {
+  const { network, messages } = state.chat;
+  if (!network) return 0;
+  const last = seen()[network] || 0;
+  return messages.filter((m) => !m.mine && m.at > last).length;
+}
+
+function markRead() {
+  const { network, messages } = state.chat;
+  if (!network || !messages.length) return;
+  const all = seen();
+  const newest = messages[messages.length - 1].at;
+  if (all[network] === newest) return;
+  all[network] = newest;
+  remember(SEEN_KEY, JSON.stringify(all));
+}
+
+function renderUnread() {
+  if (state.view === "gossip" && !document.hidden) markRead();
+  const n = unread();
+  $("unread").hidden = !n;
+  $("unread").textContent = n > 99 ? "99+" : String(n);
+}
+
+function scrollChat(force) {
+  const log = $("chat-log");
+  if (force || log.scrollHeight - log.scrollTop - log.clientHeight < 140) log.scrollTop = log.scrollHeight;
+}
+
+function dayLabel(at) {
+  const day = new Date(at * 1000);
+  const today = new Date();
+  const yesterday = new Date(Date.now() - 86400000);
+  if (day.toDateString() === today.toDateString()) return "Today";
+  if (day.toDateString() === yesterday.toDateString()) return "Yesterday";
+  return day.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" });
+}
+
+function renderChat(data) {
+  const network = currentNetwork();
+  const log = $("chat-log");
+  $("chat-form").hidden = !network;
+  if (!network) {
+    $("chat-title").textContent = "Chat";
+    $("chat-sub").textContent = "";
+    log.innerHTML = `<div class="empty">Pick a network at the top to open its chat.</div>`;
+    log.dataset.shown = "";
+    return;
+  }
+  const members = data.members[network] ? data.members[network].members.length : 0;
+  $("chat-title").textContent = `Chat of ${network}`;
+  $("chat-sub").textContent = `${plural(members, "member", "members")} · signed, and encrypted with the network key`;
+  const shown = `${network}|${state.chat.revision}|${state.chat.messages.length}`;
+  if (log.dataset.shown === shown) return;
+  const first = log.dataset.shown === undefined || !log.dataset.shown.startsWith(network + "|");
+  log.dataset.shown = shown;
+  if (!state.chat.messages.length) {
+    log.innerHTML = `<div class="empty">Nobody has written yet. Say hello to the flock.</div>`;
+    return;
+  }
+  const who = names(data);
+  let previous = null;
+  log.innerHTML = state.chat.messages
+    .map((m) => {
+      const day = dayLabel(m.at);
+      const newDay = !previous || dayLabel(previous.at) !== day;
+      const same = !newDay && previous.author === m.author && m.at - previous.at < 300;
+      previous = m;
+      const name = m.name || who[m.author] || short(m.author);
+      const time = new Date(m.at * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+      return `${newDay ? `<div class="chat-day">${esc(day)}</div>` : ""}
+        <div class="msg ${m.mine ? "mine" : ""} ${same ? "same" : ""}">
+          <span class="who">${m.mine ? "" : `<b data-member="${esc(m.author)}">${esc(name)}</b> · `}${time}</span>
+          <span data-member="${esc(m.author)}">${avatar(name, m.author, "s")}</span>
+          <span class="bubble" title="${esc(new Date(m.at * 1000).toLocaleString())}">${esc(m.text)}</span>
+        </div>`;
+    })
+    .join("");
+  scrollChat(first || state.chat.messages[state.chat.messages.length - 1].mine);
+}
+
+function ranked(data, network) {
+  const m = data.members[network];
+  return m ? [...m.members].sort((a, b) => b.level.points - a.level.points || b.trust - a.trust || a.joined_at - b.joined_at) : [];
+}
+
+function levelPanel(u) {
+  const { number, name, points, floor, next } = u.level;
+  const value = next ? Math.round(((points - floor) / (next - floor)) * 100) : 100;
+  const earned = u.achievements.filter((a) => a.earned).length;
+  return `<div class="level">
+    <span class="ring" style="--value:${value}"><span>${number}</span></span>
+    <span class="eyebrow">Your level</span>
+    <strong>${esc(name)}</strong>
+    <span class="sub">${points} points · ${next ? `${next - points} to the next level` : "the highest level"} · ${earned}/${u.achievements.length} badges</span>
+  </div>`;
+}
+
+function badgeCard(a) {
+  return `<div class="badge ${a.earned ? "earned" : ""}">
+    <span class="medal">${icon(a.earned ? BADGE_ICONS[a.id] || "trophy" : "lock", "l")}</span>
+    <strong>${esc(a.name)}<small>+${a.points}</small></strong>
+    <span>${esc(a.description)}</span>
+    ${a.earned ? "" : `<div class="bar">${a.progress_percent ? `<span class="used" style="flex:${a.progress_percent} 0 0"></span>` : ""}<span class="rest" style="flex:${100 - a.progress_percent} 0 0"></span></div>`}
+  </div>`;
+}
+
+function renderGossip(data) {
+  renderChat(data);
+  const network = currentNetwork();
+  const list = network ? ranked(data, network) : [];
+  const me = list.find((u) => u.fingerprint === data.status.fingerprint);
+  $("level-panel").hidden = !me;
+  if (me) $("level-panel").innerHTML = levelPanel(me);
+  $("roster").innerHTML = list.length
+    ? list
+        .map(
+          (u, i) => `<button class="mate" data-member="${esc(u.fingerprint)}">
+            <span class="rank">${i + 1}</span>
+            ${avatar(u.name || "?", u.fingerprint)}
+            <span class="who"><b>${esc(u.name || short(u.fingerprint))}${u.fingerprint === data.status.fingerprint ? ' <span class="owner-you">you</span>' : ""}</b><small>Level ${u.level.number} · ${esc(u.level.name)} · ${esc(u.tier)}</small></span>
+            <span class="pts">${u.level.points} <small>pts</small></span>
+          </button>`,
+        )
+        .join("")
+    : `<div class="empty">Pick a network at the top to see its members.</div>`;
+  if (!me) {
+    $("badges-sub").textContent = "";
+    $("badges").innerHTML = `<div class="empty">Pick a network at the top to see your badges.</div>`;
+    return;
+  }
+  const sorted = [...me.achievements].sort((a, b) => Number(b.earned) - Number(a.earned) || b.progress_percent - a.progress_percent);
+  $("badges-sub").textContent = `${sorted.filter((a) => a.earned).length} of ${sorted.length} earned in ${network}`;
+  $("badges").innerHTML = sorted.map(badgeCard).join("");
+}
+
+function renderMember(data) {
+  const { network, fingerprint } = state.member;
+  const u = data.members[network] && data.members[network].members.find((x) => x.fingerprint === fingerprint);
+  if (!u) {
+    closeMember();
+    return;
+  }
+  const name = u.name || short(u.fingerprint);
+  const rate = u.challenges_sent ? ((u.challenges_passed / u.challenges_sent) * 100).toFixed(1) + "%" : "—";
+  const earned = u.achievements.filter((a) => a.earned);
+  const shown = `${fingerprint}|${u.level.points}|${u.trust}|${u.credit_bytes}|${u.used_bytes}|${u.challenges_sent}|${u.messages}`;
+  if ($("member-box").dataset.shown === shown) return;
+  $("member-box").dataset.shown = shown;
+  $("member-box").innerHTML = `
+    <div class="sheet-head">
+      ${avatar(name, u.fingerprint, "big")}
+      <h2>${esc(name)}</h2>
+      <button class="button ghost small" data-close aria-label="Close">${icon("close")}</button>
+      <span class="row">${tierChip(u.tier)}<span class="chip">Level ${u.level.number} · ${esc(u.level.name)}</span><span class="sub">${u.level.points} points</span></span>
+    </div>
+    <code>${esc(u.fingerprint)}</code>
+    <div class="stats">
+      <div class="stat"><b class="${u.trust > 0 ? "up" : u.trust < 0 ? "down" : ""}">${u.trust >= 0 ? "+" : ""}${u.trust.toFixed(2)}</b><small>trust</small></div>
+      <div class="stat"><b>${u.weight}</b><small>voting weight</small></div>
+      <div class="stat"><b>${rate}</b><small>${u.challenges_passed}/${u.challenges_sent} challenges passed</small></div>
+      <div class="stat"><b>${bytes(u.credit_bytes)}</b><small>hosts for the others</small></div>
+      <div class="stat"><b>${bytes(u.used_bytes)}</b><small>stores on the others</small></div>
+      <div class="stat"><b>${u.devices}</b><small>${u.devices === 1 ? "device" : "devices"} · ${plural(u.invited, "invite", "invites")}</small></div>
+    </div>
+    <div class="sub">Member of ${esc(network)} since ${new Date(u.joined_at * 1000).toLocaleDateString()} · ${plural(u.messages, "message", "messages")} seen here</div>
+    <div class="badges">${earned.length ? earned.map(badgeCard).join("") : `<div class="empty">No badges yet.</div>`}</div>`;
+}
+
+function openMember(fingerprint) {
+  const network = currentNetwork();
+  if (!network || !state.data) return;
+  state.member = { network, fingerprint };
+  $("member-box").dataset.shown = "";
+  $("member-sheet").hidden = false;
+  renderMember(state.data);
+}
+
+function closeMember() {
+  state.member = null;
+  $("member-sheet").hidden = true;
+}
+
+function celebrate(data) {
+  let known;
+  try {
+    known = JSON.parse(stored(EARNED_KEY, "null"));
+  } catch (_) {
+    known = null;
+  }
+  const now = {};
+  for (const [network, m] of Object.entries(data.members)) {
+    const me = m.members.find((u) => u.fingerprint === data.status.fingerprint);
+    if (!me) continue;
+    now[network] = me.achievements.filter((a) => a.earned).map((a) => a.id);
+    if (!known || !known[network]) continue;
+    for (const a of me.achievements) {
+      if (a.earned && !known[network].includes(a.id)) toast(`Badge earned in ${network}: ${a.name} (+${a.points})`, "badge");
+    }
+  }
+  remember(EARNED_KEY, JSON.stringify(now));
+}
+
+async function sendChat() {
+  const network = currentNetwork();
+  const box = $("chat-text");
+  const text = box.value.trim();
+  if (!network || !text) return;
+  box.value = "";
+  box.style.height = "";
+  try {
+    const chat = await send(`/networks/${encodeURIComponent(network)}/chat`, "POST", { text });
+    state.chat = { network, revision: chat.revision, messages: chat.messages || state.chat.messages };
+    render();
+  } catch (e) {
+    box.value = text;
+    toast(`Cannot send: ${e.message}`, "error");
+  }
 }
 
 /* ---------- shell ---------- */
@@ -789,6 +1116,7 @@ function showView(view) {
   for (const b of document.querySelectorAll(".nav")) b.classList.toggle("active", b.dataset.view === view);
   $("view-title").textContent = VIEWS[view];
   render();
+  if (view === "gossip") scrollChat(true);
 }
 
 function render() {
@@ -796,14 +1124,18 @@ function render() {
   if (!data) return;
   renderNetworkPicker(data);
   renderMe(data);
-  const renderers = { fish: renderFish, flock: renderFlock, nest: renderNest, roost: renderRoost, profile: renderProfile };
+  const renderers = { fish: renderFish, flock: renderFlock, nest: renderNest, roost: renderRoost, gossip: renderGossip, profile: renderProfile };
   if (renderers[state.view]) renderers[state.view](data);
+  renderUnread();
+  if (state.member) renderMember(data);
 }
 
 async function refresh() {
   try {
     state.data = await load();
     sample(state.data);
+    keepChat(state.data);
+    celebrate(state.data);
     $("live").classList.add("ok");
     banner("");
     render();
@@ -948,7 +1280,9 @@ $("network").addEventListener("change", (e) => {
   state.network = e.target.value;
   remember(NETWORK_KEY, state.network);
   state.folder = "";
+  state.chat = { network: null, revision: null, messages: [] };
   render();
+  refresh();
 });
 
 $("folders").addEventListener("click", (e) => {
@@ -1006,6 +1340,46 @@ $("invite-form").addEventListener("submit", async (e) => {
   } catch (err) {
     toast(`Cannot invite: ${err.message}`, "error");
   }
+});
+
+$("chat-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  sendChat();
+});
+
+$("chat-text").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+    e.preventDefault();
+    sendChat();
+  }
+});
+
+$("chat-text").addEventListener("input", (e) => {
+  e.target.style.height = "";
+  e.target.style.height = Math.min(120, e.target.scrollHeight + 2) + "px";
+});
+
+$("view-gossip").addEventListener("click", (e) => {
+  const who = e.target.closest("[data-member]");
+  if (who) openMember(who.dataset.member);
+});
+
+$("member-sheet").addEventListener("click", (e) => {
+  if (e.target === $("member-sheet") || e.target.closest("[data-close]")) closeMember();
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && state.member) closeMember();
+});
+
+document.addEventListener("visibilitychange", renderUnread);
+
+$("themes").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-pick]");
+  if (!b) return;
+  document.documentElement.dataset.theme = b.dataset.pick;
+  remember(THEME_KEY, b.dataset.pick);
+  renderThemes();
 });
 
 $("refresh-rate").addEventListener("change", (e) => {

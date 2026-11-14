@@ -7,7 +7,7 @@ const GIB: u64 = 1 << 30;
 pub const LEVELS: [(&str, u32); 6] = [
     ("Egg", 0),
     ("Hatchling", 50),
-    ("Fledgling", 150),
+    ("Paddler", 150),
     ("Fisher", 350),
     ("Glider", 650),
     ("Great Pelican", 1000),
