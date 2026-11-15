@@ -137,9 +137,7 @@ impl Family {
         if !self.history.is_empty() {
             let blob = hex::decode(&self.history)
                 .map_err(|_| BpError::Identity("bad family history".into()))?;
-            for old in open(&current, &blob)?.chunks_exact(32) {
-                keyring.push(old.try_into().expect("chunks of 32 bytes"));
-            }
+            keyring.extend_from_slice(open(&current, &blob)?.as_chunks::<32>().0);
         }
         Ok(keyring)
     }
