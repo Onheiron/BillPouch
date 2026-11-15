@@ -123,7 +123,7 @@ enum Cmd {
 
     #[command(
         about = "Let someone join a network: prints a token for them",
-        long_about = "Let someone join a network: prints a token for them.\n\nThey give you their SSH public key (the line `bp login` prints); you get a token to send back. The token is useless to anyone else: the network key inside is encrypted for their key only.\n\nWith your own public key it prints a token for another device of yours: log in there with the same SSH key and `bp join` it; your files follow."
+        long_about = "Let someone join a network: prints a token for them.\n\nThey give you their SSH public key (the line `bp login` prints); you get a token to send back. The token is useless to anyone else: the network key inside is encrypted for their key only.\n\nFor another device of yours use `bp device add`: every device has its own key."
     )]
     Invite {
         #[arg(help = "Network to invite them into")]
@@ -152,8 +152,17 @@ enum Cmd {
 
     #[command(about = "Join a network with the token you were sent")]
     Join {
-        #[arg(help = "The token printed by `bp invite`")]
+        #[arg(help = "The token printed by `bp invite` or `bp device add`")]
         token: String,
+    },
+
+    #[command(
+        about = "Your devices: each has its own SSH key",
+        long_about = "Your devices: each has its own SSH key.\n\nIn every network you are one user with a set of keys and one family key, which opens your files. A new device runs `bp login` (it makes its own key), you add that key from a device you already have with `bp device add`, and it joins with the token. Revoking a key cuts its device out and changes your family key for the files to come."
+    )]
+    Device {
+        #[command(subcommand)]
+        action: DeviceAction,
     },
 
     #[command(about = "List the members of a network with their reputation and weight")]
@@ -389,6 +398,29 @@ enum RelayAction {
 }
 
 #[derive(Subcommand)]
+enum DeviceAction {
+    #[command(about = "Add the key of a new device of yours: prints the token it joins with")]
+    Add {
+        #[arg(help = "Network to add it to")]
+        network_id: String,
+        #[arg(help = "The public key the new device printed at `bp login`")]
+        key: String,
+    },
+    #[command(about = "Revoke a key of yours, e.g. of a lost device")]
+    Revoke {
+        #[arg(help = "Network to revoke it in")]
+        network_id: String,
+        #[arg(help = "Its fingerprint (see `bp device ls`) or its public key")]
+        key: String,
+    },
+    #[command(about = "List your keys and the devices they certified")]
+    Ls {
+        #[arg(help = "Network to list them in")]
+        network_id: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum NetworkAction {
     #[command(about = "Create a new network")]
     Create {
@@ -540,6 +572,14 @@ async fn main() -> anyhow::Result<()> {
         Some(Cmd::Join { token }) => {
             commands::network::join(token).await?;
         }
+
+        Some(Cmd::Device { action }) => match action {
+            DeviceAction::Add { network_id, key } => commands::device::add(network_id, key).await?,
+            DeviceAction::Revoke { network_id, key } => {
+                commands::device::revoke(network_id, key).await?
+            }
+            DeviceAction::Ls { network_id } => commands::device::list(network_id).await?,
+        },
 
         Some(Cmd::Members { network_id }) => {
             commands::network::members(network_id).await?;

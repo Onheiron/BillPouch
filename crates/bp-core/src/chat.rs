@@ -17,6 +17,7 @@ const BATCH_BYTES: usize = 40 * 1024;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub author: String,
+    pub key: String,
     pub at: u64,
     pub text: String,
     #[serde(with = "crate::wire::hex_bytes")]
@@ -33,10 +34,17 @@ impl ChatMessage {
         }
         let signature = identity
             .user
-            .sign(&signed_bytes(room, &identity.fingerprint, at, &text))
+            .sign(&signed_bytes(
+                room,
+                &identity.fingerprint,
+                &identity.key_fingerprint,
+                at,
+                &text,
+            ))
             .map_err(|e| BpError::Identity(format!("cannot sign the message: {e}")))?;
         Ok(Self {
             author: identity.fingerprint.clone(),
+            key: identity.key_fingerprint.clone(),
             at,
             text,
             signature: hex::encode(signature),
@@ -48,21 +56,25 @@ impl ChatMessage {
     }
 
     pub fn is_authentic(&self, ledger: &Ledger, room: &str, now: u64) -> bool {
-        let Some(member) = ledger.members.get(&self.author) else {
+        let Some(line) = ledger
+            .keys
+            .get(&self.key)
+            .filter(|k| !k.revoked && k.user == self.author)
+            .map(|k| k.key.as_str())
+        else {
             return false;
         };
-        let Ok((public, fingerprint)) = parse_user_key(&member.key) else {
+        let Ok((public, _)) = parse_user_key(line) else {
             return false;
         };
         let Ok(signature) = hex::decode(&self.signature) else {
             return false;
         };
         ledger.is_member(&self.author)
-            && fingerprint == self.author
             && valid_text(&self.text)
             && self.at <= now + SKEW_SECS
             && public.verify(
-                &signed_bytes(room, &self.author, self.at, &self.text),
+                &signed_bytes(room, &self.author, &self.key, self.at, &self.text),
                 &signature,
             )
     }
@@ -72,8 +84,8 @@ fn valid_text(text: &str) -> bool {
     !text.is_empty() && text.chars().count() <= MAX_TEXT_CHARS && text.trim() == text
 }
 
-fn signed_bytes(room: &str, author: &str, at: u64, text: &str) -> Vec<u8> {
-    wire::signing_bytes(b"billpouch/chat/v1", &(room, author, at, text))
+fn signed_bytes(room: &str, author: &str, key: &str, at: u64, text: &str) -> Vec<u8> {
+    wire::signing_bytes(b"billpouch/chat/v2", &(room, author, key, at, text))
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]

@@ -71,6 +71,13 @@ pub fn chat_path() -> BpResult<PathBuf> {
     Ok(base_dir()?.join("chat.cbor"))
 }
 
+pub fn joined_any_network() -> bool {
+    networks_dir()
+        .ok()
+        .and_then(|dir| std::fs::read_dir(dir).ok())
+        .is_some_and(|mut entries| entries.next().is_some())
+}
+
 pub fn ensure_dirs() -> BpResult<()> {
     std::fs::create_dir_all(base_dir()?).map_err(BpError::Io)?;
     std::fs::create_dir_all(runtime_dir()?).map_err(BpError::Io)

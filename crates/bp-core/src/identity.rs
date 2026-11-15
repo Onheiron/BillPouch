@@ -20,6 +20,8 @@ const DEVICE_CERT_CONTEXT: &[u8] = b"billpouch/device-cert/v1";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserProfile {
     pub alias: Option<String>,
+    #[serde(default)]
+    pub user: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -35,7 +37,7 @@ pub struct DeviceCert {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifiedDevice {
-    pub fingerprint: String,
+    pub key: String,
     pub peer_id: PeerId,
 }
 
@@ -55,7 +57,7 @@ impl DeviceCert {
     }
 
     pub fn verify(&self) -> BpResult<VerifiedDevice> {
-        let (user_public, fingerprint) = parse_user_key(&self.user_key)?;
+        let (user_public, key) = parse_user_key(&self.user_key)?;
         let signature = hex::decode(&self.signature)
             .map_err(|_| BpError::Identity("device certificate: bad signature encoding".into()))?;
         let message = cert_message(&self.user_key, &self.device_key, self.issued_at);
@@ -69,7 +71,7 @@ impl DeviceCert {
         let device = PublicKey::try_decode_protobuf(&device_bytes)
             .map_err(|e| BpError::Identity(format!("device certificate: {e}")))?;
         Ok(VerifiedDevice {
-            fingerprint,
+            key,
             peer_id: PeerId::from_public_key(&device),
         })
     }
@@ -101,10 +103,52 @@ pub fn parse_user_key(openssh: &str) -> BpResult<(PublicKey, String)> {
     ))
 }
 
+pub const USER_TAG: &str = "bp:";
+
+pub struct MemberKey {
+    pub public: PublicKey,
+    pub key: String,
+    pub user: String,
+}
+
+pub fn member_key(line: &str) -> BpResult<MemberKey> {
+    let parsed = ssh_key::PublicKey::from_openssh(line.trim())
+        .map_err(|e| BpError::Identity(format!("invalid SSH public key: {e}")))?;
+    let (public, key) = parse_user_key(line)?;
+    let user = parsed
+        .comment()
+        .split_whitespace()
+        .next()
+        .and_then(|word| word.strip_prefix(USER_TAG))
+        .filter(|u| u.starts_with("SHA256:"))
+        .map_or_else(|| key.clone(), str::to_string);
+    Ok(MemberKey { public, key, user })
+}
+
+pub fn tag_key(line: &str, user: &str) -> String {
+    let mut words: Vec<&str> = line.split_whitespace().take(2).collect();
+    let tag = format!("{USER_TAG}{user}");
+    words.push(&tag);
+    let name = key_name(line);
+    if !name.is_empty() {
+        words.push(&name);
+    }
+    words.join(" ")
+}
+
+pub fn key_name(line: &str) -> String {
+    line.split_whitespace()
+        .skip(2)
+        .filter(|word| !word.starts_with(USER_TAG))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 #[derive(Clone)]
 pub struct Identity {
     pub user: Keypair,
     pub user_key: String,
+    pub key_fingerprint: String,
     pub fingerprint: String,
     pub device: Keypair,
     pub peer_id: PeerId,
@@ -159,6 +203,7 @@ impl Identity {
 
         let profile = UserProfile {
             alias,
+            user: None,
             created_at: chrono::Utc::now(),
         };
         std::fs::write(
@@ -191,9 +236,43 @@ impl Identity {
         let cert = DeviceCert::issue(&user, &user_key, &device.public())?;
         let profile = UserProfile {
             alias,
+            user: None,
             created_at: chrono::Utc::now(),
         };
         Self::assemble(user, user_key, device, cert, profile)
+    }
+
+    pub fn stored_user() -> BpResult<String> {
+        let profile: UserProfile =
+            serde_json::from_str(&std::fs::read_to_string(config::profile_path()?)?)?;
+        match profile.user {
+            Some(user) => Ok(user),
+            None => Ok(Self::stored_key()?),
+        }
+    }
+
+    pub fn stored_key() -> BpResult<String> {
+        let cert: DeviceCert =
+            serde_json::from_str(&std::fs::read_to_string(config::device_cert_path()?)?)?;
+        Ok(cert.verify()?.key)
+    }
+
+    pub fn stored_public_key() -> BpResult<String> {
+        let cert: DeviceCert =
+            serde_json::from_str(&std::fs::read_to_string(config::device_cert_path()?)?)?;
+        Ok(cert.user_key)
+    }
+
+    pub fn adopt(user: &str) -> BpResult<()> {
+        let path = config::profile_path()?;
+        let mut profile: UserProfile = serde_json::from_str(&std::fs::read_to_string(&path)?)?;
+        profile.user = (user != Self::stored_key()?).then(|| user.to_string());
+        std::fs::write(path, serde_json::to_string_pretty(&profile)?)?;
+        Ok(())
+    }
+
+    pub fn member_line(&self) -> String {
+        tag_key(&self.user_key, &self.fingerprint)
     }
 
     fn assemble(
@@ -210,10 +289,12 @@ impl Identity {
                 "device certificate does not match this user and device".into(),
             ));
         }
+        let fingerprint = profile.user.clone().unwrap_or_else(|| verified.key.clone());
         Ok(Self {
             user,
             user_key,
-            fingerprint: verified.fingerprint,
+            key_fingerprint: verified.key,
+            fingerprint,
             device,
             peer_id,
             cert,
@@ -237,15 +318,6 @@ impl Identity {
 
     pub fn exists() -> BpResult<bool> {
         Ok(config::user_key_path()?.exists())
-    }
-
-    pub fn secret_material(&self) -> [u8; 32] {
-        let raw = self.user.to_protobuf_encoding().unwrap_or_default();
-        *blake3::Hasher::new()
-            .update(b"billpouch/secret-material/v2")
-            .update(&raw)
-            .finalize()
-            .as_bytes()
     }
 }
 
@@ -298,7 +370,8 @@ mod tests {
         let id = Identity::in_memory(Some("carlo".into())).unwrap();
         let verified = id.cert.verify().unwrap();
         assert_eq!(verified.peer_id, id.peer_id);
-        assert_eq!(verified.fingerprint, id.fingerprint);
+        assert_eq!(verified.key, id.key_fingerprint);
+        assert_eq!(id.key_fingerprint, id.fingerprint);
         assert!(id.fingerprint.starts_with("SHA256:"));
         assert!(id.user_key.starts_with("ssh-ed25519 "));
     }
@@ -324,7 +397,7 @@ mod tests {
     }
 
     #[test]
-    fn two_devices_of_the_same_user_share_fingerprint_not_peer_id() {
+    fn two_devices_of_the_same_key_share_fingerprint_not_peer_id() {
         let key = PrivateKey::random(&mut OsRng, ssh_key::Algorithm::Ed25519).unwrap();
         let openssh = key.to_openssh(LineEnding::LF).unwrap();
         let (user, user_key) = unlock(&openssh, None).unwrap();
@@ -338,7 +411,7 @@ mod tests {
             .unwrap()
             .verify()
             .unwrap();
-        assert_eq!(a.fingerprint, b.fingerprint);
+        assert_eq!(a.key, b.key);
         assert_ne!(a.peer_id, b.peer_id);
     }
 
@@ -360,5 +433,23 @@ mod tests {
         let (_, fp) = parse_user_key(&id.user_key).unwrap();
         assert_eq!(fp, id.fingerprint);
         assert_eq!(fp.len(), "SHA256:".len() + 43);
+    }
+
+    #[test]
+    fn the_member_line_names_the_user_of_the_key() {
+        let mut id = Identity::in_memory(None).unwrap();
+        let own = member_key(&id.member_line()).unwrap();
+        assert_eq!(own.key, id.key_fingerprint);
+        assert_eq!(own.user, id.key_fingerprint);
+        let other = Identity::in_memory(None).unwrap();
+        id.fingerprint = other.fingerprint.clone();
+        let added = member_key(&id.member_line()).unwrap();
+        assert_eq!(added.key, id.key_fingerprint);
+        assert_eq!(added.user, other.fingerprint);
+        let plain = member_key(&other.user_key).unwrap();
+        assert_eq!(plain.user, other.fingerprint);
+        let named = tag_key("ssh-ed25519 AAAA marco@pc", &other.fingerprint);
+        assert_eq!(key_name(&named), "marco@pc");
+        assert!(named.contains(&format!("{USER_TAG}{}", other.fingerprint)));
     }
 }

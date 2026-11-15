@@ -1,6 +1,6 @@
 use super::{
     protocol::{ChatData, ChatLine},
-    server::{member_name, DaemonState},
+    server::DaemonState,
     ControlResponse,
 };
 use crate::{
@@ -90,7 +90,7 @@ pub fn history(state: &DaemonState, network_id: String, known: Option<u64>) -> C
                     .ledger()
                     .members
                     .get(&m.author)
-                    .map(|member| member_name(&member.key))
+                    .map(|member| member.name.clone())
                     .unwrap_or_default(),
                 author: m.author.clone(),
                 at: m.at,

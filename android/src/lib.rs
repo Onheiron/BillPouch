@@ -3,6 +3,7 @@ use bp_core::{
     config,
     control::{client, protocol::ControlRequest, protocol::ControlResponse},
     identity::Identity,
+    membership::Invite,
     service::ServiceType,
 };
 use serde::Serialize;
@@ -24,6 +25,7 @@ struct AppState {
     identity: bool,
     running: bool,
     member: bool,
+    key: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -69,16 +71,11 @@ async fn start_daemon(passphrase: Option<String>) -> Result<(), String> {
 async fn app_state() -> AppState {
     let identity = Identity::exists().unwrap_or(false);
     let running = DAEMON.load(Ordering::SeqCst) && bp_core::daemon::is_running();
-    let member = running
-        && control(ControlRequest::Status)
-            .await
-            .ok()
-            .and_then(|s| s["networks"].as_array().map(|n| !n.is_empty()))
-            .unwrap_or(false);
     AppState {
         identity,
         running,
-        member,
+        member: config::joined_any_network(),
+        key: Identity::stored_public_key().ok(),
     }
 }
 
@@ -88,42 +85,31 @@ async fn unlock(passphrase: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn pick_key(app: AppHandle) -> Result<Option<String>, String> {
-    let picked = tauri::async_runtime::spawn_blocking(move || {
-        app.dialog()
-            .file()
-            .blocking_pick_file()
-            .map(|path| app.fs().read_to_string(path))
-    })
-    .await
-    .map_err(|e| e.to_string())?;
-    picked.transpose().map_err(|e| e.to_string())
+async fn create_key(alias: String, passphrase: String) -> Result<String, String> {
+    if Identity::exists().map_err(|e| e.to_string())? {
+        return Identity::stored_public_key().map_err(|e| e.to_string());
+    }
+    let passphrase = Some(passphrase).filter(|p| !p.is_empty());
+    Identity::create(
+        None,
+        Some(alias).filter(|a| !a.trim().is_empty()),
+        passphrase.as_deref(),
+    )
+    .map(|id| id.user_key)
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-async fn setup(
-    app: AppHandle,
-    alias: String,
-    key: String,
-    passphrase: String,
-    token: String,
-) -> Result<(), String> {
+async fn setup(passphrase: String, token: String) -> Result<(), String> {
     let passphrase = Some(passphrase).filter(|p| !p.is_empty());
-    if !Identity::exists().map_err(|e| e.to_string())? {
-        let scratch = app
-            .path()
-            .app_cache_dir()
-            .map_err(|e| e.to_string())?
-            .join("user_key");
-        std::fs::create_dir_all(scratch.parent().unwrap_or(&scratch)).map_err(|e| e.to_string())?;
-        std::fs::write(&scratch, key.trim().to_string() + "\n").map_err(|e| e.to_string())?;
-        let created = Identity::create(
-            Some(&scratch),
-            Some(alias).filter(|a| !a.trim().is_empty()),
-            passphrase.as_deref(),
-        );
-        let _ = std::fs::remove_file(&scratch);
-        created.map_err(|e| e.to_string())?;
+    let user = Invite::from_token(token.trim())
+        .and_then(|invite| Ok(invite.entry.member()?.user))
+        .map_err(|e| e.to_string())?;
+    if user != Identity::stored_user().map_err(|e| e.to_string())? {
+        if config::joined_any_network() || bp_core::daemon::is_running() {
+            return Err(format!("this token is for {user}, not for this device"));
+        }
+        Identity::adopt(&user).map_err(|e| e.to_string())?;
     }
     start_daemon(passphrase).await?;
     let joined = control(ControlRequest::JoinNetwork {
@@ -290,7 +276,7 @@ pub fn run() {
             std::env::set_var("HOME", &home);
             std::env::set_var("XDG_RUNTIME_DIR", &run);
             std::env::set_var("BP_LISTEN_PORT", "off");
-            if Identity::exists().unwrap_or(false) {
+            if Identity::exists().unwrap_or(false) && config::joined_any_network() {
                 tauri::async_runtime::spawn(async {
                     let _ = start_daemon(None).await;
                 });
@@ -300,7 +286,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             app_state,
             unlock,
-            pick_key,
+            create_key,
             setup,
             api,
             upload_files,

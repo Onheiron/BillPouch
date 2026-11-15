@@ -187,7 +187,7 @@ fn challenges(
                         .tier
                         .layers()
                         .flat_map(|l| sm.catalog(l))
-                        .filter(|e| e.owner.owner_key != identity.user_key)
+                        .filter(|e| e.owner.owner != identity.fingerprint)
                         .map(|e| e.chunk_id)
                         .collect();
                     (sm.meta.network_id.clone(), sm.meta.tier, chunks)
@@ -380,12 +380,8 @@ async fn run_catch_up(
                 {
                     continue;
                 }
-                let Some(owner_key) = ledger.members.get(&placement.owner).map(|m| m.key.clone())
-                else {
-                    continue;
-                };
                 let owner = crate::storage::ChunkOwner {
-                    owner_key,
+                    owner: placement.owner.clone(),
                     file_id: file_id.clone(),
                     layer: placement.layer,
                 };
@@ -461,10 +457,9 @@ fn shed_extra(
         return;
     };
     let ledger = chain.ledger();
-    let Some((file_id, owner_key)) = ledger.placements.iter().find_map(|(file_id, p)| {
-        let owner = ledger.members.get(&p.owner)?;
+    let Some((file_id, owner)) = ledger.placements.iter().find_map(|(file_id, p)| {
         (p.extra.contains(me) && !claimed.pending(&format!("release/{file_id}")))
-            .then(|| (file_id.clone(), owner.key.clone()))
+            .then(|| (file_id.clone(), p.owner.clone()))
     }) else {
         return;
     };
@@ -477,7 +472,7 @@ fn shed_extra(
         return tracing::warn!(file_id = %file_id, "cannot release an extra file: {e}");
     }
     drop(all);
-    match sm.write().unwrap().delete_file(&file_id, &owner_key) {
+    match sm.write().unwrap().delete_file(&file_id, &owner) {
         Ok(freed) => {
             tracing::info!(file_id = %file_id, freed, "gave up an extra file to make room")
         }
@@ -544,9 +539,7 @@ fn run_trust_round(
                 if p.holders.contains(&me) || p.extra.contains(&me) {
                     continue;
                 }
-                if let Some(owner) = ledger.members.get(&p.owner) {
-                    released.push((network.clone(), bet.file_id.clone(), owner.key.clone()));
-                }
+                released.push((network.clone(), bet.file_id.clone(), p.owner.clone()));
             }
             for (file_id, p) in &ledger.placements {
                 if !p.holders.contains(&me) || claimed.pending(&format!("trust/{file_id}")) {
@@ -574,11 +567,11 @@ fn run_trust_round(
         }
     }
     if let Ok(managers) = storage_managers.read() {
-        for (network, file_id, owner_key) in &released {
+        for (network, file_id, owner) in &released {
             for sm in managers.values() {
                 let mut sm = sm.write().unwrap();
                 if sm.meta.network_id == *network {
-                    match sm.delete_file(file_id, owner_key) {
+                    match sm.delete_file(file_id, owner) {
                         Ok(0) => {}
                         Ok(freed) => {
                             tracing::info!(file_id = %file_id, freed, "dropped a file entrusted to a newcomer")

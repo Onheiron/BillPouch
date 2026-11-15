@@ -1,6 +1,6 @@
 use crate::{
     error::{BpError, BpResult},
-    identity::{parse_user_key, DeviceCert, Identity},
+    identity::{member_key, parse_user_key, DeviceCert, Identity},
     storage::ChunkCipher,
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD as B64, Engine as _};
@@ -8,6 +8,7 @@ use libp2p::identity::{Keypair, PublicKey};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha512};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WrappedKey {
@@ -62,8 +63,12 @@ impl Entry {
 }
 
 impl Entry {
+    pub fn member(&self) -> BpResult<crate::identity::MemberKey> {
+        member_key(&self.body.member)
+    }
+
     pub fn unwrap_key(&self, identity: &Identity) -> BpResult<[u8; 32]> {
-        if parse_user_key(&self.body.member)?.1 != identity.fingerprint {
+        if parse_user_key(&self.body.member)?.1 != identity.key_fingerprint {
             return Err(BpError::Identity("this entry is not for you".into()));
         }
         open_key(&self.body.wrapped_key, &self.body.commitment, identity)
@@ -84,8 +89,79 @@ pub fn wrap_for(key: &[u8; 32], member_key: &str) -> BpResult<WrappedKey> {
     wrap(key, &parse_user_key(member_key)?.0)
 }
 
-pub fn unwrap_for(wrapped: &WrappedKey, identity: &Identity) -> BpResult<[u8; 32]> {
-    unwrap(wrapped, &identity.user)
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Family {
+    #[serde(with = "crate::wire::hex_bytes")]
+    pub public: String,
+    pub envelopes: BTreeMap<String, WrappedKey>,
+    #[serde(with = "crate::wire::hex_bytes")]
+    pub history: String,
+}
+
+impl Family {
+    pub fn seal<'a>(
+        keyring: &[[u8; 32]],
+        keys: impl IntoIterator<Item = (&'a String, &'a String)>,
+    ) -> BpResult<Self> {
+        let (current, older) = keyring
+            .split_first()
+            .ok_or_else(|| BpError::Identity("an empty keyring".into()))?;
+        let envelopes = keys
+            .into_iter()
+            .map(|(fingerprint, line)| Ok((fingerprint.clone(), wrap_for(current, line)?)))
+            .collect::<BpResult<_>>()?;
+        let history = if older.is_empty() {
+            String::new()
+        } else {
+            hex::encode(seal(current, &older.concat())?)
+        };
+        Ok(Self {
+            public: hex::encode(family_public(current).as_bytes()),
+            envelopes,
+            history,
+        })
+    }
+
+    pub fn open(&self, identity: &Identity) -> BpResult<Vec<[u8; 32]>> {
+        let envelope = self
+            .envelopes
+            .get(&identity.key_fingerprint)
+            .ok_or_else(|| BpError::Identity("the family key is not open to this device".into()))?;
+        let current = unwrap(envelope, &identity.user)?;
+        if hex::encode(family_public(&current).as_bytes()) != self.public {
+            return Err(BpError::Identity(
+                "the family key does not match its public key".into(),
+            ));
+        }
+        let mut keyring = vec![current];
+        if !self.history.is_empty() {
+            let blob = hex::decode(&self.history)
+                .map_err(|_| BpError::Identity("bad family history".into()))?;
+            for old in open(&current, &blob)?.chunks_exact(32) {
+                keyring.push(old.try_into().expect("chunks of 32 bytes"));
+            }
+        }
+        Ok(keyring)
+    }
+
+    pub fn wrap(&self, key: &[u8; 32]) -> BpResult<WrappedKey> {
+        let bytes: [u8; 32] = hex::decode(&self.public)
+            .ok()
+            .and_then(|b| b.try_into().ok())
+            .ok_or_else(|| BpError::Identity("bad family public key".into()))?;
+        wrap_to(key, &x25519_dalek::PublicKey::from(bytes))
+    }
+}
+
+fn family_public(secret: &[u8; 32]) -> x25519_dalek::PublicKey {
+    x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(*secret))
+}
+
+pub fn open_with(wrapped: &WrappedKey, keyring: &[[u8; 32]]) -> BpResult<[u8; 32]> {
+    keyring
+        .iter()
+        .find_map(|secret| unwrap_x(wrapped, &x25519_dalek::StaticSecret::from(*secret)).ok())
+        .ok_or_else(|| BpError::Identity("none of your family keys opens this".into()))
 }
 
 pub fn open_key(wrapped: &WrappedKey, commitment: &str, identity: &Identity) -> BpResult<[u8; 32]> {
@@ -106,7 +182,7 @@ pub fn genesis(identity: &Identity, network: &str) -> BpResult<(Entry, [u8; 32])
             network: network.to_string(),
             genesis: None,
             author: identity.user_key.clone(),
-            member: identity.user_key.clone(),
+            member: identity.member_line(),
             wrapped_key: wrap(&key, &identity.user.public())?,
             commitment: key_commitment(&key),
             at: now(),
@@ -155,8 +231,10 @@ impl Invite {
             .map_err(|_| BpError::InvalidInput("malformed invite token".into()))?;
         let invite: Self = serde_json::from_slice(&bytes)?;
         let genesis_ok = invite.genesis.body.genesis.is_none()
-            && invite.genesis.body.author == invite.genesis.body.member
-            && invite.genesis.signed_by_author().is_some();
+            && invite
+                .genesis
+                .member()
+                .is_ok_and(|m| Some(m.key) == invite.genesis.signed_by_author());
         let entry_ok = invite.entry == invite.genesis
             || (invite.entry.body.genesis.as_deref() == Some(&invite.genesis.id())
                 && invite.entry.signed_by_author().is_some());
@@ -180,7 +258,11 @@ pub fn open(key: &[u8; 32], blob: &[u8]) -> BpResult<Vec<u8>> {
 }
 
 fn wrap(key: &[u8; 32], recipient: &PublicKey) -> BpResult<WrappedKey> {
-    let recipient = x25519_public(recipient)?;
+    wrap_to(key, &x25519_public(recipient)?)
+}
+
+fn wrap_to(key: &[u8; 32], recipient: &x25519_dalek::PublicKey) -> BpResult<WrappedKey> {
+    let recipient = *recipient;
     let ephemeral = x25519_dalek::StaticSecret::random_from_rng(rand::thread_rng());
     let ephemeral_public = x25519_dalek::PublicKey::from(&ephemeral);
     let wrapping = wrapping_key(
@@ -200,12 +282,16 @@ fn unwrap(wrapped: &WrappedKey, recipient: &Keypair) -> BpResult<[u8; 32]> {
         .try_into_ed25519()
         .map_err(|_| BpError::Identity("user key is not ed25519".into()))?;
     let secret = x25519_dalek::StaticSecret::from(x25519_secret(ed.secret().as_ref()));
+    unwrap_x(wrapped, &secret)
+}
+
+fn unwrap_x(wrapped: &WrappedKey, secret: &x25519_dalek::StaticSecret) -> BpResult<[u8; 32]> {
     let ephemeral: [u8; 32] = hex::decode(&wrapped.ephemeral)
         .ok()
         .and_then(|b| b.try_into().ok())
         .ok_or_else(|| BpError::Identity("bad wrapped key".into()))?;
     let ephemeral = x25519_dalek::PublicKey::from(ephemeral);
-    let own_public = x25519_dalek::PublicKey::from(&secret);
+    let own_public = x25519_dalek::PublicKey::from(secret);
     let wrapping = wrapping_key(
         secret.diffie_hellman(&ephemeral).as_bytes(),
         &ephemeral,
@@ -265,7 +351,7 @@ mod tests {
         let (root, key) = genesis(&carlo, "amici").unwrap();
         assert_eq!(root.unwrap_key(&carlo).unwrap(), key);
         let invite = Invite {
-            entry: invite_entry(&carlo, &root, &key, &marco.user_key).unwrap(),
+            entry: invite_entry(&carlo, &root, &key, &marco.member_line()).unwrap(),
             genesis: root,
             creator_device: carlo.cert.clone(),
             addrs: vec![],
@@ -295,7 +381,7 @@ mod tests {
         let marco = Identity::in_memory(None).unwrap();
         let (root, key) = genesis(&carlo, "amici").unwrap();
         let mut invite = Invite {
-            entry: invite_entry(&carlo, &root, &key, &marco.user_key).unwrap(),
+            entry: invite_entry(&carlo, &root, &key, &marco.member_line()).unwrap(),
             genesis: root,
             creator_device: carlo.cert.clone(),
             addrs: vec![],
@@ -303,7 +389,7 @@ mod tests {
         invite.entry.body.member = Identity::in_memory(None).unwrap().user_key;
         assert!(Invite::from_token(&invite.to_token().unwrap()).is_err());
         let (other, _) = genesis(&carlo, "altri").unwrap();
-        invite.entry = invite_entry(&carlo, &other, &key, &marco.user_key).unwrap();
+        invite.entry = invite_entry(&carlo, &other, &key, &marco.member_line()).unwrap();
         assert!(Invite::from_token(&invite.to_token().unwrap()).is_err());
     }
 
@@ -316,5 +402,37 @@ mod tests {
         let blob = seal(&key, b"hello").unwrap();
         assert_eq!(open(&key, &blob).unwrap(), b"hello");
         assert!(open(&other, &blob).is_err());
+    }
+
+    #[test]
+    fn every_key_of_the_family_opens_the_whole_keyring() {
+        let laptop = Identity::in_memory(None).unwrap();
+        let mut phone = Identity::in_memory(None).unwrap();
+        phone.fingerprint = laptop.fingerprint.clone();
+        let stranger = Identity::in_memory(None).unwrap();
+        let keys = BTreeMap::from([
+            (laptop.key_fingerprint.clone(), laptop.user_key.clone()),
+            (phone.key_fingerprint.clone(), phone.user_key.clone()),
+        ]);
+        let first = new_key();
+        let family = Family::seal(&[first], &keys).unwrap();
+        let file_key = new_key();
+        let wrapped = family.wrap(&file_key).unwrap();
+        assert_eq!(
+            open_with(&wrapped, &family.open(&phone).unwrap()).unwrap(),
+            file_key
+        );
+        assert!(family.open(&stranger).is_err());
+
+        let rotated = Family::seal(
+            &[new_key(), first],
+            [(&laptop.key_fingerprint, &laptop.user_key)],
+        )
+        .unwrap();
+        assert!(rotated.open(&phone).is_err());
+        let keyring = rotated.open(&laptop).unwrap();
+        assert_eq!(keyring.len(), 2);
+        assert_eq!(open_with(&wrapped, &keyring).unwrap(), file_key);
+        assert!(open_with(&rotated.wrap(&file_key).unwrap(), &[first]).is_err());
     }
 }

@@ -37,6 +37,18 @@ pub enum ControlRequest {
     JoinNetwork {
         token: String,
     },
+    AddDevice {
+        network_id: String,
+        key: String,
+    },
+    RevokeDevice {
+        network_id: String,
+        key: String,
+    },
+    Devices {
+        network_id: String,
+    },
+    Shutdown,
     Members {
         network_id: String,
     },
@@ -192,7 +204,23 @@ pub struct InviteData {
     pub token: String,
     pub network_id: String,
     pub member: String,
-    pub for_device: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KeyInfo {
+    pub fingerprint: String,
+    pub name: String,
+    pub revoked: bool,
+    pub this_device: bool,
+    pub devices: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DevicesData {
+    pub network_id: String,
+    pub user: String,
+    pub family: bool,
+    pub keys: Vec<KeyInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

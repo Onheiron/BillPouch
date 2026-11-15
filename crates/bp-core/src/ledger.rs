@@ -1,7 +1,7 @@
 use crate::{
     error::{BpError, BpResult},
-    identity::{parse_user_key, DeviceCert, Identity},
-    membership::{Entry, WrappedKey},
+    identity::{key_name, member_key, parse_user_key, DeviceCert, Identity},
+    membership::{Entry, Family, WrappedKey},
     network::ReputationTier,
     storage::StorageTier,
     wire,
@@ -61,6 +61,17 @@ pub enum Op {
     },
     RegisterDevice {
         cert: DeviceCert,
+    },
+    SetFamily {
+        family: Family,
+    },
+    AddKey {
+        key: String,
+        envelope: WrappedKey,
+    },
+    RevokeKey {
+        key: String,
+        family: Family,
     },
     Leave,
     Place {
@@ -183,14 +194,14 @@ pub struct SignedOp {
 impl SignedOp {
     pub fn sign(identity: &Identity, op: Op, at: u64) -> BpResult<Self> {
         let nonce = rand::random();
-        let message = op_message(&op, &identity.fingerprint, nonce, at);
+        let message = op_message(&op, &identity.key_fingerprint, nonce, at);
         let signature = identity
             .user
             .sign(&message)
             .map_err(|e| BpError::Identity(format!("cannot sign op: {e}")))?;
         Ok(Self {
             op,
-            author: identity.fingerprint.clone(),
+            author: identity.key_fingerprint.clone(),
             nonce,
             at,
             signature: hex::encode(signature),
@@ -280,17 +291,26 @@ pub enum Capability {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Member {
-    pub key: String,
+    pub name: String,
     pub joined_at: u64,
     pub sent: u64,
     pub passed: u64,
     pub voting_device: Option<String>,
+    pub family: Option<Family>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UserKey {
+    pub user: String,
+    pub key: String,
+    pub revoked: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Device {
     pub user: String,
     pub key: String,
+    pub cert_key: String,
     pub since: u64,
 }
 
@@ -301,6 +321,7 @@ pub struct Ledger {
     pub head: String,
     pub time: u64,
     pub members: BTreeMap<String, Member>,
+    pub keys: BTreeMap<String, UserKey>,
     pub devices: BTreeMap<String, Device>,
     pub entries: Vec<Entry>,
     pub expelled: BTreeSet<String>,
@@ -330,28 +351,40 @@ pub struct Ledger {
 
 impl Ledger {
     pub fn new(genesis: Entry, creator_device: &DeviceCert) -> BpResult<Self> {
-        let (_, creator) = parse_user_key(&genesis.body.author)?;
+        let member = genesis.member()?;
+        let (_, author) = parse_user_key(&genesis.body.author)?;
         let device = creator_device.verify()?;
-        if device.fingerprint != creator {
+        if device.key != member.key || author != member.key {
             return Err(invalid("the first device must belong to the creator"));
         }
+        let creator = member.user;
         let peer = device.peer_id.to_string();
         let mut members = BTreeMap::new();
         members.insert(
             creator.clone(),
             Member {
-                key: genesis.body.author.clone(),
+                name: key_name(&genesis.body.member),
                 joined_at: genesis.body.at,
                 sent: 0,
                 passed: 0,
                 voting_device: Some(peer.clone()),
+                family: None,
             },
         );
+        let keys = BTreeMap::from([(
+            member.key.clone(),
+            UserKey {
+                user: creator.clone(),
+                key: genesis.body.member.clone(),
+                revoked: false,
+            },
+        )]);
         let devices = BTreeMap::from([(
             peer,
             Device {
                 user: creator,
                 key: creator_device.device_key.clone(),
+                cert_key: member.key,
                 since: genesis.body.at / EPOCH_SECS,
             },
         )]);
@@ -360,6 +393,7 @@ impl Ledger {
             time: genesis.body.at,
             height: 0,
             members,
+            keys,
             devices,
             entries: Vec::new(),
             expelled: BTreeSet::new(),
@@ -413,9 +447,40 @@ impl Ledger {
     }
 
     pub fn creator(&self) -> String {
-        parse_user_key(&self.genesis.body.author)
-            .map(|(_, fp)| fp)
-            .unwrap_or_default()
+        self.genesis.member().map(|m| m.user).unwrap_or_default()
+    }
+
+    pub fn key_owner(&self, key: &str) -> Option<&str> {
+        self.keys
+            .get(key)
+            .filter(|k| !k.revoked)
+            .map(|k| k.user.as_str())
+    }
+
+    pub fn ever_signed_for(&self, user: &str, key: &str) -> bool {
+        self.keys.get(key).is_some_and(|k| k.user == user)
+    }
+
+    pub fn live_keys(&self, user: &str) -> BTreeMap<String, String> {
+        self.keys
+            .iter()
+            .filter(|(_, k)| k.user == user && !k.revoked)
+            .map(|(fingerprint, k)| (fingerprint.clone(), k.key.clone()))
+            .collect()
+    }
+
+    pub fn invited_by(&self, user: &str) -> usize {
+        self.entries
+            .iter()
+            .filter(|e| {
+                parse_user_key(&e.body.author)
+                    .is_ok_and(|(_, key)| self.ever_signed_for(user, &key))
+            })
+            .count()
+    }
+
+    pub fn family(&self, user: &str) -> Option<&Family> {
+        self.members.get(user)?.family.as_ref()
     }
 
     pub fn is_member(&self, user: &str) -> bool {
@@ -480,12 +545,10 @@ impl Ledger {
     }
 
     fn invited(&self, by: &str, user: &str) -> bool {
-        let (Some(by), Some(user)) = (self.members.get(by), self.members.get(user)) else {
-            return false;
-        };
-        self.entries
-            .iter()
-            .any(|e| e.body.author == by.key && e.body.member == user.key)
+        self.entries.iter().any(|e| {
+            parse_user_key(&e.body.author).is_ok_and(|(_, key)| self.ever_signed_for(by, &key))
+                && e.member().is_ok_and(|m| m.user == user)
+        })
     }
 
     fn promote(&mut self, file_id: &str) {
@@ -514,6 +577,42 @@ impl Ledger {
             .filter(|(_, d)| d.user == user)
             .map(|(peer, _)| peer.clone())
             .collect();
+        self.release(&gone);
+    }
+
+    fn drop_devices(&mut self, user: &str, gone: &BTreeSet<String>) {
+        for peer in gone {
+            self.devices.remove(peer);
+        }
+        let other = self
+            .devices
+            .iter()
+            .find(|(_, d)| d.user == user)
+            .map(|(peer, _)| peer.clone());
+        if let Some(member) = self.members.get_mut(user) {
+            if member
+                .voting_device
+                .as_ref()
+                .is_some_and(|d| gone.contains(d))
+            {
+                member.voting_device = other;
+            }
+        }
+        if self
+            .snapshot
+            .voters
+            .get(user)
+            .is_some_and(|d| gone.contains(d))
+        {
+            match self.best_device(user) {
+                Some(device) => self.snapshot.voters.insert(user.to_string(), device),
+                None => self.snapshot.voters.remove(user),
+            };
+        }
+        self.release(gone);
+    }
+
+    fn release(&mut self, gone: &BTreeSet<String>) {
         let files: Vec<String> = self.placements.keys().cloned().collect();
         for file_id in files {
             let p = self.placements.get_mut(&file_id).expect("listed above");
@@ -719,28 +818,27 @@ impl Ledger {
         if signed.at + OP_TTL_SECS < block.time || signed.at > block.time + OP_SKEW_SECS {
             return Err(invalid("op expired or signed in the future"));
         }
-        let author = signed.author.clone();
-        let author_key = match self.members.get(&author) {
-            Some(member) if self.is_member(&author) => member.key.clone(),
+        let author = match self.keys.get(&signed.author) {
+            Some(k) if !k.revoked && self.is_member(&k.user) => k.user.clone(),
             _ => return Err(invalid("op author is not a member")),
         };
-        signed.verify(&author_key)?;
+        signed.verify(&self.keys[&signed.author].key)?;
         match &signed.op {
             Op::AddMember { entry } => {
                 if !self.has_capability(&author, Capability::Invite) {
                     return Err(invalid("author cannot invite"));
                 }
-                if entry.body.author != author_key
-                    || entry.body.genesis.as_deref() != Some(&self.genesis.id())
+                if entry.body.genesis.as_deref() != Some(&self.genesis.id())
                     || entry.body.commitment != self.commitment
-                    || entry.signed_by_author().is_none()
+                    || entry.signed_by_author().as_deref() != Some(signed.author.as_str())
                 {
                     return Err(invalid("malformed member entry"));
                 }
-                let (_, member) = parse_user_key(&entry.body.member)?;
-                if self.members.contains_key(&member) {
+                let added = entry.member()?;
+                if self.members.contains_key(&added.user) || self.keys.contains_key(&added.key) {
                     return Err(invalid("already a member"));
                 }
+                let member = added.user;
                 if !self.may_commit(&author) {
                     return Err(invalid("too many open bets and invitations for your trust"));
                 }
@@ -751,13 +849,22 @@ impl Ledger {
                     until_epoch: block.epoch() + self.params.horizon_epochs,
                 });
                 self.members.insert(
-                    member,
+                    member.clone(),
                     Member {
-                        key: entry.body.member.clone(),
+                        name: key_name(&entry.body.member),
                         joined_at: block.time,
                         sent: 0,
                         passed: 0,
                         voting_device: None,
+                        family: None,
+                    },
+                );
+                self.keys.insert(
+                    added.key,
+                    UserKey {
+                        user: member,
+                        key: entry.body.member.clone(),
+                        revoked: false,
                     },
                 );
                 self.entries.push(entry.clone());
@@ -855,7 +962,9 @@ impl Ledger {
             Op::RegisterDevice { cert } => {
                 let device = cert.verify()?;
                 let peer = device.peer_id.to_string();
-                if device.fingerprint != author || self.devices.contains_key(&peer) {
+                if self.key_owner(&device.key) != Some(author.as_str())
+                    || self.devices.contains_key(&peer)
+                {
                     return Err(invalid("cannot register this device"));
                 }
                 self.devices.insert(
@@ -863,11 +972,66 @@ impl Ledger {
                     Device {
                         user: author.clone(),
                         key: cert.device_key.clone(),
+                        cert_key: device.key,
                         since: block.epoch(),
                     },
                 );
                 let member = self.members.get_mut(&author).expect("checked member");
                 member.voting_device.get_or_insert(peer);
+            }
+            Op::SetFamily { family } => {
+                let keys: BTreeSet<String> = self.live_keys(&author).into_keys().collect();
+                let envelopes: BTreeSet<String> = family.envelopes.keys().cloned().collect();
+                let member = self.members.get_mut(&author).expect("checked member");
+                if member.family.is_some() || envelopes != keys || !family.history.is_empty() {
+                    return Err(invalid("invalid family key"));
+                }
+                member.family = Some(family.clone());
+            }
+            Op::AddKey { key, envelope } => {
+                let added = member_key(key)?;
+                if self.keys.contains_key(&added.key) {
+                    return Err(invalid("this key is already registered"));
+                }
+                let member = self.members.get_mut(&author).expect("checked member");
+                let Some(family) = member.family.as_mut() else {
+                    return Err(invalid("set the family key before adding keys"));
+                };
+                family.envelopes.insert(added.key.clone(), envelope.clone());
+                self.keys.insert(
+                    added.key,
+                    UserKey {
+                        user: author.clone(),
+                        key: key.trim().to_string(),
+                        revoked: false,
+                    },
+                );
+            }
+            Op::RevokeKey { key, family } => {
+                let mut remaining: BTreeSet<String> = self.live_keys(&author).into_keys().collect();
+                let envelopes: BTreeSet<String> = family.envelopes.keys().cloned().collect();
+                let had_family = self.family(&author).is_some();
+                if *key == signed.author
+                    || !remaining.remove(key)
+                    || envelopes != remaining
+                    || !had_family
+                    || family.history.is_empty()
+                {
+                    return Err(invalid("invalid key revocation"));
+                }
+                self.keys.get_mut(key).expect("checked live").revoked = true;
+                self.members
+                    .get_mut(&author)
+                    .expect("checked member")
+                    .family = Some(family.clone());
+                let gone: BTreeSet<String> = self
+                    .devices
+                    .iter()
+                    .filter(|(_, d)| d.cert_key == *key)
+                    .map(|(peer, _)| peer.clone())
+                    .collect();
+                self.drop_devices(&author, &gone);
+                self.rekey_since.get_or_insert(block.time);
             }
             Op::Leave => {
                 self.left.insert(author.clone());
@@ -996,10 +1160,13 @@ impl Ledger {
                 wrapped,
                 commitment,
             } => {
-                let members: BTreeSet<&String> = self.active_members().map(|(u, _)| u).collect();
+                let keys: BTreeSet<String> = self
+                    .active_members()
+                    .flat_map(|(user, _)| self.live_keys(user).into_keys())
+                    .collect();
                 if *epoch != block.epoch()
                     || self.rotation_due(block.time).is_none()
-                    || wrapped.keys().collect::<BTreeSet<_>>() != members
+                    || wrapped.keys().cloned().collect::<BTreeSet<_>>() != keys
                     || *commitment == self.commitment
                 {
                     return Err(invalid("invalid key rotation"));
@@ -1119,7 +1286,8 @@ fn invalid(reason: &str) -> BpError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::membership::{genesis, invite_entry, key_commitment, new_key, wrap_for};
+    use crate::identity::tag_key;
+    use crate::membership::{genesis, invite_entry, key_commitment, new_key, wrap_for, Family};
 
     thread_local! {
         static CLOCK: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -2066,5 +2234,71 @@ mod tests {
         net.commit(0, t, vec![vote(2, wanted)]).unwrap();
         assert_eq!(net.ledger.params, wanted);
         assert!(net.ledger.param_votes.is_empty());
+    }
+
+    #[test]
+    fn a_user_adds_and_revokes_device_keys_and_rotates_its_family_key() {
+        let mut net = Net::everyone_joined(2);
+        let carlo = net.people[0].clone();
+        let mut phone = Identity::in_memory(None).unwrap();
+        phone.fingerprint = carlo.fingerprint.clone();
+        let first = new_key();
+        let family = Family::seal(&[first], &net.ledger.live_keys(&carlo.fingerprint)).unwrap();
+        let t = net.now();
+        let set = sign_op(&carlo, Op::SetFamily { family }).unwrap();
+        net.commit(0, t, vec![set]).unwrap();
+        assert!(net
+            .commit(0, t, vec![sign_op(&phone, Op::Leave).unwrap()])
+            .is_err());
+
+        let add = Op::AddKey {
+            key: tag_key(&phone.user_key, &carlo.fingerprint),
+            envelope: wrap_for(&first, &phone.user_key).unwrap(),
+        };
+        net.commit(0, t, vec![sign_op(&carlo, add).unwrap()])
+            .unwrap();
+        assert_eq!(
+            net.ledger.key_owner(&phone.key_fingerprint),
+            Some(carlo.fingerprint.as_str())
+        );
+        let shared = net.ledger.family(&carlo.fingerprint).unwrap();
+        assert_eq!(shared.open(&phone).unwrap(), vec![first]);
+        let register = Op::RegisterDevice {
+            cert: phone.cert.clone(),
+        };
+        net.commit(0, t, vec![sign_op(&phone, register).unwrap()])
+            .unwrap();
+        let device = phone.peer_id.to_string();
+        assert_eq!(
+            net.ledger.device_owner(&device),
+            Some(carlo.fingerprint.as_str())
+        );
+
+        let next = new_key();
+        let without_phone =
+            BTreeMap::from([(carlo.key_fingerprint.clone(), carlo.user_key.clone())]);
+        let rotated = Family::seal(&[next, first], &without_phone).unwrap();
+        let revoke = |family: Family| Op::RevokeKey {
+            key: phone.key_fingerprint.clone(),
+            family,
+        };
+        let by_itself = sign_op(&phone, revoke(rotated.clone())).unwrap();
+        assert!(net.commit(0, t, vec![by_itself]).is_err());
+        let keeps_phone =
+            Family::seal(&[next, first], &net.ledger.live_keys(&carlo.fingerprint)).unwrap();
+        let sloppy = sign_op(&carlo, revoke(keeps_phone)).unwrap();
+        assert!(net.commit(0, t, vec![sloppy]).is_err());
+        net.commit(0, t, vec![sign_op(&carlo, revoke(rotated)).unwrap()])
+            .unwrap();
+
+        assert_eq!(net.ledger.key_owner(&phone.key_fingerprint), None);
+        assert!(!net.ledger.devices.contains_key(&device));
+        let family = net.ledger.family(&carlo.fingerprint).unwrap();
+        assert!(family.open(&phone).is_err());
+        assert_eq!(family.open(&carlo).unwrap(), vec![next, first]);
+        assert!(net.ledger.rotation_due(t).is_some());
+        assert!(net
+            .commit(0, t, vec![sign_op(&phone, Op::Leave).unwrap()])
+            .is_err());
     }
 }

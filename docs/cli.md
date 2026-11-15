@@ -9,8 +9,11 @@ started automatically when missing.
 
 | Command | Description |
 |---------|-------------|
-| `bp login [--ssh-key <path>] [--alias <name>]` | Log in on this device. `--ssh-key` uses an existing OpenSSH ed25519 key as your identity; without it a new one is generated (encrypted if `--passphrase` is given). Prints your public key, to share when asking for an invite |
-| `bp logout` | Delete the user key copy, device key and certificate from this machine |
+| `bp login [--ssh-key <path>] [--alias <name>]` | Log in on this device. `--ssh-key` uses an existing OpenSSH ed25519 key as the key of this device; without it a new one is generated (encrypted if `--passphrase` is given). Prints its public key, to be invited or added as a device of yours |
+| `bp logout` | Delete this device's SSH key, device key and certificate from this machine |
+| `bp device add <network> "<public key>"` | Add the key a new device of yours printed: commits it with your family key wrapped for it and prints (on stdout) the token that device joins with |
+| `bp device revoke <network> <fingerprint or public key>` | Revoke a key of yours (a lost device): its devices are cut out, your family key changes for new files and the network key rotates. Run it from another device |
+| `bp device ls <network>` | Your keys on a network, revoked ones included, with the devices each certified |
 
 ## Services
 
@@ -34,9 +37,8 @@ started automatically when missing.
 | `bp chat <network> [message…] [--last N]` | Without a message, print the last `N` (30) chat messages this node has seen; with one, sign it and send it to every member |
 | `bp params <network> [--ph X] [--decay X] [--horizon N] [--grace N]` | Print the network parameters, or vote them changed by the flags given; they change when the votes for the same values hold > 2/3 of the weight |
 | `bp expel <network> <fingerprint>` | Propose an expulsion (R3+, or the creator while nobody is R3) or approve one (R1+). It passes with > 2/3 of the other members' weight and at least half of them; the network key is then rotated without the expelled member |
-| `bp invite <network> "<your own public key>"` | Token for another device of yours: log in there with the same SSH key and `bp join` it |
 | `bp dashboard [--port 3000] [--host 127.0.0.1] [--no-open]` | Start `bp-api` if it is not running, sign a 12 h session with your SSH key and open the web app with it |
-| `bp join <token>` | Join with a token (it only works for the key it was made for) and wait until the ledger is synced from a member |
+| `bp join <token>` | Join with a token (it only works for the key it was made for) and wait until the ledger is synced from a member. A token from `bp device add` makes this device one of that user's, if it has not joined any network yet |
 | `bp leave <network_id>` | Leave a network; refuses while services run on it or you own files there, and prints how to stop them and save the files |
 | `bp leave <network_id> --force` | Evict Pouches, stop other services, delete your files from the network, record the departure in the ledger (the key rotates without you) and forget the network |
 

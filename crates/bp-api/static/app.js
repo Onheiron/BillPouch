@@ -1447,7 +1447,7 @@ panel.addEventListener("drop", (e) => {
 /* ---------- start ---------- */
 
 function showOnly(id) {
-  for (const el of ["onboarding", "unlock", "main"]) $(el).hidden = el !== id;
+  for (const el of ["create-key", "onboarding", "unlock", "main"]) $(el).hidden = el !== id;
 }
 
 async function start() {
@@ -1461,7 +1461,10 @@ async function start() {
   document.body.classList.add("native");
   $("dropzone").hidden = true;
   const app = await native.invoke("app_state");
-  if (!app.identity || (app.running && !app.member)) {
+  if (!app.identity) {
+    showOnly("create-key");
+  } else if (!app.member) {
+    $("device-key").textContent = app.key || "";
     showOnly("onboarding");
   } else if (!app.running) {
     showOnly("unlock");
@@ -1472,12 +1475,25 @@ async function start() {
   }
 }
 
-$("pick-key").addEventListener("click", async () => {
+$("create-key").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const button = e.target.querySelector("button[type=submit]");
+  button.disabled = true;
   try {
-    const key = await native.invoke("pick_key");
-    if (key) $("key").value = key;
-  } catch (e) {
-    toast(`Cannot read the key: ${e}`, "error");
+    await native.invoke("create_key", { alias: $("alias").value, passphrase: $("passphrase").value });
+    location.reload();
+  } catch (err) {
+    toast(String(err), "error");
+    button.disabled = false;
+  }
+});
+
+$("copy-key").addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText($("device-key").textContent);
+    toast("Key copied", "ok");
+  } catch (err) {
+    toast(`Cannot copy: ${err}`, "error");
   }
 });
 
@@ -1488,9 +1504,7 @@ $("onboarding").addEventListener("submit", async (e) => {
   button.textContent = "Joining…";
   try {
     await native.invoke("setup", {
-      alias: $("alias").value,
-      key: $("key").value,
-      passphrase: $("passphrase").value,
+      passphrase: $("join-passphrase").value,
       token: $("token").value,
     });
     location.reload();

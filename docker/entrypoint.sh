@@ -7,20 +7,18 @@ SERVICES="${SERVICES:-}"
 SHARED="${SHARED:-/shared}"
 
 mkdir -p "${SHARED}/keys" "${SHARED}/tokens" "${SHARED}/devices"
+PUBLIC_KEY=$(bp login --alias "${NODE_NAME}" | tail -1 | sed 's/^ *//')
 if [ -n "${DEVICE_OF:-}" ]; then
-    echo "${DEVICE_OF}" > "${SHARED}/devices/${NODE_NAME}"
-    until [ -f "${SHARED}/keys/${NODE_NAME}.key" ]; do sleep 1; done
-    bp login --alias "${NODE_NAME}" --ssh-key "${SHARED}/keys/${NODE_NAME}.key" >/dev/null
+    echo "${PUBLIC_KEY}" > "${SHARED}/devices/${NODE_NAME}.pub"
+    echo "${DEVICE_OF}" > "${SHARED}/devices/${NODE_NAME}.owner"
 else
-    bp login --alias "${NODE_NAME}" | tail -1 | sed 's/^ *//' > "${SHARED}/keys/${NODE_NAME}.pub"
+    echo "${PUBLIC_KEY}" > "${SHARED}/keys/${NODE_NAME}.pub"
+    bp --daemon &
+    for _ in $(seq 1 30); do
+        [ -S "${XDG_RUNTIME_DIR}/billpouch/control.sock" ] && break
+        sleep 0.2
+    done
 fi
-
-bp --daemon &
-DAEMON_PID=$!
-for _ in $(seq 1 30); do
-    [ -S "${XDG_RUNTIME_DIR}/billpouch/control.sock" ] && break
-    sleep 0.2
-done
 
 if [ "${FOUNDER:-false}" = "true" ]; then
     bp network create "${NETWORK}" || true
@@ -33,13 +31,12 @@ if [ "${FOUNDER:-false}" = "true" ]; then
                     bp invite "${NETWORK}" "$(cat "${key}")" > "${token}.tmp" && mv "${token}.tmp" "${token}"
                 fi
             done
-            for request in "${SHARED}"/devices/*; do
+            for request in "${SHARED}"/devices/*.owner; do
                 [ -f "${request}" ] || continue
-                device=$(basename "${request}")
+                device=$(basename "${request}" .owner)
                 token="${SHARED}/tokens/${device}.token"
                 if [ "$(cat "${request}")" = "${NODE_NAME}" ] && [ ! -f "${token}" ]; then
-                    cp "${HOME}/.local/share/billpouch/user_ed25519" "${SHARED}/keys/${device}.key"
-                    bp invite "${NETWORK}" "$(cat "${SHARED}/keys/${NODE_NAME}.pub")" > "${token}.tmp" && mv "${token}.tmp" "${token}"
+                    bp device add "${NETWORK}" "$(cat "${SHARED}/devices/${device}.pub")" > "${token}.tmp" && mv "${token}.tmp" "${token}"
                 fi
             done
             sleep 1
@@ -67,4 +64,4 @@ fi
 if [ "${INTERACTIVE:-false}" = "true" ]; then
     exec bash
 fi
-wait "${DAEMON_PID}"
+exec sleep infinity

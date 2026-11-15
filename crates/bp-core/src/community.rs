@@ -56,11 +56,7 @@ fn facts(ledger: &Ledger, user: &str, messages: usize) -> Option<Facts> {
         used: ledger.usage(user),
         challenges: member.sent,
         passed: member.passed,
-        invited: ledger
-            .entries
-            .iter()
-            .filter(|e| e.body.author == member.key)
-            .count() as u64,
+        invited: ledger.invited_by(user) as u64,
         trust_ppm: ledger.trust.get(user).copied().unwrap_or(0),
         devices: ledger.devices.values().filter(|d| d.user == user).count() as u64,
         files: ledger

@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChunkOwner {
-    pub owner_key: String,
+    pub owner: String,
     pub file_id: String,
     pub layer: StorageTier,
 }
@@ -129,7 +129,7 @@ impl StorageManager {
                     .iter()
                     .map(|f| f.size_bytes)
                     .sum();
-                *by_owner.entry(owner.owner_key).or_default() += bytes;
+                *by_owner.entry(owner.owner).or_default() += bytes;
             }
         }
         by_owner
@@ -148,19 +148,19 @@ impl StorageManager {
             .is_some_and(|members| members.contains(member))
     }
 
-    fn chunks_of(&self, file_id: &str, owner_key: &str) -> Vec<String> {
+    fn chunks_of(&self, file_id: &str, owner: &str) -> Vec<String> {
         self.index
             .chunk_ids()
             .filter(|chunk| {
                 self.owner_of(chunk)
-                    .is_some_and(|o| o.file_id == file_id && o.owner_key == owner_key)
+                    .is_some_and(|o| o.file_id == file_id && o.owner == owner)
             })
             .map(str::to_string)
             .collect()
     }
 
-    pub fn revoke(&mut self, file_id: &str, owner_key: &str, member: &str) -> BpResult<bool> {
-        if self.chunks_of(file_id, owner_key).is_empty() {
+    pub fn revoke(&mut self, file_id: &str, owner: &str, member: &str) -> BpResult<bool> {
+        if self.chunks_of(file_id, owner).is_empty() {
             return Ok(false);
         }
         let mut revoked = self.revoked();
@@ -175,9 +175,9 @@ impl StorageManager {
         Ok(true)
     }
 
-    pub fn delete_file(&mut self, file_id: &str, owner_key: &str) -> BpResult<u64> {
+    pub fn delete_file(&mut self, file_id: &str, owner: &str) -> BpResult<u64> {
         let mut freed = 0;
-        for chunk in self.chunks_of(file_id, owner_key) {
+        for chunk in self.chunks_of(file_id, owner) {
             let layer = self.owner_of(&chunk).map(|o| o.layer);
             let chunk_freed = self.index.remove_chunk(&chunk);
             if let Some(used) = layer.and_then(|l| self.layer_used.get_mut(&l)) {
@@ -495,9 +495,9 @@ mod tests {
         .unwrap()
     }
 
-    fn owner(key: &str) -> ChunkOwner {
+    fn owner(user: &str) -> ChunkOwner {
         ChunkOwner {
-            owner_key: key.into(),
+            owner: user.into(),
             file_id: "file".into(),
             layer: StorageTier::T1,
         }

@@ -24,8 +24,12 @@ Types: `bp_core::control::protocol`; client helper: `bp_core::control::client::s
 | `pause` | `service_id`, `eta_minutes` | Maintenance mode |
 | `resume` | `service_id` | Leaves maintenance mode |
 | `create_network` | `name` | Creates a network with you as creator |
-| `invite` | `network_id`, `member_key` (OpenSSH line) | Adds a member once committed and returns the join token; with your own key, returns a token for another device of yours (`for_device: true`) |
+| `invite` | `network_id`, `member_key` (OpenSSH line) | Adds a member once committed and returns the join token |
 | `join_network` | `token` | Joins with a token and waits for the ledger to sync |
+| `add_device` | `network_id`, `key` (OpenSSH line) | Adds a key of yours once committed and returns the token the device joins with |
+| `revoke_device` | `network_id`, `key` (fingerprint or OpenSSH line) | Revokes a key of yours with a new family key |
+| `devices` | `network_id` | Your user, whether your family key is set, your keys with name, `revoked`, `this_device` and the devices each certified |
+| `shutdown` | — | Stops the daemon (used by `bp join` when a device becomes another user's) |
 | `members` | `network_id` | Members with tier, weight, devices, trust and open bets, challenges passed, invitations, achievements (each with points and progress) and level, pending expulsions; expelled members; network parameters |
 | `chat` | `network_id`, `known_revision`? | The chat this node has seen: `revision` and `messages` (`id`, `author`, `name`, `at`, `text`, `mine`), or `messages: null` when `known_revision` is still current |
 | `chat_send` | `network_id`, `text` (1–1000 characters) | Signs the message, gossips it and returns the chat |

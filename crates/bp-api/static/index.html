@@ -203,26 +203,31 @@
   </div>
 </div>
 
+<form class="onboarding" id="create-key" hidden>
+  <h2>Welcome to BillPouch</h2>
+  <p>This phone becomes a device of yours, as a Bill: it uploads and downloads your files and hosts nothing. First it makes its own key, which never leaves it.</p>
+  <label>Name of this device<input id="alias" placeholder="phone" autocomplete="off"></label>
+  <label>A passphrase for its key, if you want one<input id="passphrase" type="password" autocomplete="off"></label>
+  <button type="submit" class="button accent">Make the key</button>
+</form>
+
 <form class="onboarding" id="onboarding" hidden>
   <h2>Join your network</h2>
-  <p>This phone becomes another device of yours, as a Bill: it uploads and downloads your files and hosts nothing.</p>
+  <p>The key of this phone:</p>
+  <pre class="token" id="device-key"></pre>
+  <button type="button" class="button small" id="copy-key">Copy</button>
   <ol>
-    <li>On a computer of yours run <code>bp invite &lt;network&gt; "&lt;your SSH public key&gt;"</code> and copy the token.</li>
-    <li>Give this phone the same SSH private key you use there.</li>
+    <li>On a computer of yours run <code>bp device add &lt;network&gt; "&lt;this key&gt;"</code>, or, if you are new, ask a member to run <code>bp invite &lt;network&gt; "&lt;this key&gt;"</code>.</li>
+    <li>Paste the token it prints.</li>
   </ol>
-  <label>Name of this device<input id="alias" placeholder="phone" autocomplete="off"></label>
-  <label>Your SSH private key
-    <textarea id="key" rows="5" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" autocomplete="off" spellcheck="false"></textarea>
-  </label>
-  <button type="button" class="button small" id="pick-key">Pick the key file</button>
-  <label>Its passphrase, if it has one<input id="passphrase" type="password" autocomplete="off"></label>
+  <label>Passphrase of this phone's key, if it has one<input id="join-passphrase" type="password" autocomplete="off"></label>
   <label>Token<textarea id="token" rows="3" autocomplete="off" spellcheck="false"></textarea></label>
   <button type="submit" class="button accent">Join</button>
 </form>
 
 <form class="onboarding" id="unlock" hidden>
   <h2>Unlock BillPouch</h2>
-  <label>Passphrase of your SSH key<input id="unlock-passphrase" type="password" autocomplete="off"></label>
+  <label>Passphrase of this device's key<input id="unlock-passphrase" type="password" autocomplete="off"></label>
   <button type="submit" class="button accent">Unlock</button>
 </form>
 

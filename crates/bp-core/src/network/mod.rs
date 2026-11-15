@@ -836,14 +836,16 @@ fn handle_gossip(
 ) -> Option<(String, u64)> {
     match gossip {
         Gossip::Node(info) => {
-            let member = chains
+            let authentic = chains
                 .read()
                 .map(|all| {
-                    all.get(network_id)
-                        .is_some_and(|c| c.is_member(&info.user_fingerprint))
+                    all.get(network_id).is_some_and(|c| {
+                        c.is_member(&info.user_fingerprint)
+                            && info.is_authentic(publisher, c.ledger())
+                    })
                 })
                 .unwrap_or(false);
-            if info.network_id == network_id && member && info.is_authentic(publisher) {
+            if info.network_id == network_id && authentic {
                 if let Some(peer) = publisher {
                     for addr in info.listen_addrs.iter().filter_map(|a| a.parse().ok()) {
                         swarm.behaviour_mut().kad.add_address(peer, addr);
@@ -908,10 +910,8 @@ fn holdings(
         for sm in managers.values() {
             let sm = sm.read().unwrap();
             if sm.meta.network_id == network {
-                for (owner_key, bytes) in sm.bytes_by_owner(charged) {
-                    if let Ok((_, owner)) = crate::identity::parse_user_key(&owner_key) {
-                        *held.entry(owner).or_default() += bytes;
-                    }
+                for (owner, bytes) in sm.bytes_by_owner(charged) {
+                    *held.entry(owner).or_default() += bytes;
                 }
             }
         }
@@ -1067,7 +1067,13 @@ fn serve_commits(
         return FragmentResponse::NotFound;
     };
     match all.values().find(|c| c.id() == network) {
-        Some(chain) if device.peer_id == *peer && chain.is_member(&device.fingerprint) => {
+        Some(chain)
+            if device.peer_id == *peer
+                && chain
+                    .ledger()
+                    .key_owner(&device.key)
+                    .is_some_and(|user| chain.is_member(user)) =>
+        {
             FragmentResponse::Commits {
                 commits: chain.commits_from(from),
             }
@@ -1124,8 +1130,11 @@ fn serve_fragment_request(
             for sm_arc in managers.values() {
                 let sm = sm_arc.read().unwrap();
                 let allowed = sm.owner_of(chunk_id).is_some_and(|o| {
-                    grant.allows(&o.file_id, &o.owner_key, requester)
-                        && !sm.is_revoked(&o.file_id, requester)
+                    chains.read().is_ok_and(|all| {
+                        all.get(&sm.meta.network_id).is_some_and(|c| {
+                            grant.allows(&o.file_id, &o.owner, requester, c.ledger())
+                        })
+                    }) && !sm.is_revoked(&o.file_id, requester)
                 });
                 if !allowed {
                     continue;
@@ -1151,7 +1160,10 @@ fn serve_fragment_request(
             layer,
             commitment,
         } => {
-            if !grant.is_owner_claim() || grant.grantee != requester {
+            let claimed = chains
+                .read()
+                .is_ok_and(|all| all.values().any(|c| grant.is_owner_claim(c.ledger())));
+            if !claimed || grant.grantee != requester {
                 return FragmentResponse::StoreFailed {
                     reason: "a fragment can only be stored by a device of its owner".into(),
                 };
@@ -1169,7 +1181,7 @@ fn serve_fragment_request(
                 };
             };
             let owner = crate::storage::ChunkOwner {
-                owner_key: grant.owner_key.clone(),
+                owner: grant.owner.clone(),
                 file_id: grant.file_id.clone(),
                 layer: *layer,
             };

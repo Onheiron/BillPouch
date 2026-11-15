@@ -2,13 +2,13 @@ use crate::{
     config,
     consensus::{epoch_of, Commit, ConsensusMsg, Engine},
     error::{BpError, BpResult},
-    identity::{DeviceCert, Identity},
+    identity::{member_key, tag_key, DeviceCert, Identity},
     ledger::{
         Ledger, Observation, Op, SignedOp, EPOCH_SECS, HOUR_SECS,
         MAX_CHALLENGES_PER_DEVICE_PER_HOUR, USAGE_INTERVAL_SECS,
     },
     membership::{
-        genesis, invite_entry, key_commitment, new_key, open_key, wrap_for, Entry, Invite,
+        genesis, invite_entry, key_commitment, new_key, open_key, wrap_for, Entry, Family, Invite,
     },
     network::ReputationTier,
 };
@@ -99,6 +99,7 @@ pub struct Chain {
     own_entry: Entry,
     commits: Vec<Commit>,
     device_submitted_ms: u64,
+    family_submitted_ms: u64,
     rotation_submitted_ms: u64,
     reported_hour: Option<u64>,
     reported_usage: Option<(BTreeMap<String, u64>, BTreeMap<String, u64>)>,
@@ -110,7 +111,10 @@ pub struct Chain {
 impl Chain {
     pub fn create(identity: &Identity, name: &str) -> BpResult<Self> {
         let (root, key) = genesis(identity, name)?;
-        Self::build(identity, root.clone(), identity.cert.clone(), root, key)
+        let mut chain = Self::build(identity, root.clone(), identity.cert.clone(), root, key)?;
+        chain.set_family(now_ms());
+        chain.record();
+        Ok(chain)
     }
 
     pub fn from_invite(identity: &Identity, invite: Invite) -> BpResult<Self> {
@@ -142,6 +146,7 @@ impl Chain {
             own_entry,
             commits: Vec::new(),
             device_submitted_ms: 0,
+            family_submitted_ms: 0,
             rotation_submitted_ms: 0,
             reported_hour: None,
             reported_usage: None,
@@ -194,13 +199,65 @@ impl Chain {
         })
     }
 
-    pub fn own_invite(&self) -> Invite {
-        Invite {
+    pub fn add_device(&mut self, key: &str, now_ms: u64) -> BpResult<Invite> {
+        let added = member_key(key)?;
+        let keyring = self.keyring()?;
+        let line = tag_key(key, &self.me.fingerprint);
+        let entry = invite_entry(&self.me, &self.genesis, &self.key, &line)?;
+        let op = SignedOp::sign(
+            &self.me,
+            Op::AddKey {
+                envelope: wrap_for(&keyring[0], &line)?,
+                key: line,
+            },
+            now_ms / 1000,
+        )?;
+        self.engine.submit(op, now_ms)?;
+        self.record();
+        tracing::info!(network = %self.name, key = %added.key, "device key added");
+        Ok(Invite {
             genesis: self.genesis.clone(),
             creator_device: self.creator_device.clone(),
-            entry: self.own_entry.clone(),
+            entry,
             addrs: Vec::new(),
+        })
+    }
+
+    pub fn revoke_key(&mut self, key: &str, now_ms: u64) -> BpResult<()> {
+        let mut keyring = vec![new_key()];
+        keyring.extend(self.keyring()?);
+        let mut remaining = self.engine.ledger.live_keys(&self.me.fingerprint);
+        if remaining.remove(key).is_none() {
+            return Err(BpError::InvalidInput(format!(
+                "{key} is not one of your keys on '{}'",
+                self.name
+            )));
         }
+        let family = Family::seal(&keyring, &remaining)?;
+        let op = SignedOp::sign(
+            &self.me,
+            Op::RevokeKey {
+                key: key.to_string(),
+                family,
+            },
+            now_ms / 1000,
+        )?;
+        self.engine.submit(op, now_ms)?;
+        self.record();
+        Ok(())
+    }
+
+    pub fn keyring(&self) -> BpResult<Vec<[u8; 32]>> {
+        self.engine
+            .ledger
+            .family(&self.me.fingerprint)
+            .ok_or_else(|| {
+                BpError::Identity(format!(
+                    "your family key is not in the ledger of '{}' yet",
+                    self.name
+                ))
+            })?
+            .open(&self.me)
     }
 
     pub fn key_is_current(&self) -> bool {
@@ -268,6 +325,7 @@ impl Chain {
 
     pub fn tick(&mut self, log: &ObservationLog, held: &BTreeMap<String, u64>, now_ms: u64) {
         self.register_device(now_ms);
+        self.set_family(now_ms);
         self.report(log, now_ms);
         self.report_usage(log, held, now_ms);
         self.rotate(now_ms);
@@ -331,7 +389,7 @@ impl Chain {
         if key_commitment(&self.key) == ledger.commitment {
             return;
         }
-        let Some(wrapped) = ledger.key_wraps.get(&self.me.fingerprint) else {
+        let Some(wrapped) = ledger.key_wraps.get(&self.me.key_fingerprint) else {
             return;
         };
         match open_key(wrapped, &ledger.commitment, &self.me) {
@@ -354,6 +412,7 @@ impl Chain {
     fn register_device(&mut self, now_ms: u64) {
         let ledger = &self.engine.ledger;
         if !ledger.is_member(&self.me.fingerprint)
+            || ledger.key_owner(&self.me.key_fingerprint) != Some(self.me.fingerprint.as_str())
             || ledger.devices.contains_key(&self.me.peer_id.to_string())
             || now_ms < self.device_submitted_ms + RESUBMIT_MS
         {
@@ -362,6 +421,23 @@ impl Chain {
         self.device_submitted_ms = now_ms;
         let cert = self.me.cert.clone();
         self.submit(Op::RegisterDevice { cert }, now_ms, "register this device");
+    }
+
+    fn set_family(&mut self, now_ms: u64) {
+        let ledger = &self.engine.ledger;
+        let me = &self.me.fingerprint;
+        if !ledger.is_member(me)
+            || ledger.family(me).is_some()
+            || ledger.key_owner(&self.me.key_fingerprint) != Some(me.as_str())
+            || now_ms < self.family_submitted_ms + RESUBMIT_MS
+        {
+            return;
+        }
+        self.family_submitted_ms = now_ms;
+        match Family::seal(&[new_key()], &ledger.live_keys(me)) {
+            Ok(family) => self.submit(Op::SetFamily { family }, now_ms, "set the family key"),
+            Err(e) => tracing::warn!(network = %self.name, "cannot seal the family key: {e}"),
+        }
     }
 
     fn report_usage(&mut self, log: &ObservationLog, held: &BTreeMap<String, u64>, now_ms: u64) {
@@ -480,11 +556,11 @@ impl Chain {
         }
         self.rotation_submitted_ms = now_ms;
         let key = new_key();
-        let wrapped: BpResult<BTreeMap<_, _>> = self
-            .engine
-            .ledger
+        let ledger = &self.engine.ledger;
+        let wrapped: BpResult<BTreeMap<_, _>> = ledger
             .active_members()
-            .map(|(user, member)| Ok((user.clone(), wrap_for(&key, &member.key)?)))
+            .flat_map(|(user, _)| ledger.live_keys(user))
+            .map(|(fingerprint, line)| Ok((fingerprint, wrap_for(&key, &line)?)))
             .collect();
         match wrapped {
             Ok(wrapped) => self.submit(

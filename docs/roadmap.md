@@ -4,7 +4,7 @@ Alpha. Current version in the root `Cargo.toml`; history in the GitHub releases.
 
 ## Works today
 
-- **Identity**: SSH ed25519 user key, per-device keys with signed certificates, verified announcements.
+- **Identity**: an SSH ed25519 key per device; a user is a set of keys in the ledger with one family key that opens their files (`bp device add`, `bp device revoke`, no private key is ever copied); signed device certificates, verified announcements.
 - **Services** `pouch` / `bill` / `post`; storage tiers T1–T5 as nested layers; one Pouch per network per node.
 - **Discovery** through invite tokens, addresses in announcements, Kademlia, bootstrap list and saved peers; gossip; NAT relay client. No mDNS.
 - **Invite-only networks**: network key wrapped per member, encrypted gossip, members-only fragment exchange.

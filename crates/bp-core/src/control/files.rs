@@ -367,7 +367,7 @@ async fn store_chunk(
         rlnc::encode(&chunk_id, data, plan.k, plan.n).map_err(|e| format!("Encode error: {e}"))?;
     total.fragment_bytes += fragments.first().map_or(0, |f| f.to_bytes().len() as u64);
     let owner = crate::storage::ChunkOwner {
-        owner_key: grant.owner_key.clone(),
+        owner: grant.owner.clone(),
         file_id: grant.file_id.clone(),
         layer,
     };
@@ -665,6 +665,11 @@ pub async fn put_file(
     if let Err(e) = check_allowance(state, &network_id, size_on_disk, ph, layer) {
         return ControlResponse::err(e);
     }
+    let Some(family) = family_of(state, &network_id, &state.identity.fingerprint) else {
+        return ControlResponse::err(format!(
+            "your family key is not in the ledger of '{network_id}' yet: try again in a minute"
+        ));
+    };
     let key = new_key();
     let cipher = ChunkCipher::from_raw_key(key);
     let file_id = new_file_id();
@@ -736,6 +741,7 @@ pub async fn put_file(
     });
     let manifest = match Manifest::new(
         &state.identity,
+        &family,
         &network_id,
         &name,
         size,
@@ -809,9 +815,10 @@ impl FileRead {
     ) -> Result<Self, String> {
         let manifest = manifest_of(state, network_id, file_id)
             .ok_or_else(|| not_yours_text(file_id, network_id))?;
+        let keyring = keyring(state, network_id)?;
         let (grant, key) = manifest
             .grant_for(&state.identity.fingerprint)
-            .and_then(|g| Ok((g.clone(), manifest.file_key(&state.identity)?)))
+            .and_then(|g| Ok((g.clone(), manifest.file_key(&state.identity, &keyring)?)))
             .map_err(|e| e.to_string())?;
         let size = manifest.size_bytes;
         let (start, end) = match range {
@@ -938,12 +945,28 @@ pub async fn get_file(
     })
 }
 
-fn member_key(state: &DaemonState, network_id: &str, member: &str) -> Option<String> {
+fn family_of(
+    state: &DaemonState,
+    network_id: &str,
+    member: &str,
+) -> Option<crate::membership::Family> {
     let chains = state.chains.read().unwrap();
     let ledger = chains.get(network_id)?.ledger();
-    ledger
-        .is_member(member)
-        .then(|| ledger.members[member].key.clone())
+    if !ledger.is_member(member) {
+        return None;
+    }
+    ledger.family(member).cloned()
+}
+
+pub fn keyring(state: &DaemonState, network_id: &str) -> Result<Vec<[u8; 32]>, String> {
+    state
+        .chains
+        .read()
+        .unwrap()
+        .get(network_id)
+        .ok_or_else(|| format!("you are not in a network named '{network_id}'"))?
+        .keyring()
+        .map_err(|e| e.to_string())
 }
 
 pub async fn share_file(
@@ -952,13 +975,19 @@ pub async fn share_file(
     file_id: String,
     member: String,
 ) -> ControlResponse {
-    let Some(member_key) = member_key(state, &network_id, &member) else {
-        return ControlResponse::err(format!("{member} is not a member of '{network_id}'"));
+    let Some(family) = family_of(state, &network_id, &member) else {
+        return ControlResponse::err(format!(
+            "{member} is not a member of '{network_id}', or has no family key in its ledger yet"
+        ));
     };
     let Some(mut manifest) = manifest_of(state, &network_id, &file_id) else {
         return not_yours(&file_id, &network_id);
     };
-    if let Err(e) = manifest.share_with(&state.identity, &member_key) {
+    let keyring = match keyring(state, &network_id) {
+        Ok(k) => k,
+        Err(e) => return ControlResponse::err(e),
+    };
+    if let Err(e) = manifest.share_with(&state.identity, &keyring, &member, &family) {
         return ControlResponse::err(e.to_string());
     }
     let file_name = manifest.file_name.clone();
@@ -1076,7 +1105,7 @@ async fn send_order(state: &DaemonState, network_id: &str, file_id: &str, action
         Ok(o) => o,
         Err(e) => return tracing::warn!("cannot sign order: {e}"),
     };
-    apply_order(state, &order);
+    apply_order(state, network_id, &order);
     state
         .files
         .write()
@@ -1092,17 +1121,21 @@ async fn send_order(state: &DaemonState, network_id: &str, file_id: &str, action
     .await;
 }
 
-fn apply_order(state: &DaemonState, order: &Order) {
-    let Some(owner) = order.owner() else {
+fn order_owner(state: &DaemonState, network_id: &str, order: &Order) -> Option<String> {
+    order.owner(state.chains.read().unwrap().get(network_id)?.ledger())
+}
+
+fn apply_order(state: &DaemonState, network_id: &str, order: &Order) {
+    let Some(owner) = order_owner(state, network_id, order) else {
         return;
     };
     for sm in state.storage_managers.read().unwrap().values() {
         let mut sm = sm.write().unwrap();
         let result = match &order.action {
             Action::Delete => sm
-                .delete_file(&order.file_id, &order.owner_key)
+                .delete_file(&order.file_id, &owner)
                 .map(|freed| freed > 0),
-            Action::Revoke { member } => sm.revoke(&order.file_id, &order.owner_key, member),
+            Action::Revoke { member } => sm.revoke(&order.file_id, &owner, member),
         };
         match result {
             Ok(true) => {
@@ -1233,7 +1266,13 @@ pub async fn publish_index(state: &DaemonState, network_id: &str) {
         (index, previous)
     };
     let version = index.version + 1;
-    let blob = match (Index { version, ..index }).seal(&state.identity) {
+    let keyring = match keyring(state, network_id) {
+        Ok(k) => k,
+        Err(e) => {
+            return tracing::debug!(network = %network_id, "cannot seal the file index yet: {e}")
+        }
+    };
+    let blob = match (Index { version, ..index }).seal(&keyring) {
         Ok(b) => b,
         Err(e) => return tracing::warn!("cannot seal the file index: {e}"),
     };
@@ -1265,13 +1304,16 @@ pub async fn publish_index(state: &DaemonState, network_id: &str) {
         Err(e) => return tracing::warn!("cannot sign the index head: {e}"),
     };
     {
+        let chains = state.chains.read().unwrap();
         let mut files = state.files.write().unwrap();
         files
             .indexes
             .entry(network_id.to_string())
             .or_default()
             .version = version;
-        files.remember_head(head.clone());
+        if let Some(chain) = chains.get(network_id) {
+            files.remember_head(head.clone(), chain.ledger());
+        }
         files.save();
     }
     publish(
@@ -1302,7 +1344,9 @@ async fn pull_own_index(state: &DaemonState, network_id: &str, head: &Head) {
             }
         }
     }
-    let remote = match Index::open(&state.identity, &blob) {
+    let remote = match keyring(state, network_id)
+        .and_then(|k| Index::open(&k, &blob).map_err(|e| e.to_string()))
+    {
         Ok(i) => i,
         Err(e) => return tracing::warn!("cannot open own index: {e}"),
     };
@@ -1335,7 +1379,17 @@ pub async fn on_gossip(state: &DaemonState, network_id: &str, gossip: Gossip) {
             if head.network != network_id {
                 return;
             }
-            let owner = state.files.write().unwrap().remember_head(*head);
+            let owner = {
+                let chains = state.chains.read().unwrap();
+                let Some(chain) = chains.get(network_id) else {
+                    return;
+                };
+                state
+                    .files
+                    .write()
+                    .unwrap()
+                    .remember_head(*head, chain.ledger())
+            };
             if owner.as_deref() == Some(me.as_str()) {
                 if let Some(head) = own_head_is_newer(state, network_id) {
                     pull_own_index(state, network_id, &head).await;
@@ -1361,10 +1415,9 @@ pub async fn on_gossip(state: &DaemonState, network_id: &str, gossip: Gossip) {
             }
         }
         Gossip::Share { to, manifest } => {
-            if to != me
-                || manifest.network != network_id
-                || manifest.file_key(&state.identity).is_err()
-            {
+            let opens = keyring(state, network_id)
+                .is_ok_and(|k| manifest.file_key(&state.identity, &k).is_ok());
+            if to != me || manifest.network != network_id || !opens {
                 return;
             }
             let file_id = manifest.file_id.clone();
@@ -1393,7 +1446,8 @@ pub async fn on_gossip(state: &DaemonState, network_id: &str, gossip: Gossip) {
             }
         }
         Gossip::Order { order } => {
-            apply_order(state, &order);
+            apply_order(state, network_id, &order);
+            let owner = order_owner(state, network_id, &order);
             let revoked_for_me =
                 matches!(&order.action, Action::Revoke { member } if *member == me);
             if matches!(order.action, Action::Delete) || revoked_for_me {
@@ -1403,7 +1457,7 @@ pub async fn on_gossip(state: &DaemonState, network_id: &str, gossip: Gossip) {
                         index
                             .files
                             .get(&order.file_id)
-                            .is_some_and(|m| Some(m.owner.as_str()) == order.owner().as_deref())
+                            .is_some_and(|m| Some(&m.owner) == owner.as_ref())
                             && index.remove(&order.file_id).is_some()
                     });
                     files.save();

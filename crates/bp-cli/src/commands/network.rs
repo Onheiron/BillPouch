@@ -1,8 +1,14 @@
 use crate::client::ControlClient;
+use anyhow::bail;
 use bp_core::{
     chain::ExpelOutcome,
+    config,
+    control::client,
     control::protocol::{ChatData, ControlRequest, ExpelData, InviteData, MembersData, ParamsData},
+    daemon,
+    identity::Identity,
     ledger::Params,
+    membership::Invite,
 };
 
 pub async fn create(name: String) -> anyhow::Result<()> {
@@ -25,14 +31,6 @@ pub async fn invite(network_id: String, member_key: String) -> anyhow::Result<()
         .await?
         .ok_or_else(|| anyhow::anyhow!("empty response from daemon"))?;
     let invite: InviteData = serde_json::from_value(data)?;
-    if invite.for_device {
-        eprintln!(
-            "📱 Token for another device of yours on '{}'. Log in there with the same SSH key (bp login --ssh-key …), then run: bp join <token>",
-            invite.network_id
-        );
-        println!("{}", invite.token);
-        return Ok(());
-    }
     eprintln!(
         "✅ {} can now join '{}'. Send them this token; they run: bp join <token>",
         invite.member, invite.network_id
@@ -42,6 +40,24 @@ pub async fn invite(network_id: String, member_key: String) -> anyhow::Result<()
 }
 
 pub async fn join(token: String) -> anyhow::Result<()> {
+    let user = Invite::from_token(&token)?.entry.member()?.user;
+    let current = Identity::stored_user()?;
+    if user != current {
+        if config::joined_any_network() {
+            bail!("this token is for {user}, but this device already belongs to {current}");
+        }
+        Identity::adopt(&user)?;
+        if daemon::is_running() {
+            let _ = client::send(&config::socket_path()?, &ControlRequest::Shutdown).await;
+            for _ in 0..50 {
+                if !daemon::is_running() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            }
+        }
+        println!("📱 This device is now one of {user}'s.");
+    }
     let data = ControlClient::connect()
         .await?
         .request(ControlRequest::JoinNetwork { token })

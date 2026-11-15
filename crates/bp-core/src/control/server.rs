@@ -2,9 +2,9 @@ use super::files;
 use crate::{
     chain::{now_ms, Chain, Chains},
     control::protocol::{
-        ControlRequest, ControlResponse, CreditStat, ExpelData, FileEntry, FlockData, HatchData,
-        InviteData, MemberInfo, MembersData, NetworkQosSummary, ParamsData, PouchStat, StatusData,
-        StorageInfoData,
+        ControlRequest, ControlResponse, CreditStat, DevicesData, ExpelData, FileEntry, FlockData,
+        HatchData, InviteData, KeyInfo, MemberInfo, MembersData, NetworkQosSummary, ParamsData,
+        PouchStat, StatusData, StorageInfoData,
     },
     error::BpResult,
     identity::Identity,
@@ -430,35 +430,14 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             network_id,
             member_key,
         } => {
-            let member = match crate::identity::parse_user_key(&member_key) {
-                Ok((_, fingerprint)) => fingerprint,
+            let member = match crate::identity::member_key(&member_key) {
+                Ok(m) => m.user,
                 Err(e) => return ControlResponse::err(e.to_string()),
             };
             if member == state.identity.fingerprint {
-                let token = state
-                    .chains
-                    .read()
-                    .unwrap()
-                    .get(&network_id)
-                    .ok_or_else(|| {
-                        crate::error::BpError::InvalidInput(format!(
-                            "you are not in a network named '{network_id}'"
-                        ))
-                    })
-                    .and_then(|chain| {
-                        let mut invite = chain.own_invite();
-                        invite.addrs = state.listen_addrs.read().unwrap().clone();
-                        invite.to_token()
-                    });
-                return match token {
-                    Ok(token) => ControlResponse::ok(InviteData {
-                        token,
-                        network_id,
-                        member,
-                        for_device: true,
-                    }),
-                    Err(e) => ControlResponse::err(e.to_string()),
-                };
+                return ControlResponse::err(
+                    "that key is yours: add it as a device with `bp device add`",
+                );
             }
             let result = match state.chains.write().unwrap().get_mut(&network_id) {
                 None => Err(crate::error::BpError::InvalidInput(format!(
@@ -481,7 +460,6 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                     token,
                     network_id,
                     member,
-                    for_device: false,
                 })
             } else {
                 ControlResponse::err(
@@ -492,6 +470,13 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
 
         ControlRequest::JoinNetwork { token } => {
             let result = Invite::from_token(&token).and_then(|invite| {
+                let user = invite.entry.member()?.user;
+                if user != state.identity.fingerprint {
+                    return Err(crate::error::BpError::Identity(format!(
+                        "this token is for {user}, but this device is {}",
+                        state.identity.fingerprint
+                    )));
+                }
                 let name = invite.genesis.body.network.clone();
                 let addrs = invite.addrs.clone();
                 if !state.chains.read().unwrap().contains_key(&name) {
@@ -512,7 +497,13 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 return ControlResponse::err(e.to_string());
             }
             let me = state.identity.fingerprint.clone();
-            if wait_until(state, &name, |c| c.is_member(&me) && c.key_is_current()).await {
+            let key = state.identity.key_fingerprint.clone();
+            let ready = |c: &Chain| {
+                c.is_member(&me)
+                    && c.ledger().key_owner(&key) == Some(me.as_str())
+                    && c.key_is_current()
+            };
+            if wait_until(state, &name, ready).await {
                 ControlResponse::ok(serde_json::json!({
                     "network_id": name,
                     "message": format!("Joined network '{name}'"),
@@ -522,6 +513,113 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                     "joined '{name}' but could not sync its ledger from any member yet"
                 ))
             }
+        }
+
+        ControlRequest::AddDevice { network_id, key } => {
+            let added = match crate::identity::member_key(&key) {
+                Ok(m) => m.key,
+                Err(e) => return ControlResponse::err(e.to_string()),
+            };
+            let result = match state.chains.write().unwrap().get_mut(&network_id) {
+                None => Err(crate::error::BpError::InvalidInput(format!(
+                    "you are not in a network named '{network_id}'"
+                ))),
+                Some(chain) => chain.add_device(&key, now_ms()),
+            };
+            let token = match result.and_then(|mut invite| {
+                invite.addrs = state.listen_addrs.read().unwrap().clone();
+                invite.to_token()
+            }) {
+                Ok(token) => token,
+                Err(e) => return ControlResponse::err(e.to_string()),
+            };
+            let me = state.identity.fingerprint.clone();
+            if wait_until(state, &network_id, |c| {
+                c.ledger().key_owner(&added) == Some(me.as_str())
+            })
+            .await
+            {
+                ControlResponse::ok(InviteData {
+                    token,
+                    network_id,
+                    member: added,
+                })
+            } else {
+                ControlResponse::err(
+                    "the new device was not committed by the network in time — are enough members online?",
+                )
+            }
+        }
+
+        ControlRequest::RevokeDevice { network_id, key } => {
+            let key = crate::identity::member_key(&key).map_or(key, |m| m.key);
+            if key == state.identity.key_fingerprint {
+                return ControlResponse::err(
+                    "this is the key of this device: revoke it from another of your devices",
+                );
+            }
+            let result = match state.chains.write().unwrap().get_mut(&network_id) {
+                None => Err(crate::error::BpError::InvalidInput(format!(
+                    "you are not in a network named '{network_id}'"
+                ))),
+                Some(chain) => chain.revoke_key(&key, now_ms()),
+            };
+            if let Err(e) = result {
+                return ControlResponse::err(e.to_string());
+            }
+            if wait_until(state, &network_id, |c| c.ledger().key_owner(&key).is_none()).await {
+                ControlResponse::ok(serde_json::json!({
+                    "network_id": network_id,
+                    "key": key,
+                    "message": format!("Revoked {key} on '{network_id}'"),
+                }))
+            } else {
+                ControlResponse::err(
+                    "the revocation was not committed by the network in time — are enough members online?",
+                )
+            }
+        }
+
+        ControlRequest::Devices { network_id } => {
+            let chains = state.chains.read().unwrap();
+            let Some(chain) = chains.get(&network_id) else {
+                return ControlResponse::err(format!(
+                    "you are not in a network named '{network_id}'"
+                ));
+            };
+            let ledger = chain.ledger();
+            let me = &state.identity.fingerprint;
+            let keys = ledger
+                .keys
+                .iter()
+                .filter(|(_, k)| &k.user == me)
+                .map(|(fingerprint, k)| KeyInfo {
+                    fingerprint: fingerprint.clone(),
+                    name: crate::identity::key_name(&k.key),
+                    revoked: k.revoked,
+                    this_device: *fingerprint == state.identity.key_fingerprint,
+                    devices: ledger
+                        .devices
+                        .iter()
+                        .filter(|(_, d)| d.cert_key == *fingerprint)
+                        .map(|(peer, _)| peer.clone())
+                        .collect(),
+                })
+                .collect();
+            ControlResponse::ok(DevicesData {
+                network_id: network_id.clone(),
+                user: me.clone(),
+                family: ledger.family(me).is_some(),
+                keys,
+            })
+        }
+
+        ControlRequest::Shutdown => {
+            tokio::spawn(async {
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                std::process::exit(0);
+            });
+            ControlResponse::ok("shutting down")
         }
 
         ControlRequest::Members { network_id } => {
@@ -545,16 +643,12 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 .map(|(fingerprint, m, messages, achievements)| MemberInfo {
                     challenges_sent: m.sent,
                     challenges_passed: m.passed,
-                    invited: ledger
-                        .entries
-                        .iter()
-                        .filter(|e| e.body.author == m.key)
-                        .count(),
+                    invited: ledger.invited_by(fingerprint),
                     messages,
                     level: crate::community::level(&achievements),
                     achievements,
                     fingerprint: fingerprint.clone(),
-                    name: member_name(&m.key),
+                    name: m.name.clone(),
                     tier: ledger
                         .snapshot
                         .tier(fingerprint)
@@ -928,10 +1022,6 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             super::chat::send(state, network_id, text).await
         }
     }
-}
-
-pub fn member_name(key: &str) -> String {
-    key.split_whitespace().skip(2).collect::<Vec<_>>().join(" ")
 }
 
 const MEMBERSHIP_WAIT_SECS: u64 = 90;

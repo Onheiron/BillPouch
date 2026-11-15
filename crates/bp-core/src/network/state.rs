@@ -1,4 +1,4 @@
-use crate::{identity::DeviceCert, service::ServiceType};
+use crate::{identity::DeviceCert, ledger::Ledger, service::ServiceType};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -17,13 +17,13 @@ pub struct NodeInfo {
 }
 
 impl NodeInfo {
-    pub fn is_authentic(&self, publisher: Option<&libp2p::PeerId>) -> bool {
+    pub fn is_authentic(&self, publisher: Option<&libp2p::PeerId>, ledger: &Ledger) -> bool {
         let Ok(device) = self.device_cert.verify() else {
             return false;
         };
         let peer = device.peer_id.to_string();
         peer == self.peer_id
-            && device.fingerprint == self.user_fingerprint
+            && ledger.key_owner(&device.key) == Some(self.user_fingerprint.as_str())
             && publisher.map(|p| p.to_string()) == Some(peer)
     }
 }
@@ -81,7 +81,11 @@ impl NetworkState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::identity::Identity;
+    use crate::{identity::Identity, membership::genesis};
+
+    fn ledger_of(creator: &Identity) -> Ledger {
+        Ledger::new(genesis(creator, "amici").unwrap().0, &creator.cert).unwrap()
+    }
 
     fn announce(id: &Identity) -> NodeInfo {
         NodeInfo {
@@ -101,23 +105,24 @@ mod tests {
     #[test]
     fn genuine_announcement_is_accepted() {
         let id = Identity::in_memory(None).unwrap();
-        assert!(announce(&id).is_authentic(Some(&id.peer_id)));
+        assert!(announce(&id).is_authentic(Some(&id.peer_id), &ledger_of(&id)));
     }
 
     #[test]
     fn forged_announcements_are_rejected() {
         let carlo = Identity::in_memory(None).unwrap();
         let mallory = Identity::in_memory(None).unwrap();
+        let ledger = ledger_of(&carlo);
 
-        assert!(!announce(&carlo).is_authentic(Some(&mallory.peer_id)));
-        assert!(!announce(&carlo).is_authentic(None));
+        assert!(!announce(&carlo).is_authentic(Some(&mallory.peer_id), &ledger));
+        assert!(!announce(&carlo).is_authentic(None, &ledger));
 
         let mut impersonation = announce(&mallory);
         impersonation.user_fingerprint = carlo.fingerprint.clone();
-        assert!(!impersonation.is_authentic(Some(&mallory.peer_id)));
+        assert!(!impersonation.is_authentic(Some(&mallory.peer_id), &ledger));
 
         let mut stolen_cert = announce(&mallory);
         stolen_cert.device_cert = carlo.cert.clone();
-        assert!(!stolen_cert.is_authentic(Some(&mallory.peer_id)));
+        assert!(!stolen_cert.is_authentic(Some(&mallory.peer_id), &ledger));
     }
 }

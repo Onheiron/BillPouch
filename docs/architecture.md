@@ -180,23 +180,38 @@ downloaded stays with them.
 
 ## Your file index, devices and sharing
 
+- **Family key**: in every network a user has one family key, an X25519
+  secret that opens their files. The ledger keeps its public half and one
+  envelope per key of the user (the secret wrapped for that SSH key, like the
+  network key), so every device opens it with its own key and no private key
+  ever moves. The first device sets it (`SetFamily`) as soon as it is a member.
 - **Index**: every manifest you own or were shared, per network. It is sealed
-  with `BLAKE3-derive("billpouch/index-key/v1", user secret)`, so every device
-  holding your SSH key can open it and nobody else can, and stored in the network
-  like a file. A **head** `(owner key, network, version, file_id, chunk_ids)` signed with
-  your SSH key points at the latest version; heads are gossiped, cached by every
+  with `BLAKE3-derive("billpouch/index-key/v2", family secret)`, so every device
+  of yours can open it and nobody else can, and stored in the network
+  like a file. A **head** `(owner, signing key, network, version, file_id, chunk_ids)` signed by
+  one of your keys points at the latest version; heads are gossiped, cached by every
   node and re-gossiped by your devices every 30 s (or requested with a
   `HeadRequest` when a device has none).
-- **Devices**: `bp invite <network> <your own public key>` prints a token for
-  another device of yours, without touching the ledger. On that device,
-  `bp login --ssh-key <same key>` and `bp join <token>`: it syncs the ledger,
-  registers itself, receives your head and pulls your index. Indexes merge by
+- **Devices**: every device has its own SSH key; a user is a set of keys in
+  the ledger. A new device runs `bp login`, which makes its key and prints it;
+  from a device you already have, `bp device add <network> "<that key>"`
+  commits an `AddKey` op with the family key wrapped for it and prints a token
+  with the network key wrapped for it. On the new device `bp join <token>` makes
+  it one of yours (the key line carries `bp:<your fingerprint>`): it syncs the
+  ledger, registers itself, receives your head and pulls your index. Indexes merge by
   union, so two devices adding files at the same time both keep them; deleted
   files and revoked members are kept as tombstones so a merge never brings them
   back. Each new index version is stored under a new `file_id` and the previous
   one is deleted with an owner order.
-- **Sharing**: `bp share` wraps the file key for the member's SSH key (taken
-  from the ledger) and gossips the manifest to them; they add it to their index
+- **Revoking a device**: `bp device revoke <network> <key>` from another device
+  commits a `RevokeKey` op with a new family key, wrapped for the keys left; the
+  old secrets travel sealed under the new one (`history`), so the devices left
+  still open every old file and index, and new files use the new key. The
+  revoked key signs nothing any more, its devices leave the ledger and their
+  places in files, and the network key rotates. What it already read stays
+  read, as with any revocation.
+- **Sharing**: `bp share` wraps the file key for the member's family key (taken
+  from the ledger), so all their devices open it, now and after they add more, and gossips the manifest to them; they add it to their index
   and acknowledge. Until the acknowledgement arrives the share is re-sent every
   30 s.
 
@@ -527,19 +542,22 @@ badges are for fun: they give no capability and no voting weight.
 
 ## Identity and access
 
-- **User**: an OpenSSH ed25519 key, imported (`bp login --ssh-key`) or generated.
+- **Keys**: every device has its own OpenSSH ed25519 key, imported (`bp login --ssh-key`) or generated.
   Its fingerprint is the standard SSH one (`SHA256:…`, same as `ssh-keygen -lf`).
   Passphrase-protected keys are unlocked with `--passphrase` / `BP_PASSPHRASE`.
-- **Device**: every machine has its own libp2p key, so its own `peer_id`. The user
-  key signs a certificate `(user key, device key, issued_at)`; logging in with the
-  same SSH key on another machine creates another device of the same user.
+- **User**: the fingerprint of the first key it joined a network with. The
+  ledger maps every key to its user; ops, grants, orders, index heads and chat
+  messages are signed by a key and count for the user the ledger gives it
+  (grants also from keys revoked since, as they only let a member fetch ciphertext).
+- **Device**: every machine has its own libp2p key, so its own `peer_id`. The SSH
+  key of the machine signs a certificate `(SSH key, device key, issued_at)`.
 - **Announcements** carry the certificate. A NodeInfo is accepted only if the
-  certificate verifies, its device is the gossip publisher and its user matches
-  `user_fingerprint`.
+  certificate verifies, its device is the gossip publisher and the ledger gives
+  its key to `user_fingerprint`.
 - **Network**: rooted in a genesis entry signed by the creator; the genesis hash
   identifies the network. Membership is whatever the ledger says.
 - **Network key**: 32 random bytes, made at creation and at every rotation.
-  Every entry or rotation carries it encrypted for each member: X25519 (from the member's ed25519 key) with an
+  Every entry or rotation carries it encrypted for each key of each member: X25519 (from the member's ed25519 key) with an
   ephemeral key, BLAKE3-derived wrapping key, ChaCha20-Poly1305. It never travels
   in clear and only the member it was wrapped for can open it.
 - **Invites**: `bp invite` submits an `AddMember` op, waits for it to be

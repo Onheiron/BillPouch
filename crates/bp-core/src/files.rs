@@ -2,7 +2,8 @@ use crate::{
     config,
     error::{BpError, BpResult},
     identity::{parse_user_key, Identity},
-    membership::{new_key, unwrap_for, wrap_for, WrappedKey},
+    ledger::Ledger,
+    membership::{new_key, open_with, Family, WrappedKey},
     storage::ChunkCipher,
 };
 use serde::{Deserialize, Serialize};
@@ -68,48 +69,71 @@ fn sign(identity: &Identity, message: &[u8]) -> BpResult<String> {
         .map_err(|e| BpError::Identity(format!("cannot sign: {e}")))
 }
 
-fn signer(owner_key: &str, message: &[u8], signature: &str) -> Option<String> {
-    let (public, fingerprint) = parse_user_key(owner_key).ok()?;
+fn signer(key: &str, message: &[u8], signature: &str) -> Option<String> {
+    let (public, fingerprint) = parse_user_key(key).ok()?;
     let signature = hex::decode(signature).ok()?;
     public.verify(message, &signature).then_some(fingerprint)
+}
+
+pub trait Keys {
+    fn owner_of(&self, key: &str) -> Option<&str>;
+    fn ever_owned(&self, user: &str, key: &str) -> bool;
+}
+
+impl Keys for Ledger {
+    fn owner_of(&self, key: &str) -> Option<&str> {
+        self.key_owner(key)
+    }
+
+    fn ever_owned(&self, user: &str, key: &str) -> bool {
+        self.ever_signed_for(user, key)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Grant {
     pub file_id: String,
-    pub owner_key: String,
+    pub owner: String,
+    pub key: String,
     pub grantee: String,
     pub signature: String,
 }
 
 impl Grant {
-    fn message(file_id: &str, owner_key: &str, grantee: &str) -> Vec<u8> {
-        signed(b"billpouch/grant/v2", &(file_id, owner_key, grantee))
+    fn message(file_id: &str, owner: &str, key: &str, grantee: &str) -> Vec<u8> {
+        signed(b"billpouch/grant/v3", &(file_id, owner, key, grantee))
     }
 
     pub fn sign(owner: &Identity, file_id: &str, grantee: &str) -> BpResult<Self> {
+        let message = Self::message(file_id, &owner.fingerprint, &owner.user_key, grantee);
         Ok(Self {
             file_id: file_id.to_string(),
-            owner_key: owner.user_key.clone(),
+            owner: owner.fingerprint.clone(),
+            key: owner.user_key.clone(),
             grantee: grantee.to_string(),
-            signature: sign(owner, &Self::message(file_id, &owner.user_key, grantee))?,
+            signature: sign(owner, &message)?,
         })
     }
 
-    pub fn owner(&self) -> Option<String> {
-        let message = Self::message(&self.file_id, &self.owner_key, &self.grantee);
-        signer(&self.owner_key, &message, &self.signature)
+    fn signer(&self) -> Option<String> {
+        let message = Self::message(&self.file_id, &self.owner, &self.key, &self.grantee);
+        signer(&self.key, &message, &self.signature)
     }
 
-    pub fn allows(&self, file_id: &str, owner_key: &str, requester: &str) -> bool {
+    pub fn allows(&self, file_id: &str, owner: &str, requester: &str, keys: &impl Keys) -> bool {
         self.file_id == file_id
-            && self.owner_key == owner_key
+            && self.owner == owner
             && self.grantee == requester
-            && self.owner().is_some()
+            && self
+                .signer()
+                .is_some_and(|key| keys.ever_owned(&self.owner, &key))
     }
 
-    pub fn is_owner_claim(&self) -> bool {
-        self.owner().as_deref() == Some(self.grantee.as_str())
+    pub fn is_owner_claim(&self, keys: &impl Keys) -> bool {
+        self.grantee == self.owner
+            && self
+                .signer()
+                .is_some_and(|key| keys.owner_of(&key) == Some(self.owner.as_str()))
     }
 }
 
@@ -122,30 +146,33 @@ pub enum Action {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Order {
-    pub owner_key: String,
+    pub owner: String,
+    pub key: String,
     pub file_id: String,
     pub action: Action,
     pub signature: String,
 }
 
 impl Order {
-    fn message(owner_key: &str, file_id: &str, action: &Action) -> Vec<u8> {
-        signed(b"billpouch/order/v1", &(owner_key, file_id, action))
+    fn message(owner: &str, key: &str, file_id: &str, action: &Action) -> Vec<u8> {
+        signed(b"billpouch/order/v2", &(owner, key, file_id, action))
     }
 
     pub fn sign(owner: &Identity, file_id: &str, action: Action) -> BpResult<Self> {
-        let signature = sign(owner, &Self::message(&owner.user_key, file_id, &action))?;
+        let message = Self::message(&owner.fingerprint, &owner.user_key, file_id, &action);
         Ok(Self {
-            owner_key: owner.user_key.clone(),
+            owner: owner.fingerprint.clone(),
+            key: owner.user_key.clone(),
             file_id: file_id.to_string(),
             action,
-            signature,
+            signature: sign(owner, &message)?,
         })
     }
 
-    pub fn owner(&self) -> Option<String> {
-        let message = Self::message(&self.owner_key, &self.file_id, &self.action);
-        signer(&self.owner_key, &message, &self.signature)
+    pub fn owner(&self, keys: &impl Keys) -> Option<String> {
+        let message = Self::message(&self.owner, &self.key, &self.file_id, &self.action);
+        let key = signer(&self.key, &message, &self.signature)?;
+        (keys.owner_of(&key) == Some(self.owner.as_str())).then(|| self.owner.clone())
     }
 }
 
@@ -168,6 +195,7 @@ impl Manifest {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         owner: &Identity,
+        family: &Family,
         network: &str,
         file_name: &str,
         size_bytes: u64,
@@ -185,7 +213,7 @@ impl Manifest {
             size_bytes,
             uploaded_at: chrono::Utc::now().timestamp() as u64,
             owner: owner.fingerprint.clone(),
-            wraps: BTreeMap::from([(owner.fingerprint.clone(), wrap_for(key, &owner.user_key)?)]),
+            wraps: BTreeMap::from([(owner.fingerprint.clone(), family.wrap(key)?)]),
             grants: BTreeMap::from([(
                 owner.fingerprint.clone(),
                 Grant::sign(owner, file_id, &owner.fingerprint)?,
@@ -194,11 +222,11 @@ impl Manifest {
         })
     }
 
-    pub fn file_key(&self, identity: &Identity) -> BpResult<[u8; 32]> {
+    pub fn file_key(&self, identity: &Identity, keyring: &[[u8; 32]]) -> BpResult<[u8; 32]> {
         let wrapped = self.wraps.get(&identity.fingerprint).ok_or_else(|| {
             BpError::Identity(format!("'{}' is not shared with you", self.file_name))
         })?;
-        unwrap_for(wrapped, identity)
+        open_with(wrapped, keyring)
     }
 
     pub fn grant_for(&self, user: &str) -> BpResult<&Grant> {
@@ -217,18 +245,22 @@ impl Manifest {
         Ok(())
     }
 
-    pub fn share_with(&mut self, identity: &Identity, member_key: &str) -> BpResult<String> {
+    pub fn share_with(
+        &mut self,
+        identity: &Identity,
+        keyring: &[[u8; 32]],
+        member: &str,
+        family: &Family,
+    ) -> BpResult<()> {
         self.ensure_owner(identity)?;
-        let key = self.file_key(identity)?;
-        let (_, fingerprint) = parse_user_key(member_key)?;
-        self.wraps
-            .insert(fingerprint.clone(), wrap_for(&key, member_key)?);
+        let key = self.file_key(identity, keyring)?;
+        self.wraps.insert(member.to_string(), family.wrap(&key)?);
         self.grants.insert(
-            fingerprint.clone(),
-            Grant::sign(identity, &self.file_id, &fingerprint)?,
+            member.to_string(),
+            Grant::sign(identity, &self.file_id, member)?,
         );
-        self.revoked.remove(&fingerprint);
-        Ok(fingerprint)
+        self.revoked.remove(member);
+        Ok(())
     }
 
     pub fn revoke(&mut self, identity: &Identity, member: &str) -> BpResult<()> {
@@ -308,23 +340,34 @@ impl Index {
         changed
     }
 
-    pub fn seal(&self, identity: &Identity) -> BpResult<Vec<u8>> {
-        ChunkCipher::from_raw_key(index_key(identity)).encrypt(&serde_json::to_vec(self)?)
+    pub fn seal(&self, keyring: &[[u8; 32]]) -> BpResult<Vec<u8>> {
+        let current = keyring
+            .first()
+            .ok_or_else(|| BpError::Identity("no family key to seal the index".into()))?;
+        ChunkCipher::from_raw_key(index_key(current)).encrypt(&serde_json::to_vec(self)?)
     }
 
-    pub fn open(identity: &Identity, blob: &[u8]) -> BpResult<Self> {
-        let plain = ChunkCipher::from_raw_key(index_key(identity)).decrypt(blob)?;
+    pub fn open(keyring: &[[u8; 32]], blob: &[u8]) -> BpResult<Self> {
+        let plain = keyring
+            .iter()
+            .find_map(|secret| {
+                ChunkCipher::from_raw_key(index_key(secret))
+                    .decrypt(blob)
+                    .ok()
+            })
+            .ok_or_else(|| BpError::Identity("none of your family keys opens this index".into()))?;
         Ok(serde_json::from_slice(&plain)?)
     }
 }
 
-pub fn index_key(identity: &Identity) -> [u8; 32] {
-    blake3::derive_key("billpouch/index-key/v1", &identity.secret_material())
+fn index_key(family_secret: &[u8; 32]) -> [u8; 32] {
+    blake3::derive_key("billpouch/index-key/v2", family_secret)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Head {
-    pub owner_key: String,
+    pub owner: String,
+    pub key: String,
     pub network: String,
     pub version: u64,
     pub file_id: String,
@@ -334,15 +377,16 @@ pub struct Head {
 
 impl Head {
     fn message(
-        owner_key: &str,
+        owner: &str,
+        key: &str,
         network: &str,
         version: u64,
         file_id: &str,
         chunks: &[String],
     ) -> Vec<u8> {
         signed(
-            b"billpouch/index-head/v2",
-            &(owner_key, network, version, file_id, chunks),
+            b"billpouch/index-head/v3",
+            &(owner, key, network, version, file_id, chunks),
         )
     }
 
@@ -353,9 +397,17 @@ impl Head {
         file_id: &str,
         chunks: Vec<String>,
     ) -> BpResult<Self> {
-        let message = Self::message(&identity.user_key, network, version, file_id, &chunks);
+        let message = Self::message(
+            &identity.fingerprint,
+            &identity.user_key,
+            network,
+            version,
+            file_id,
+            &chunks,
+        );
         Ok(Self {
-            owner_key: identity.user_key.clone(),
+            owner: identity.fingerprint.clone(),
+            key: identity.user_key.clone(),
             network: network.to_string(),
             version,
             file_id: file_id.to_string(),
@@ -364,15 +416,17 @@ impl Head {
         })
     }
 
-    pub fn owner(&self) -> Option<String> {
+    pub fn owner(&self, keys: &impl Keys) -> Option<String> {
         let message = Self::message(
-            &self.owner_key,
+            &self.owner,
+            &self.key,
             &self.network,
             self.version,
             &self.file_id,
             &self.chunks,
         );
-        signer(&self.owner_key, &message, &self.signature)
+        let key = signer(&self.key, &message, &self.signature)?;
+        (keys.owner_of(&key) == Some(self.owner.as_str())).then(|| self.owner.clone())
     }
 }
 
@@ -435,8 +489,8 @@ impl FileStore {
         self.heads.get(network)?.get(owner)
     }
 
-    pub fn remember_head(&mut self, head: Head) -> Option<String> {
-        let owner = head.owner()?;
+    pub fn remember_head(&mut self, head: Head, keys: &impl Keys) -> Option<String> {
+        let owner = head.owner(keys)?;
         let heads = self.heads.entry(head.network.clone()).or_default();
         if heads.get(&owner).is_some_and(|h| h.version >= head.version) {
             return None;
@@ -495,10 +549,39 @@ mod tests {
         assert_eq!(chunk_id("f", 0).len(), 16);
     }
 
-    fn manifest(owner: &Identity, file_id: &str) -> (Manifest, [u8; 32]) {
+    struct Book(BTreeMap<String, String>);
+
+    impl Keys for Book {
+        fn owner_of(&self, key: &str) -> Option<&str> {
+            self.0.get(key).map(String::as_str)
+        }
+
+        fn ever_owned(&self, user: &str, key: &str) -> bool {
+            self.owner_of(key) == Some(user)
+        }
+    }
+
+    fn book(people: &[&Identity]) -> Book {
+        Book(
+            people
+                .iter()
+                .map(|p| (p.key_fingerprint.clone(), p.fingerprint.clone()))
+                .collect(),
+        )
+    }
+
+    fn family(person: &Identity) -> (Family, Vec<[u8; 32]>) {
+        let keyring = vec![new_key()];
+        let family = Family::seal(&keyring, [(&person.key_fingerprint, &person.user_key)]).unwrap();
+        (family, keyring)
+    }
+
+    fn manifest(owner: &Identity, file_id: &str) -> (Manifest, [u8; 32], Vec<[u8; 32]>) {
         let key = new_key();
+        let (family, keyring) = family(owner);
         let m = Manifest::new(
             owner,
+            &family,
             "amici",
             "x",
             1,
@@ -508,7 +591,7 @@ mod tests {
             &key,
         )
         .unwrap();
-        (m, key)
+        (m, key, keyring)
     }
 
     #[test]
@@ -516,47 +599,55 @@ mod tests {
         let carlo = Identity::in_memory(None).unwrap();
         let marco = Identity::in_memory(None).unwrap();
         let lucia = Identity::in_memory(None).unwrap();
-        let (mut m, key) = manifest(&carlo, "f1");
-        assert_eq!(m.file_key(&carlo).unwrap(), key);
-        assert!(m.file_key(&marco).is_err());
+        let (mut m, key, carlo_ring) = manifest(&carlo, "f1");
+        let (marco_family, marco_ring) = family(&marco);
+        let (lucia_family, lucia_ring) = family(&lucia);
+        assert_eq!(m.file_key(&carlo, &carlo_ring).unwrap(), key);
+        assert!(m.file_key(&marco, &marco_ring).is_err());
 
-        assert_eq!(
-            m.share_with(&carlo, &marco.user_key).unwrap(),
-            marco.fingerprint
-        );
-        assert_eq!(m.file_key(&marco).unwrap(), key);
-        assert!(m.file_key(&lucia).is_err());
-        assert!(m.share_with(&lucia, &lucia.user_key).is_err());
-        assert!(m.share_with(&marco, &lucia.user_key).is_err());
+        m.share_with(&carlo, &carlo_ring, &marco.fingerprint, &marco_family)
+            .unwrap();
+        assert_eq!(m.file_key(&marco, &marco_ring).unwrap(), key);
+        assert!(m.file_key(&lucia, &lucia_ring).is_err());
+        assert!(m
+            .share_with(&lucia, &lucia_ring, &lucia.fingerprint, &lucia_family)
+            .is_err());
+        assert!(m
+            .share_with(&marco, &marco_ring, &lucia.fingerprint, &lucia_family)
+            .is_err());
     }
 
     #[test]
     fn grants_name_one_file_one_owner_and_one_grantee() {
         let carlo = Identity::in_memory(None).unwrap();
         let marco = Identity::in_memory(None).unwrap();
-        let (mut m, _) = manifest(&carlo, "f1");
+        let keys = book(&[&carlo, &marco]);
+        let (mut m, _, ring) = manifest(&carlo, "f1");
         let own = m.grant_for(&carlo.fingerprint).unwrap().clone();
-        assert!(own.is_owner_claim());
-        assert!(own.allows("f1", &carlo.user_key, &carlo.fingerprint));
-        assert!(!own.allows("f1", &carlo.user_key, &marco.fingerprint));
-        assert!(!own.allows("f2", &carlo.user_key, &carlo.fingerprint));
+        assert!(own.is_owner_claim(&keys));
+        assert!(!own.is_owner_claim(&book(&[&marco])));
+        assert!(own.allows("f1", &carlo.fingerprint, &carlo.fingerprint, &keys));
+        assert!(!own.allows("f1", &carlo.fingerprint, &marco.fingerprint, &keys));
+        assert!(!own.allows("f2", &carlo.fingerprint, &carlo.fingerprint, &keys));
 
-        m.share_with(&carlo, &marco.user_key).unwrap();
+        m.share_with(&carlo, &ring, &marco.fingerprint, &family(&marco).0)
+            .unwrap();
         let theirs = m.grant_for(&marco.fingerprint).unwrap();
-        assert!(theirs.allows("f1", &carlo.user_key, &marco.fingerprint));
-        assert!(!theirs.is_owner_claim());
+        assert!(theirs.allows("f1", &carlo.fingerprint, &marco.fingerprint, &keys));
+        assert!(!theirs.is_owner_claim(&keys));
 
         let mut forged = theirs.clone();
         forged.grantee = Identity::in_memory(None).unwrap().fingerprint;
-        assert!(!forged.allows("f1", &carlo.user_key, &forged.grantee));
+        assert!(!forged.allows("f1", &carlo.fingerprint, &forged.grantee, &keys));
     }
 
     #[test]
     fn a_revoked_share_does_not_come_back_through_a_merge() {
         let carlo = Identity::in_memory(None).unwrap();
         let marco = Identity::in_memory(None).unwrap();
-        let (mut m, _) = manifest(&carlo, "f1");
-        m.share_with(&carlo, &marco.user_key).unwrap();
+        let (mut m, _, ring) = manifest(&carlo, "f1");
+        m.share_with(&carlo, &ring, &marco.fingerprint, &family(&marco).0)
+            .unwrap();
         let old = m.clone();
         assert!(m.revoke(&marco, &marco.fingerprint).is_err());
         m.revoke(&carlo, &marco.fingerprint).unwrap();
@@ -573,7 +664,7 @@ mod tests {
     #[test]
     fn deleted_files_do_not_come_back_through_a_merge() {
         let carlo = Identity::in_memory(None).unwrap();
-        let (m, _) = manifest(&carlo, "f1");
+        let (m, _, _) = manifest(&carlo, "f1");
         let mut stale = Index::default();
         stale.add(m.clone());
         let mut index = Index::default();
@@ -587,36 +678,44 @@ mod tests {
     }
 
     #[test]
-    fn every_device_of_a_user_opens_the_same_index() {
+    fn every_key_of_the_family_opens_the_same_index_even_after_a_rotation() {
         let carlo = Identity::in_memory(None).unwrap();
-        let marco = Identity::in_memory(None).unwrap();
         let mut index = Index::default();
-        index.add(manifest(&carlo, "f1").0);
-        let blob = index.seal(&carlo).unwrap();
-        assert_eq!(Index::open(&carlo.clone(), &blob).unwrap(), index);
-        assert!(Index::open(&marco, &blob).is_err());
+        let (m, _, ring) = manifest(&carlo, "f1");
+        index.add(m);
+        let blob = index.seal(&ring).unwrap();
+        assert_eq!(Index::open(&ring, &blob).unwrap(), index);
+        let rotated = vec![new_key(), ring[0]];
+        assert_eq!(Index::open(&rotated, &blob).unwrap(), index);
+        assert!(Index::open(&[new_key()], &blob).is_err());
     }
 
     #[test]
-    fn orders_and_heads_are_signed_by_their_owner() {
+    fn orders_and_heads_count_only_from_a_live_key_of_their_owner() {
         let carlo = Identity::in_memory(None).unwrap();
+        let mallory = Identity::in_memory(None).unwrap();
+        let keys = book(&[&carlo, &mallory]);
         let order = Order::sign(&carlo, "f1", Action::Delete).unwrap();
-        assert_eq!(order.owner(), Some(carlo.fingerprint.clone()));
+        assert_eq!(order.owner(&keys), Some(carlo.fingerprint.clone()));
+        assert_eq!(order.owner(&book(&[&mallory])), None);
         let mut forged = order.clone();
         forged.file_id = "f2".into();
-        assert_eq!(forged.owner(), None);
+        assert_eq!(forged.owner(&keys), None);
+        let mut impostor = Order::sign(&mallory, "f1", Action::Delete).unwrap();
+        impostor.owner = carlo.fingerprint.clone();
+        assert_eq!(impostor.owner(&keys), None);
 
         let mut store = FileStore::default();
         let h1 = Head::sign(&carlo, "amici", 1, "i1", vec!["c1".into()]).unwrap();
         let h2 = Head::sign(&carlo, "amici", 2, "i2", vec!["c2".into()]).unwrap();
         assert_eq!(
-            store.remember_head(h2.clone()),
+            store.remember_head(h2.clone(), &keys),
             Some(carlo.fingerprint.clone())
         );
-        assert_eq!(store.remember_head(h1), None);
+        assert_eq!(store.remember_head(h1, &keys), None);
         let mut forged = h2.clone();
         forged.version = 9;
-        assert_eq!(store.remember_head(forged), None);
+        assert_eq!(store.remember_head(forged, &keys), None);
         assert_eq!(store.head("amici", &carlo.fingerprint), Some(&h2));
     }
 }

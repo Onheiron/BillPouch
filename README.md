@@ -27,7 +27,7 @@ Each node runs one or more services, named after the pelican:
 ```bash
 cargo build --release          # binaries: target/release/bp, target/release/bp-api
 
-bp login --ssh-key ~/.ssh/id_ed25519   # your SSH key is your identity (or omit to generate one)
+bp login --ssh-key ~/.ssh/id_ed25519   # the SSH key of this device (or omit to generate one)
 bp network create friends              # you are the first member
 bp hatch pouch --network friends --tier T1   # offers 10 GiB
 bp hatch bill  --network friends
@@ -47,6 +47,14 @@ bp invite friends "ssh-ed25519 AAAA… marco@pc"   # prints a token for Marco
 bp join <token>                                  # on Marco's machine
 ```
 
+Every device has its own key. On a new device run `bp login`, then add the key it
+prints from a device you already have:
+
+```bash
+bp device add friends "ssh-ed25519 AAAA… phone"  # prints a token for the phone
+bp join <token>                                  # on the phone
+```
+
 Each tier is a folder (`bp put --tier T2`). A folder spreads files only once at
 least 3 users have a Pouch that reaches it; until then your files stay on your own
 Pouches and are spread as soon as it fills up. On the others you can only store what
@@ -63,9 +71,9 @@ To try a whole network on one machine: `./playground.sh up` (Docker, 6 nodes, bu
 `android/` is the Android app: your phone as another device of yours, running a
 **Bill** only. It dials out and never listens, so it needs no open port and holds
 nothing for the others. The [Android workflow](.github/workflows/android.yml)
-builds the APK (artifact `billpouch-android`). On first launch give it the same
-SSH private key as your computer and the token from
-`bp invite <network> "<your SSH public key>"` there; it shows the same web app,
+builds the APK (artifact `billpouch-android`). On first launch it makes its own
+SSH key and shows it; add it from your computer with
+`bp device add <network> "<its key>"` and paste the token; it shows the same web app,
 with files picked and saved through Android's own dialogs.
 
 ## Documentation

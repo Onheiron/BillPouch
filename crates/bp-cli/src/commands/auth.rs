@@ -22,8 +22,10 @@ pub async fn login(
     );
     println!("   Device      : {}", id.peer_id);
     println!();
-    println!("Your public key (share it to be invited to a network):");
-    println!("   {}", id.user_key);
+    println!("   Key         : {}", id.key_fingerprint);
+    println!();
+    println!("The public key of this device: give it to a member to be invited, or add it with `bp device add` from a device of yours:");
+    println!("   {}", id.member_line());
     Ok(())
 }
 
