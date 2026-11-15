@@ -25,7 +25,7 @@ use crate::{
 use futures::StreamExt;
 use libp2p::{gossipsub, request_response, swarm::SwarmEvent, Multiaddr, PeerId, Swarm};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -1123,6 +1123,29 @@ fn serve_fragment_request(
                     .is_some_and(|c| c.ledger().may_store(requester, bytes))
             })
     };
+    let granted: HashSet<String> = match req {
+        FragmentRequest::FetchChunkFragments { grant, .. } => chains
+            .read()
+            .map(|all| {
+                all.iter()
+                    .filter(|(_, c)| {
+                        grant.allows(&grant.file_id, &grant.owner, requester, c.ledger())
+                    })
+                    .map(|(name, _)| name.clone())
+                    .collect()
+            })
+            .unwrap_or_default(),
+        FragmentRequest::Store { grant, .. } => chains
+            .read()
+            .map(|all| {
+                all.iter()
+                    .filter(|(_, c)| grant.is_owner_claim(c.ledger()))
+                    .map(|(name, _)| name.clone())
+                    .collect()
+            })
+            .unwrap_or_default(),
+        _ => HashSet::new(),
+    };
     let managers = storage_managers.read().unwrap();
     match req {
         FragmentRequest::FetchChunkFragments { chunk_id, grant } => {
@@ -1130,11 +1153,10 @@ fn serve_fragment_request(
             for sm_arc in managers.values() {
                 let sm = sm_arc.read().unwrap();
                 let allowed = sm.owner_of(chunk_id).is_some_and(|o| {
-                    chains.read().is_ok_and(|all| {
-                        all.get(&sm.meta.network_id).is_some_and(|c| {
-                            grant.allows(&o.file_id, &o.owner, requester, c.ledger())
-                        })
-                    }) && !sm.is_revoked(&o.file_id, requester)
+                    o.file_id == grant.file_id
+                        && o.owner == grant.owner
+                        && granted.contains(&sm.meta.network_id)
+                        && !sm.is_revoked(&o.file_id, requester)
                 });
                 if !allowed {
                     continue;
@@ -1160,10 +1182,7 @@ fn serve_fragment_request(
             layer,
             commitment,
         } => {
-            let claimed = chains
-                .read()
-                .is_ok_and(|all| all.values().any(|c| grant.is_owner_claim(c.ledger())));
-            if !claimed || grant.grantee != requester {
+            if granted.is_empty() || grant.grantee != requester {
                 return FragmentResponse::StoreFailed {
                     reason: "a fragment can only be stored by a device of its owner".into(),
                 };

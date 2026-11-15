@@ -262,13 +262,12 @@ fn wrap(key: &[u8; 32], recipient: &PublicKey) -> BpResult<WrappedKey> {
 }
 
 fn wrap_to(key: &[u8; 32], recipient: &x25519_dalek::PublicKey) -> BpResult<WrappedKey> {
-    let recipient = *recipient;
     let ephemeral = x25519_dalek::StaticSecret::random_from_rng(rand::thread_rng());
     let ephemeral_public = x25519_dalek::PublicKey::from(&ephemeral);
     let wrapping = wrapping_key(
-        ephemeral.diffie_hellman(&recipient).as_bytes(),
+        ephemeral.diffie_hellman(recipient).as_bytes(),
         &ephemeral_public,
-        &recipient,
+        recipient,
     );
     Ok(WrappedKey {
         ephemeral: hex::encode(ephemeral_public.as_bytes()),
