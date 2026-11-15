@@ -177,13 +177,7 @@ impl Identity {
             }
             None => {
                 let comment = alias.clone().unwrap_or_else(|| "billpouch".into());
-                let mut key =
-                    PrivateKey::random(&mut OsRng, ssh_key::Algorithm::Ed25519).map_err(ssh_err)?;
-                key.set_comment(comment);
-                if let Some(pass) = passphrase {
-                    key = key.encrypt(&mut OsRng, pass).map_err(ssh_err)?;
-                }
-                key.to_openssh(LineEnding::LF).map_err(ssh_err)?.to_string()
+                new_ssh_key(&comment, passphrase)?.0
             }
         };
         write_private(&config::user_key_path()?, openssh.as_bytes())?;
@@ -347,7 +341,18 @@ fn unlock(openssh: &str, passphrase: Option<&str>) -> BpResult<(Keypair, String)
     Ok((user, public))
 }
 
-fn write_private(path: &Path, bytes: &[u8]) -> BpResult<()> {
+pub fn new_ssh_key(comment: &str, passphrase: Option<&str>) -> BpResult<(String, String)> {
+    let mut key = PrivateKey::random(&mut OsRng, ssh_key::Algorithm::Ed25519).map_err(ssh_err)?;
+    key.set_comment(comment);
+    let public = key.public_key().to_openssh().map_err(ssh_err)?;
+    if let Some(pass) = passphrase {
+        key = key.encrypt(&mut OsRng, pass).map_err(ssh_err)?;
+    }
+    let private = key.to_openssh(LineEnding::LF).map_err(ssh_err)?.to_string();
+    Ok((private, public))
+}
+
+pub fn write_private(path: &Path, bytes: &[u8]) -> BpResult<()> {
     std::fs::write(path, bytes)?;
     #[cfg(unix)]
     {

@@ -40,4 +40,5 @@ Alpha. Current version in the root `Cargo.toml`; history in the GitHub releases.
 
 - **Snapshots and pruning**: the network periodically agrees on the ledger state at a height (certified by that block's precommits); nodes keep the snapshot and recent blocks and drop the rest, and a joining node downloads the snapshot instead of replaying everything. The old history can be archived as a BillPouch file in the network itself.
 - **Distributed file registry**: for hundreds of nodes and millions of files, keep each file's placement record with its holders and only a Merkle root of the registry in the ledger, so the replicated state stops growing with the number of files.
+- **Social recovery**: let the other members revoke a key of yours on request, with the threshold of an expulsion, to settle a theft without a recovery key.
 - Playground: configurable epoch length, so bets, invitations and silent holders settle in minutes instead of days.

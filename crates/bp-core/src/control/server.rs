@@ -515,7 +515,11 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             }
         }
 
-        ControlRequest::AddDevice { network_id, key } => {
+        ControlRequest::AddDevice {
+            network_id,
+            key,
+            recovery,
+        } => {
             let added = match crate::identity::member_key(&key) {
                 Ok(m) => m.key,
                 Err(e) => return ControlResponse::err(e.to_string()),
@@ -524,7 +528,7 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                 None => Err(crate::error::BpError::InvalidInput(format!(
                     "you are not in a network named '{network_id}'"
                 ))),
-                Some(chain) => chain.add_device(&key, now_ms()),
+                Some(chain) => chain.add_device(&key, recovery, now_ms()),
             };
             let token = match result.and_then(|mut invite| {
                 invite.addrs = state.listen_addrs.read().unwrap().clone();
@@ -567,15 +571,62 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
             if let Err(e) = result {
                 return ControlResponse::err(e.to_string());
             }
-            if wait_until(state, &network_id, |c| c.ledger().key_owner(&key).is_none()).await {
+            let settled = |c: &Chain| {
+                c.ledger().key_owner(&key).is_none()
+                    || c.ledger().pending_revocation(&key).is_some()
+            };
+            if wait_until(state, &network_id, settled).await {
+                let due = state
+                    .chains
+                    .read()
+                    .unwrap()
+                    .get(&network_id)
+                    .and_then(|c| c.ledger().pending_revocation(&key).map(|r| r.due));
+                let message = match due {
+                    Some(due) => format!(
+                        "Revocation of {key} on '{network_id}' pending: it takes effect at {} unless another of your keys cancels it",
+                        chrono::DateTime::<chrono::Utc>::from_timestamp(due as i64, 0)
+                            .map_or_else(|| due.to_string(), |t| t.to_rfc3339())
+                    ),
+                    None => format!("Revoked {key} on '{network_id}'"),
+                };
                 ControlResponse::ok(serde_json::json!({
                     "network_id": network_id,
                     "key": key,
-                    "message": format!("Revoked {key} on '{network_id}'"),
+                    "due": due,
+                    "message": message,
                 }))
             } else {
                 ControlResponse::err(
                     "the revocation was not committed by the network in time — are enough members online?",
+                )
+            }
+        }
+
+        ControlRequest::CancelRevocation { network_id, key } => {
+            let key = crate::identity::member_key(&key).map_or(key, |m| m.key);
+            let result = match state.chains.write().unwrap().get_mut(&network_id) {
+                None => Err(crate::error::BpError::InvalidInput(format!(
+                    "you are not in a network named '{network_id}'"
+                ))),
+                Some(chain) => chain.cancel_revocation(&key, now_ms()),
+            };
+            if let Err(e) = result {
+                return ControlResponse::err(e.to_string());
+            }
+            if wait_until(state, &network_id, |c| {
+                c.ledger().pending_revocation(&key).is_none()
+            })
+            .await
+            {
+                ControlResponse::ok(serde_json::json!({
+                    "network_id": network_id,
+                    "key": key,
+                    "message": format!("Cancelled the revocation of {key} on '{network_id}'"),
+                }))
+            } else {
+                ControlResponse::err(
+                    "the cancellation was not committed by the network in time — are enough members online?",
                 )
             }
         }
@@ -597,6 +648,8 @@ async fn dispatch(req: ControlRequest, state: &Arc<DaemonState>) -> ControlRespo
                     fingerprint: fingerprint.clone(),
                     name: crate::identity::key_name(&k.key),
                     revoked: k.revoked,
+                    recovery: k.recovery,
+                    revocation_due: ledger.pending_revocation(fingerprint).map(|r| r.due),
                     this_device: *fingerprint == state.identity.key_fingerprint,
                     devices: ledger
                         .devices

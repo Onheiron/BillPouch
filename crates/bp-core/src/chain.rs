@@ -100,6 +100,7 @@ pub struct Chain {
     commits: Vec<Commit>,
     device_submitted_ms: u64,
     family_submitted_ms: u64,
+    revocation_warned_ms: u64,
     rotation_submitted_ms: u64,
     reported_hour: Option<u64>,
     reported_usage: Option<(BTreeMap<String, u64>, BTreeMap<String, u64>)>,
@@ -147,6 +148,7 @@ impl Chain {
             commits: Vec::new(),
             device_submitted_ms: 0,
             family_submitted_ms: 0,
+            revocation_warned_ms: 0,
             rotation_submitted_ms: 0,
             reported_hour: None,
             reported_usage: None,
@@ -199,7 +201,7 @@ impl Chain {
         })
     }
 
-    pub fn add_device(&mut self, key: &str, now_ms: u64) -> BpResult<Invite> {
+    pub fn add_device(&mut self, key: &str, recovery: bool, now_ms: u64) -> BpResult<Invite> {
         let added = member_key(key)?;
         let keyring = self.keyring()?;
         let line = tag_key(key, &self.me.fingerprint);
@@ -209,6 +211,7 @@ impl Chain {
             Op::AddKey {
                 envelope: wrap_for(&keyring[0], &line)?,
                 key: line,
+                recovery,
             },
             now_ms / 1000,
         )?;
@@ -239,6 +242,19 @@ impl Chain {
             Op::RevokeKey {
                 key: key.to_string(),
                 family,
+            },
+            now_ms / 1000,
+        )?;
+        self.engine.submit(op, now_ms)?;
+        self.record();
+        Ok(())
+    }
+
+    pub fn cancel_revocation(&mut self, key: &str, now_ms: u64) -> BpResult<()> {
+        let op = SignedOp::sign(
+            &self.me,
+            Op::CancelRevocation {
+                key: key.to_string(),
             },
             now_ms / 1000,
         )?;
@@ -326,6 +342,7 @@ impl Chain {
     pub fn tick(&mut self, log: &ObservationLog, held: &BTreeMap<String, u64>, now_ms: u64) {
         self.register_device(now_ms);
         self.set_family(now_ms);
+        self.warn_revocation(now_ms);
         self.report(log, now_ms);
         self.report_usage(log, held, now_ms);
         self.rotate(now_ms);
@@ -421,6 +438,29 @@ impl Chain {
         self.device_submitted_ms = now_ms;
         let cert = self.me.cert.clone();
         self.submit(Op::RegisterDevice { cert }, now_ms, "register this device");
+    }
+
+    fn warn_revocation(&mut self, now_ms: u64) {
+        let Some(r) = self
+            .engine
+            .ledger
+            .revocations
+            .iter()
+            .find(|r| r.user == self.me.fingerprint)
+        else {
+            return;
+        };
+        if now_ms < self.revocation_warned_ms + RESUBMIT_MS * 10 {
+            return;
+        }
+        self.revocation_warned_ms = now_ms;
+        tracing::warn!(
+            network = %self.name,
+            key = %r.key,
+            by = %r.by,
+            due = r.due,
+            "a revocation of one of your keys is pending: if it is not yours, cancel it with `bp device cancel`"
+        );
     }
 
     fn set_family(&mut self, now_ms: u64) {

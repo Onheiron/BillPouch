@@ -210,6 +210,15 @@ downloaded stays with them.
   revoked key signs nothing any more, its devices leave the ledger and their
   places in files, and the network key rotates. What it already read stays
   read, as with any revocation.
+- **Theft**: the network cannot tell a thief from you, as both hold a valid
+  key. So a revocation from a normal key only takes effect 24 hours later
+  (`REVOKE_DELAY_SECS`), one pending per user, and any of your keys, the
+  revoked one included, can cancel it meanwhile (`CancelRevocation`); every
+  device of yours logs a warning while one is pending. A thief cannot throw
+  you out; at worst you and the thief cancel each other. A **recovery key**
+  (`bp device recovery`, kept offline) breaks the tie: its revocations take
+  effect at once, clear any pending one and cannot be cancelled, and it lets
+  you back in if you lose every device.
 - **Sharing**: `bp share` wraps the file key for the member's family key (taken
   from the ledger), so all their devices open it, now and after they add more, and gossips the manifest to them; they add it to their index
   and acknowledge. Until the acknowledgement arrives the share is re-sent every

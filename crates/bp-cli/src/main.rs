@@ -406,11 +406,32 @@ enum DeviceAction {
         #[arg(help = "The public key the new device printed at `bp login`")]
         key: String,
     },
-    #[command(about = "Revoke a key of yours, e.g. of a lost device")]
+    #[command(
+        about = "Make a recovery key: it revokes your other keys at once and lets you back in if you lose every device",
+        long_about = "Make a recovery key and add it to your keys.\n\nThe private key goes to --out (encrypted with --passphrase if given) and the token it joins with is printed: keep both offline, on paper or a USB stick. To use it, `bp login --ssh-key <file>` on any machine, `bp join <token>`, then `bp device revoke` acts at once and cannot be cancelled."
+    )]
+    Recovery {
+        #[arg(help = "Network to add it to")]
+        network_id: String,
+        #[arg(help = "Where to write the private key")]
+        #[arg(long)]
+        out: std::path::PathBuf,
+    },
+    #[command(
+        about = "Revoke a key of yours, e.g. of a lost device",
+        long_about = "Revoke a key of yours, e.g. of a lost device.\n\nFrom a normal key the revocation takes effect after 24 hours, and any other key of yours, the revoked one included, can cancel it meanwhile with `bp device cancel`: a thief cannot throw you out silently. From your recovery key it takes effect at once and cannot be cancelled."
+    )]
     Revoke {
         #[arg(help = "Network to revoke it in")]
         network_id: String,
         #[arg(help = "Its fingerprint (see `bp device ls`) or its public key")]
+        key: String,
+    },
+    #[command(about = "Cancel a pending revocation of one of your keys")]
+    Cancel {
+        #[arg(help = "Network the revocation is pending in")]
+        network_id: String,
+        #[arg(help = "Fingerprint or public key of the key it would revoke")]
         key: String,
     },
     #[command(about = "List your keys and the devices they certified")]
@@ -575,8 +596,14 @@ async fn main() -> anyhow::Result<()> {
 
         Some(Cmd::Device { action }) => match action {
             DeviceAction::Add { network_id, key } => commands::device::add(network_id, key).await?,
+            DeviceAction::Recovery { network_id, out } => {
+                commands::device::recovery(network_id, out, cli.passphrase.as_deref()).await?
+            }
             DeviceAction::Revoke { network_id, key } => {
                 commands::device::revoke(network_id, key).await?
+            }
+            DeviceAction::Cancel { network_id, key } => {
+                commands::device::cancel(network_id, key).await?
             }
             DeviceAction::Ls { network_id } => commands::device::list(network_id).await?,
         },

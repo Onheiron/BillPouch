@@ -26,8 +26,9 @@ Types: `bp_core::control::protocol`; client helper: `bp_core::control::client::s
 | `create_network` | `name` | Creates a network with you as creator |
 | `invite` | `network_id`, `member_key` (OpenSSH line) | Adds a member once committed and returns the join token |
 | `join_network` | `token` | Joins with a token and waits for the ledger to sync |
-| `add_device` | `network_id`, `key` (OpenSSH line) | Adds a key of yours once committed and returns the token the device joins with |
-| `revoke_device` | `network_id`, `key` (fingerprint or OpenSSH line) | Revokes a key of yours with a new family key |
+| `add_device` | `network_id`, `key` (OpenSSH line), `recovery`? | Adds a key of yours (a recovery key with `recovery: true`) once committed and returns the token the device joins with |
+| `revoke_device` | `network_id`, `key` (fingerprint or OpenSSH line) | Revokes a key of yours with a new family key: at once from a recovery key, otherwise pending for 24 h (`due`) |
+| `cancel_revocation` | `network_id`, `key` | Cancels a pending revocation of one of your keys |
 | `devices` | `network_id` | Your user, whether your family key is set, your keys with name, `revoked`, `this_device` and the devices each certified |
 | `shutdown` | — | Stops the daemon (used by `bp join` when a device becomes another user's) |
 | `members` | `network_id` | Members with tier, weight, devices, trust and open bets, challenges passed, invitations, achievements (each with points and progress) and level, pending expulsions; expelled members; network parameters |

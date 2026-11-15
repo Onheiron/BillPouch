@@ -24,6 +24,7 @@ const STAKE: i64 = 250_000;
 const RECENT_KEPT: u64 = 9;
 const SPONSOR_REWARD: i64 = 50_000;
 const FREE_COMMITMENTS: usize = 8;
+pub const REVOKE_DELAY_SECS: u64 = 86_400;
 
 const PROMOTIONS: [(ReputationTier, u64, f64); 3] = [
     (ReputationTier::R4, 365, 0.999),
@@ -68,10 +69,14 @@ pub enum Op {
     AddKey {
         key: String,
         envelope: WrappedKey,
+        recovery: bool,
     },
     RevokeKey {
         key: String,
         family: Family,
+    },
+    CancelRevocation {
+        key: String,
     },
     Leave,
     Place {
@@ -304,6 +309,16 @@ pub struct UserKey {
     pub user: String,
     pub key: String,
     pub revoked: bool,
+    pub recovery: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Revocation {
+    pub user: String,
+    pub key: String,
+    pub by: String,
+    pub family: Family,
+    pub due: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -322,6 +337,7 @@ pub struct Ledger {
     pub time: u64,
     pub members: BTreeMap<String, Member>,
     pub keys: BTreeMap<String, UserKey>,
+    pub revocations: Vec<Revocation>,
     pub devices: BTreeMap<String, Device>,
     pub entries: Vec<Entry>,
     pub expelled: BTreeSet<String>,
@@ -377,6 +393,7 @@ impl Ledger {
                 user: creator.clone(),
                 key: genesis.body.member.clone(),
                 revoked: false,
+                recovery: false,
             },
         )]);
         let devices = BTreeMap::from([(
@@ -394,6 +411,7 @@ impl Ledger {
             height: 0,
             members,
             keys,
+            revocations: Vec::new(),
             devices,
             entries: Vec::new(),
             expelled: BTreeSet::new(),
@@ -578,6 +596,50 @@ impl Ledger {
             .map(|(peer, _)| peer.clone())
             .collect();
         self.release(&gone);
+    }
+
+    fn may_revoke(&self, user: &str, key: &str, family: &Family) -> bool {
+        let mut remaining: BTreeSet<String> = self.live_keys(user).into_keys().collect();
+        let envelopes: BTreeSet<String> = family.envelopes.keys().cloned().collect();
+        remaining.remove(key)
+            && envelopes == remaining
+            && self.family(user).is_some()
+            && !family.history.is_empty()
+    }
+
+    fn revoke(&mut self, user: &str, key: &str, family: &Family, time: u64) {
+        if let Some(k) = self.keys.get_mut(key) {
+            k.revoked = true;
+        }
+        if let Some(member) = self.members.get_mut(user) {
+            member.family = Some(family.clone());
+        }
+        let gone: BTreeSet<String> = self
+            .devices
+            .iter()
+            .filter(|(_, d)| d.cert_key == key)
+            .map(|(peer, _)| peer.clone())
+            .collect();
+        self.drop_devices(user, &gone);
+        self.rekey_since.get_or_insert(time);
+    }
+
+    fn execute_revocations(&mut self, time: u64) {
+        let (due, waiting): (Vec<Revocation>, Vec<Revocation>) =
+            std::mem::take(&mut self.revocations)
+                .into_iter()
+                .partition(|r| r.due <= time);
+        self.revocations = waiting;
+        for r in due {
+            let by_live = self.key_owner(&r.by) == Some(r.user.as_str());
+            if by_live && self.is_member(&r.user) && self.may_revoke(&r.user, &r.key, &r.family) {
+                self.revoke(&r.user, &r.key, &r.family, time);
+            }
+        }
+    }
+
+    pub fn pending_revocation(&self, key: &str) -> Option<&Revocation> {
+        self.revocations.iter().find(|r| r.key == key)
     }
 
     fn drop_devices(&mut self, user: &str, gone: &BTreeSet<String>) {
@@ -797,6 +859,7 @@ impl Ledger {
             next.apply_op(op, block)?;
         }
         next.settle_bets(block.epoch());
+        next.execute_revocations(block.time);
         next.applied_ops
             .retain(|_, at| *at + OP_TTL_SECS >= block.time);
         next.height = block.height;
@@ -865,6 +928,7 @@ impl Ledger {
                         user: member,
                         key: entry.body.member.clone(),
                         revoked: false,
+                        recovery: false,
                     },
                 );
                 self.entries.push(entry.clone());
@@ -988,10 +1052,17 @@ impl Ledger {
                 }
                 member.family = Some(family.clone());
             }
-            Op::AddKey { key, envelope } => {
+            Op::AddKey {
+                key,
+                envelope,
+                recovery,
+            } => {
                 let added = member_key(key)?;
                 if self.keys.contains_key(&added.key) {
                     return Err(invalid("this key is already registered"));
+                }
+                if self.revocations.iter().any(|r| r.user == author) {
+                    return Err(invalid("wait for your pending revocation to settle"));
                 }
                 let member = self.members.get_mut(&author).expect("checked member");
                 let Some(family) = member.family.as_mut() else {
@@ -1004,34 +1075,38 @@ impl Ledger {
                         user: author.clone(),
                         key: key.trim().to_string(),
                         revoked: false,
+                        recovery: *recovery,
                     },
                 );
             }
             Op::RevokeKey { key, family } => {
-                let mut remaining: BTreeSet<String> = self.live_keys(&author).into_keys().collect();
-                let envelopes: BTreeSet<String> = family.envelopes.keys().cloned().collect();
-                let had_family = self.family(&author).is_some();
-                if *key == signed.author
-                    || !remaining.remove(key)
-                    || envelopes != remaining
-                    || !had_family
-                    || family.history.is_empty()
-                {
+                if *key == signed.author || !self.may_revoke(&author, key, family) {
                     return Err(invalid("invalid key revocation"));
                 }
-                self.keys.get_mut(key).expect("checked live").revoked = true;
-                self.members
-                    .get_mut(&author)
-                    .expect("checked member")
-                    .family = Some(family.clone());
-                let gone: BTreeSet<String> = self
-                    .devices
-                    .iter()
-                    .filter(|(_, d)| d.cert_key == *key)
-                    .map(|(peer, _)| peer.clone())
-                    .collect();
-                self.drop_devices(&author, &gone);
-                self.rekey_since.get_or_insert(block.time);
+                if self.keys[&signed.author].recovery {
+                    self.revocations.retain(|r| r.user != author);
+                    self.revoke(&author, key, family, block.time);
+                } else if self.revocations.iter().any(|r| r.user == author) {
+                    return Err(invalid(
+                        "a revocation of one of your keys is already pending",
+                    ));
+                } else {
+                    self.revocations.push(Revocation {
+                        user: author.clone(),
+                        key: key.clone(),
+                        by: signed.author.clone(),
+                        family: family.clone(),
+                        due: block.time + REVOKE_DELAY_SECS,
+                    });
+                }
+            }
+            Op::CancelRevocation { key } => {
+                let before = self.revocations.len();
+                self.revocations
+                    .retain(|r| !(r.user == author && r.key == *key));
+                if self.revocations.len() == before {
+                    return Err(invalid("no such pending revocation"));
+                }
             }
             Op::Leave => {
                 self.left.insert(author.clone());
@@ -2254,6 +2329,7 @@ mod tests {
         let add = Op::AddKey {
             key: tag_key(&phone.user_key, &carlo.fingerprint),
             envelope: wrap_for(&first, &phone.user_key).unwrap(),
+            recovery: false,
         };
         net.commit(0, t, vec![sign_op(&carlo, add).unwrap()])
             .unwrap();
@@ -2288,8 +2364,30 @@ mod tests {
             Family::seal(&[next, first], &net.ledger.live_keys(&carlo.fingerprint)).unwrap();
         let sloppy = sign_op(&carlo, revoke(keeps_phone)).unwrap();
         assert!(net.commit(0, t, vec![sloppy]).is_err());
+        net.commit(
+            0,
+            t,
+            vec![sign_op(&carlo, revoke(rotated.clone())).unwrap()],
+        )
+        .unwrap();
+        assert!(net.ledger.key_owner(&phone.key_fingerprint).is_some());
+        assert!(net
+            .ledger
+            .pending_revocation(&phone.key_fingerprint)
+            .is_some());
+        let cancel = Op::CancelRevocation {
+            key: phone.key_fingerprint.clone(),
+        };
+        net.commit(0, t, vec![sign_op(&phone, cancel).unwrap()])
+            .unwrap();
+        assert!(net
+            .ledger
+            .pending_revocation(&phone.key_fingerprint)
+            .is_none());
         net.commit(0, t, vec![sign_op(&carlo, revoke(rotated)).unwrap()])
             .unwrap();
+        net.next_epoch();
+        let t = net.now();
 
         assert_eq!(net.ledger.key_owner(&phone.key_fingerprint), None);
         assert!(!net.ledger.devices.contains_key(&device));
@@ -2300,5 +2398,65 @@ mod tests {
         assert!(net
             .commit(0, t, vec![sign_op(&phone, Op::Leave).unwrap()])
             .is_err());
+    }
+
+    #[test]
+    fn the_recovery_key_revokes_at_once_and_settles_a_theft() {
+        let mut net = Net::everyone_joined(2);
+        let carlo = net.people[0].clone();
+        let mut thief = Identity::in_memory(None).unwrap();
+        thief.fingerprint = carlo.fingerprint.clone();
+        let mut paper = Identity::in_memory(None).unwrap();
+        paper.fingerprint = carlo.fingerprint.clone();
+        let first = new_key();
+        let family = Family::seal(&[first], &net.ledger.live_keys(&carlo.fingerprint)).unwrap();
+        let t = net.now();
+        let mut ops = vec![sign_op(&carlo, Op::SetFamily { family }).unwrap()];
+        for (device, recovery) in [(&thief, false), (&paper, true)] {
+            ops.push(
+                sign_op(
+                    &carlo,
+                    Op::AddKey {
+                        key: tag_key(&device.user_key, &carlo.fingerprint),
+                        envelope: wrap_for(&first, &device.user_key).unwrap(),
+                        recovery,
+                    },
+                )
+                .unwrap(),
+            );
+        }
+        for op in ops {
+            net.commit(0, t, vec![op]).unwrap();
+        }
+        let keys = net.ledger.live_keys(&carlo.fingerprint);
+        let without = |key: &str| {
+            let mut left = keys.clone();
+            left.remove(key);
+            Family::seal(&[new_key(), first], &left).unwrap()
+        };
+        let steal = Op::RevokeKey {
+            key: carlo.key_fingerprint.clone(),
+            family: without(&carlo.key_fingerprint),
+        };
+        net.commit(0, t, vec![sign_op(&thief, steal).unwrap()])
+            .unwrap();
+        assert!(net
+            .ledger
+            .pending_revocation(&carlo.key_fingerprint)
+            .is_some());
+
+        let rescue = Op::RevokeKey {
+            key: thief.key_fingerprint.clone(),
+            family: without(&thief.key_fingerprint),
+        };
+        net.commit(0, t, vec![sign_op(&paper, rescue).unwrap()])
+            .unwrap();
+        assert_eq!(net.ledger.key_owner(&thief.key_fingerprint), None);
+        assert!(net.ledger.revocations.is_empty());
+        net.next_epoch();
+        assert_eq!(
+            net.ledger.key_owner(&carlo.key_fingerprint),
+            Some(carlo.fingerprint.as_str())
+        );
     }
 }

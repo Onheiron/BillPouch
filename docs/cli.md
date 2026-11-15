@@ -12,8 +12,10 @@ started automatically when missing.
 | `bp login [--ssh-key <path>] [--alias <name>]` | Log in on this device. `--ssh-key` uses an existing OpenSSH ed25519 key as the key of this device; without it a new one is generated (encrypted if `--passphrase` is given). Prints its public key, to be invited or added as a device of yours |
 | `bp logout` | Delete this device's SSH key, device key and certificate from this machine |
 | `bp device add <network> "<public key>"` | Add the key a new device of yours printed: commits it with your family key wrapped for it and prints (on stdout) the token that device joins with |
-| `bp device revoke <network> <fingerprint or public key>` | Revoke a key of yours (a lost device): its devices are cut out, your family key changes for new files and the network key rotates. Run it from another device |
-| `bp device ls <network>` | Your keys on a network, revoked ones included, with the devices each certified |
+| `bp device revoke <network> <fingerprint or public key>` | Revoke a key of yours (a lost device): its devices are cut out, your family key changes for new files and the network key rotates. Run it from another device. From a normal key it takes effect after 24 hours unless one of your keys cancels it; from your recovery key at once |
+| `bp device cancel <network> <fingerprint or public key>` | Cancel a pending revocation of one of your keys |
+| `bp device recovery <network> --out <file>` | Make a recovery key (encrypted with `--passphrase` if given), add it to your keys and print the token it joins with; keep both offline. Its revocations act at once and cannot be cancelled |
+| `bp device ls <network>` | Your keys on a network, revoked and recovery ones included, pending revocations, and the devices each key certified |
 
 ## Services
 

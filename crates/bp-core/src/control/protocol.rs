@@ -40,8 +40,14 @@ pub enum ControlRequest {
     AddDevice {
         network_id: String,
         key: String,
+        #[serde(default)]
+        recovery: bool,
     },
     RevokeDevice {
+        network_id: String,
+        key: String,
+    },
+    CancelRevocation {
         network_id: String,
         key: String,
     },
@@ -211,6 +217,8 @@ pub struct KeyInfo {
     pub fingerprint: String,
     pub name: String,
     pub revoked: bool,
+    pub recovery: bool,
+    pub revocation_due: Option<u64>,
     pub this_device: bool,
     pub devices: Vec<String>,
 }
