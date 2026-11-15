@@ -64,4 +64,7 @@ fi
 if [ "${INTERACTIVE:-false}" = "true" ]; then
     exec bash
 fi
+if [ -n "${DEVICE_OF:-}" ]; then
+    exec tail -n +1 -F "${HOME}/.local/share/billpouch/daemon.log"
+fi
 exec sleep infinity
